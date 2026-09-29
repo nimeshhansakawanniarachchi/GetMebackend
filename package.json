@@ -1,0 +1,25 @@
+{
+  "name": "customer-backend",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node ./bin/www"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "~1.4.4",
+    "cors": "^2.8.6",
+    "debug": "~2.6.9",
+    "dotenv": "^18.0.2",
+    "express": "~4.16.1",
+    "http-errors": "~1.6.3",
+    "jade": "~1.11.0",
+    "jsonwebtoken": "^9.0.3",
+    "morgan": "~1.9.1",
+    "multer": "^2.4.0",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
