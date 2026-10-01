@@ -3166,6 +3166,1236 @@
 
 
 
+// const express = require('express');
+// const jwt = require('jsonwebtoken');
+// const multer = require('multer');
+// const path = require('path');
+// const fs = require('fs');
+
+// const router = express.Router();
+
+// // =====================================================
+// // CONTROLLERS
+// // =====================================================
+
+// const {
+//   getAvailableOrders,
+//   getMyOrderById,
+//   acceptOrder,
+//   startShopping,
+//   uploadItemPhoto,
+//   uploadReplacementPhoto,
+//   updateItemShoppingStatus,
+//   updateOrderPayment,
+//   uploadBill: uploadBillController,
+// } = require('../controllers/shopperOrderController');
+
+// // =====================================================
+// // AUTH MIDDLEWARE
+// // =====================================================
+
+// const authMiddleware = (req, res, next) => {
+//   try {
+//     const authHeader = req.headers.authorization;
+
+//     if (!authHeader) {
+//       return res.status(401).json({
+//         success: false,
+//         message: 'Authorization header is required',
+//       });
+//     }
+
+//     const parts = authHeader.split(' ');
+
+//     if (parts.length !== 2 || parts[0] !== 'Bearer') {
+//       return res.status(401).json({
+//         success: false,
+//         message: 'Invalid authorization format',
+//       });
+//     }
+
+//     const token = parts[1];
+
+//     const decoded = jwt.verify(
+//       token,
+//       process.env.JWT_SECRET
+//     );
+
+//     if (!decoded || !decoded.shopperId) {
+//       return res.status(401).json({
+//         success: false,
+//         message: 'Invalid shopper token',
+//       });
+//     }
+
+//     req.shopper = decoded;
+
+//     next();
+//   } catch (error) {
+//     console.error(
+//       '❌ Shopper auth error:',
+//       error.message
+//     );
+
+//     return res.status(401).json({
+//       success: false,
+//       message: 'Invalid or expired token',
+//     });
+//   }
+// };
+
+// // =====================================================
+// // UPLOAD DIRECTORIES
+// // =====================================================
+
+// const itemUploadDir =
+//   path.join(
+//     __dirname,
+//     '..',
+//     'uploads',
+//     'items'
+//   );
+
+// const replacementUploadDir =
+//   path.join(
+//     __dirname,
+//     '..',
+//     'uploads',
+//     'replacements'
+//   );
+
+// const billUploadDir =
+//   path.join(
+//     __dirname,
+//     '..',
+//     'uploads',
+//     'bills'
+//   );
+
+// // =====================================================
+// // CREATE DIRECTORIES
+// // =====================================================
+
+// if (!fs.existsSync(itemUploadDir)) {
+//   fs.mkdirSync(
+//     itemUploadDir,
+//     {
+//       recursive: true,
+//     }
+//   );
+// }
+
+// if (!fs.existsSync(replacementUploadDir)) {
+//   fs.mkdirSync(
+//     replacementUploadDir,
+//     {
+//       recursive: true,
+//     }
+//   );
+// }
+
+// if (!fs.existsSync(billUploadDir)) {
+//   fs.mkdirSync(
+//     billUploadDir,
+//     {
+//       recursive: true,
+//     }
+//   );
+// }
+
+// // =====================================================
+// // IMAGE FILTER
+// // =====================================================
+
+// const imageFilter = (
+//   req,
+//   file,
+//   cb
+// ) => {
+//   if (
+//     file &&
+//     file.mimetype &&
+//     file.mimetype.startsWith('image/')
+//   ) {
+//     cb(null, true);
+//   } else {
+//     cb(
+//       new Error(
+//         'Only image files are allowed'
+//       )
+//     );
+//   }
+// };
+
+// // =====================================================
+// // ITEM PHOTO STORAGE
+// // =====================================================
+
+// const itemStorage =
+//   multer.diskStorage({
+//     destination: function (
+//       req,
+//       file,
+//       cb
+//     ) {
+//       cb(
+//         null,
+//         itemUploadDir
+//       );
+//     },
+
+//     filename: function (
+//       req,
+//       file,
+//       cb
+//     ) {
+//       const ext =
+//         path.extname(
+//           file.originalname ||
+//             '.jpg'
+//         );
+
+//       cb(
+//         null,
+//         `order-${req.params.orderId}-item-${req.params.itemId}-${Date.now()}${ext}`
+//       );
+//     },
+//   });
+
+// // =====================================================
+// // REPLACEMENT PHOTO STORAGE
+// // =====================================================
+
+// const replacementStorage =
+//   multer.diskStorage({
+//     destination: function (
+//       req,
+//       file,
+//       cb
+//     ) {
+//       cb(
+//         null,
+//         replacementUploadDir
+//       );
+//     },
+
+//     filename: function (
+//       req,
+//       file,
+//       cb
+//     ) {
+//       const ext =
+//         path.extname(
+//           file.originalname ||
+//             '.jpg'
+//         );
+
+//       cb(
+//         null,
+//         `order-${req.params.orderId}-replacement-${req.params.itemId}-${Date.now()}${ext}`
+//       );
+//     },
+//   });
+
+// // =====================================================
+// // BILL PHOTO STORAGE
+// // =====================================================
+
+// const billStorage =
+//   multer.diskStorage({
+//     destination: function (
+//       req,
+//       file,
+//       cb
+//     ) {
+//       cb(
+//         null,
+//         billUploadDir
+//       );
+//     },
+
+//     filename: function (
+//       req,
+//       file,
+//       cb
+//     ) {
+//       const ext =
+//         path.extname(
+//           file.originalname ||
+//             '.jpg'
+//         );
+
+//       cb(
+//         null,
+//         `order-${req.params.orderId}-bill-${Date.now()}${ext}`
+//       );
+//     },
+//   });
+
+// // =====================================================
+// // MULTER UPLOADS
+// // =====================================================
+
+// const uploadItem =
+//   multer({
+//     storage: itemStorage,
+
+//     fileFilter:
+//       imageFilter,
+
+//     limits: {
+//       fileSize:
+//         8 * 1024 * 1024,
+//     },
+//   });
+
+// const uploadReplacement =
+//   multer({
+//     storage:
+//       replacementStorage,
+
+//     fileFilter:
+//       imageFilter,
+
+//     limits: {
+//       fileSize:
+//         8 * 1024 * 1024,
+//     },
+//   });
+
+// // IMPORTANT:
+// // This is named uploadBillFile so it does NOT
+// // conflict with controller uploadBillController.
+
+// const uploadBillFile =
+//   multer({
+//     storage: billStorage,
+
+//     fileFilter:
+//       imageFilter,
+
+//     limits: {
+//       fileSize:
+//         8 * 1024 * 1024,
+//     },
+//   });
+
+// // =====================================================
+// // AVAILABLE ORDERS
+// // =====================================================
+
+// router.get(
+//   '/orders',
+//   authMiddleware,
+//   getAvailableOrders
+// );
+
+// // =====================================================
+// // GET MY ORDER BY ID
+// // =====================================================
+
+// router.get(
+//   '/orders/:orderId',
+//   authMiddleware,
+//   getMyOrderById
+// );
+
+// // =====================================================
+// // ACCEPT ORDER
+// // =====================================================
+
+// router.patch(
+//   '/orders/:orderId/accept',
+//   authMiddleware,
+//   acceptOrder
+// );
+
+// // =====================================================
+// // START SHOPPING
+// // =====================================================
+
+// router.patch(
+//   '/orders/:orderId/start-shopping',
+//   authMiddleware,
+//   startShopping
+// );
+
+// // =====================================================
+// // UPDATE ITEM SHOPPING STATUS
+// // =====================================================
+
+// router.patch(
+//   '/orders/:orderId/items/:itemId/status',
+//   authMiddleware,
+//   updateItemShoppingStatus
+// );
+
+// // =====================================================
+// // UPLOAD ITEM PHOTO
+// // =====================================================
+
+// router.post(
+//   '/orders/:orderId/items/:itemId/photo',
+//   authMiddleware,
+//   uploadItem.single('photo'),
+//   uploadItemPhoto
+// );
+
+// // =====================================================
+// // UPLOAD REPLACEMENT PHOTO
+// // =====================================================
+
+// router.post(
+//   '/orders/:orderId/items/:itemId/replacement-photo',
+//   authMiddleware,
+//   uploadReplacement.single('photo'),
+//   uploadReplacementPhoto
+// );
+
+// // =====================================================
+// // COMPLETE PAYMENT
+// // =====================================================
+
+// router.patch(
+//   '/orders/:orderId/payment',
+//   authMiddleware,
+//   updateOrderPayment
+// );
+
+// // =====================================================
+// // UPLOAD SUPERMARKET BILL
+// // =====================================================
+
+// router.post(
+//   '/orders/:orderId/bill',
+//   authMiddleware,
+//   uploadBillFile.single('bill'),
+//   uploadBillController
+// );
+
+// // =====================================================
+// // ERROR HANDLER FOR MULTER
+// // =====================================================
+
+// router.use(
+//   (
+//     error,
+//     req,
+//     res,
+//     next
+//   ) => {
+//     if (
+//       error instanceof multer.MulterError
+//     ) {
+//       console.error(
+//         '❌ Multer error:',
+//         error
+//       );
+
+//       if (
+//         error.code ===
+//         'LIMIT_FILE_SIZE'
+//       ) {
+//         return res.status(400).json({
+//           success: false,
+//           message:
+//             'Image file is too large. Maximum size is 8MB.',
+//         });
+//       }
+
+//       return res.status(400).json({
+//         success: false,
+//         message:
+//           error.message ||
+//           'File upload failed',
+//       });
+//     }
+
+//     if (
+//       error &&
+//       error.message ===
+//         'Only image files are allowed'
+//     ) {
+//       return res.status(400).json({
+//         success: false,
+//         message:
+//           'Only image files are allowed',
+//       });
+//     }
+
+//     next(error);
+//   }
+// );
+
+// // =====================================================
+// // EXPORT
+// // =====================================================
+
+// module.exports = router;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// const express = require('express');
+// const jwt = require('jsonwebtoken');
+// const multer = require('multer');
+// const path = require('path');
+// const fs = require('fs');
+
+// const router = express.Router();
+
+
+// // =====================================================
+// // CONTROLLERS
+// // =====================================================
+
+// const {
+//   getAvailableOrders,
+//   getMyOrders,
+//   getMyOrderById,
+//   getNearbyShoppersForOrder,
+
+//   acceptOrder,
+//   startShopping,
+//   startDelivery,
+//   confirmArrival,
+//   verifyDeliveryPin,
+
+//   uploadItemPhoto,
+//   uploadReplacementPhoto,
+//   updateItemShoppingStatus,
+
+//   updateOrderPayment,
+
+//   uploadBill: uploadBillController,
+// } = require('../controllers/shopperOrderController');
+
+
+// // =====================================================
+// // AUTH MIDDLEWARE
+// // =====================================================
+
+// const authMiddleware = (req, res, next) => {
+//   try {
+
+//     const authHeader =
+//       req.headers.authorization;
+
+//     if (!authHeader) {
+
+//       return res.status(401).json({
+//         success: false,
+//         message:
+//           'Authorization header is required',
+//       });
+
+//     }
+
+
+//     const parts =
+//       authHeader.split(' ');
+
+
+//     if (
+//       parts.length !== 2 ||
+//       parts[0] !== 'Bearer'
+//     ) {
+
+//       return res.status(401).json({
+//         success: false,
+//         message:
+//           'Invalid authorization format',
+//       });
+
+//     }
+
+
+//     const token =
+//       parts[1];
+
+
+//     const decoded =
+//       jwt.verify(
+//         token,
+//         process.env.JWT_SECRET
+//       );
+
+
+//     if (
+//       !decoded ||
+//       !decoded.shopperId
+//     ) {
+
+//       return res.status(401).json({
+//         success: false,
+//         message:
+//           'Invalid shopper token',
+//       });
+
+//     }
+
+
+//     req.shopper =
+//       decoded;
+
+
+//     next();
+
+//   } catch (error) {
+
+//     console.error(
+//       '❌ Shopper auth error:',
+//       error.message
+//     );
+
+
+//     return res.status(401).json({
+//       success: false,
+//       message:
+//         'Invalid or expired token',
+//     });
+
+//   }
+// };
+
+
+// // =====================================================
+// // UPLOAD DIRECTORIES
+// // =====================================================
+
+// const itemUploadDir =
+//   path.join(
+//     __dirname,
+//     '..',
+//     'uploads',
+//     'items'
+//   );
+
+
+// const replacementUploadDir =
+//   path.join(
+//     __dirname,
+//     '..',
+//     'uploads',
+//     'replacements'
+//   );
+
+
+// const billUploadDir =
+//   path.join(
+//     __dirname,
+//     '..',
+//     'uploads',
+//     'bills'
+//   );
+
+
+// // =====================================================
+// // CREATE DIRECTORIES
+// // =====================================================
+
+// if (!fs.existsSync(itemUploadDir)) {
+
+//   fs.mkdirSync(
+//     itemUploadDir,
+//     {
+//       recursive: true,
+//     }
+//   );
+
+// }
+
+
+// if (!fs.existsSync(replacementUploadDir)) {
+
+//   fs.mkdirSync(
+//     replacementUploadDir,
+//     {
+//       recursive: true,
+//     }
+//   );
+
+// }
+
+
+// if (!fs.existsSync(billUploadDir)) {
+
+//   fs.mkdirSync(
+//     billUploadDir,
+//     {
+//       recursive: true,
+//     }
+//   );
+
+// }
+
+
+// // =====================================================
+// // IMAGE FILTER
+// // =====================================================
+
+// const imageFilter = (
+//   req,
+//   file,
+//   cb
+// ) => {
+
+//   if (
+//     file &&
+//     file.mimetype &&
+//     file.mimetype.startsWith('image/')
+//   ) {
+
+//     cb(null, true);
+
+//   } else {
+
+//     cb(
+//       new Error(
+//         'Only image files are allowed'
+//       )
+//     );
+
+//   }
+
+// };
+
+
+// // =====================================================
+// // ITEM PHOTO STORAGE
+// // =====================================================
+
+// const itemStorage =
+//   multer.diskStorage({
+
+//     destination: function (
+//       req,
+//       file,
+//       cb
+//     ) {
+
+//       cb(
+//         null,
+//         itemUploadDir
+//       );
+
+//     },
+
+
+//     filename: function (
+//       req,
+//       file,
+//       cb
+//     ) {
+
+//       const ext =
+//         path.extname(
+//           file.originalname ||
+//             '.jpg'
+//         );
+
+
+//       cb(
+//         null,
+//         `order-${req.params.orderId}-item-${req.params.itemId}-${Date.now()}${ext}`
+//       );
+
+//     },
+
+//   });
+
+
+// // =====================================================
+// // REPLACEMENT PHOTO STORAGE
+// // =====================================================
+
+// const replacementStorage =
+//   multer.diskStorage({
+
+//     destination: function (
+//       req,
+//       file,
+//       cb
+//     ) {
+
+//       cb(
+//         null,
+//         replacementUploadDir
+//       );
+
+//     },
+
+
+//     filename: function (
+//       req,
+//       file,
+//       cb
+//     ) {
+
+//       const ext =
+//         path.extname(
+//           file.originalname ||
+//             '.jpg'
+//         );
+
+
+//       cb(
+//         null,
+//         `order-${req.params.orderId}-replacement-${req.params.itemId}-${Date.now()}${ext}`
+//       );
+
+//     },
+
+//   });
+
+
+// // =====================================================
+// // BILL PHOTO STORAGE
+// // =====================================================
+
+// const billStorage =
+//   multer.diskStorage({
+
+//     destination: function (
+//       req,
+//       file,
+//       cb
+//     ) {
+
+//       cb(
+//         null,
+//         billUploadDir
+//       );
+
+//     },
+
+
+//     filename: function (
+//       req,
+//       file,
+//       cb
+//     ) {
+
+//       const ext =
+//         path.extname(
+//           file.originalname ||
+//             '.jpg'
+//         );
+
+
+//       cb(
+//         null,
+//         `order-${req.params.orderId}-bill-${Date.now()}${ext}`
+//       );
+
+//     },
+
+//   });
+
+
+// // =====================================================
+// // MULTER UPLOADS
+// // =====================================================
+
+// const uploadItem =
+//   multer({
+
+//     storage:
+//       itemStorage,
+
+//     fileFilter:
+//       imageFilter,
+
+//     limits: {
+//       fileSize:
+//         8 * 1024 * 1024,
+//     },
+
+//   });
+
+
+// const uploadReplacement =
+//   multer({
+
+//     storage:
+//       replacementStorage,
+
+//     fileFilter:
+//       imageFilter,
+
+//     limits: {
+//       fileSize:
+//         8 * 1024 * 1024,
+//     },
+
+//   });
+
+
+// const uploadBillFile =
+//   multer({
+
+//     storage:
+//       billStorage,
+
+//     fileFilter:
+//       imageFilter,
+
+//     limits: {
+//       fileSize:
+//         8 * 1024 * 1024,
+//     },
+
+//   });
+
+
+// // =====================================================
+// // AVAILABLE ORDERS
+// // =====================================================
+// //
+// // GET
+// // /api/shopper/orders
+// //
+// // Shopper App uses this endpoint to receive
+// // real orders from PostgreSQL.
+// //
+// // =====================================================
+
+// router.get(
+//   '/orders',
+//   authMiddleware,
+//   getAvailableOrders
+// );
+
+
+// // =====================================================
+// // MY ORDERS
+// // =====================================================
+// //
+// // GET
+// // /api/shopper/orders/my
+// //
+// // Returns orders already accepted by this shopper.
+// //
+// // =====================================================
+
+// router.get(
+//   '/orders/my',
+//   authMiddleware,
+//   getMyOrders
+// );
+
+
+// // =====================================================
+// // GET MY ORDER BY ID
+// // =====================================================
+// //
+// // GET
+// // /api/shopper/orders/:orderId
+// //
+// // =====================================================
+
+// router.get(
+//   '/orders/:orderId',
+//   authMiddleware,
+//   getMyOrderById
+// );
+
+
+// // =====================================================
+// // ACCEPT ORDER
+// // =====================================================
+// //
+// // PATCH
+// // /api/shopper/orders/:orderId/accept
+// //
+// // =====================================================
+
+// router.patch(
+//   '/orders/:orderId/accept',
+//   authMiddleware,
+//   acceptOrder
+// );
+
+
+// // =====================================================
+// // START SHOPPING
+// // =====================================================
+// //
+// // PATCH
+// // /api/shopper/orders/:orderId/start-shopping
+// //
+// // =====================================================
+
+// router.patch(
+//   '/orders/:orderId/start-shopping',
+//   authMiddleware,
+//   startShopping
+// );
+
+
+// // =====================================================
+// // START DELIVERY
+// // =====================================================
+// //
+// // PATCH
+// // /api/shopper/orders/:orderId/start-delivery
+// //
+// // =====================================================
+
+// router.patch(
+//   '/orders/:orderId/start-delivery',
+//   authMiddleware,
+//   startDelivery
+// );
+
+
+// // =====================================================
+// // CONFIRM CUSTOMER ARRIVAL
+// // =====================================================
+// //
+// // POST
+// // /api/shopper/orders/:orderId/confirm-arrival
+// //
+// // =====================================================
+
+// router.post(
+//   '/orders/:orderId/confirm-arrival',
+//   authMiddleware,
+//   confirmArrival
+// );
+
+
+// // =====================================================
+// // VERIFY CUSTOMER DELIVERY PIN
+// // =====================================================
+// //
+// // POST
+// // /api/shopper/orders/:orderId/verify-delivery-pin
+// //
+// // =====================================================
+
+// router.post(
+//   '/orders/:orderId/verify-delivery-pin',
+//   authMiddleware,
+//   verifyDeliveryPin
+// );
+
+
+// // =====================================================
+// // NEARBY SHOPPERS
+// // =====================================================
+// //
+// // GET
+// // /api/shopper/orders/:orderId/nearby-shoppers
+// //
+// // =====================================================
+
+// router.get(
+//   '/orders/:orderId/nearby-shoppers',
+//   authMiddleware,
+//   getNearbyShoppersForOrder
+// );
+
+
+// // =====================================================
+// // UPDATE ITEM SHOPPING STATUS
+// // =====================================================
+// //
+// // PATCH
+// // /api/shopper/orders/:orderId/items/:itemId/status
+// //
+// // =====================================================
+
+// router.patch(
+//   '/orders/:orderId/items/:itemId/status',
+//   authMiddleware,
+//   updateItemShoppingStatus
+// );
+
+
+// // =====================================================
+// // UPLOAD ITEM PHOTO
+// // =====================================================
+// //
+// // POST
+// // /api/shopper/orders/:orderId/items/:itemId/photo
+// //
+// // FormData field:
+// // photo
+// //
+// // =====================================================
+
+// router.post(
+//   '/orders/:orderId/items/:itemId/photo',
+//   authMiddleware,
+//   uploadItem.single('photo'),
+//   uploadItemPhoto
+// );
+
+
+// // =====================================================
+// // UPLOAD REPLACEMENT PHOTO
+// // =====================================================
+// //
+// // POST
+// // /api/shopper/orders/:orderId/items/:itemId/replacement-photo
+// //
+// // FormData field:
+// // photo
+// //
+// // =====================================================
+
+// router.post(
+//   '/orders/:orderId/items/:itemId/replacement-photo',
+//   authMiddleware,
+//   uploadReplacement.single('photo'),
+//   uploadReplacementPhoto
+// );
+
+
+// // =====================================================
+// // UPDATE PAYMENT
+// // =====================================================
+// //
+// // PATCH
+// // /api/shopper/orders/:orderId/payment
+// //
+// // =====================================================
+
+// router.patch(
+//   '/orders/:orderId/payment',
+//   authMiddleware,
+//   updateOrderPayment
+// );
+
+
+// // =====================================================
+// // UPLOAD SUPERMARKET BILL
+// // =====================================================
+// //
+// // POST
+// // /api/shopper/orders/:orderId/bill
+// //
+// // FormData field:
+// // bill
+// //
+// // =====================================================
+
+// router.post(
+//   '/orders/:orderId/bill',
+//   authMiddleware,
+//   uploadBillFile.single('bill'),
+//   uploadBillController
+// );
+
+
+// // =====================================================
+// // MULTER ERROR HANDLER
+// // =====================================================
+
+// router.use(
+//   (
+//     error,
+//     req,
+//     res,
+//     next
+//   ) => {
+
+//     if (
+//       error instanceof multer.MulterError
+//     ) {
+
+//       console.error(
+//         '❌ Multer error:',
+//         error
+//       );
+
+
+//       if (
+//         error.code ===
+//         'LIMIT_FILE_SIZE'
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Image file is too large. Maximum size is 8MB.',
+
+//         });
+
+//       }
+
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           error.message ||
+//           'File upload failed',
+
+//       });
+
+//     }
+
+
+//     if (
+//       error &&
+//       error.message ===
+//         'Only image files are allowed'
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Only image files are allowed',
+
+//       });
+
+//     }
+
+
+//     next(error);
+
+//   }
+// );
+
+
+// // =====================================================
+// // EXPORT
+// // =====================================================
+
+// module.exports = router;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
@@ -3174,21 +4404,32 @@ const fs = require('fs');
 
 const router = express.Router();
 
+
 // =====================================================
 // CONTROLLERS
 // =====================================================
 
 const {
   getAvailableOrders,
+  getMyOrders,
   getMyOrderById,
+  getNearbyShoppersForOrder,
+
   acceptOrder,
   startShopping,
+  startDelivery,
+  confirmArrival,
+  verifyDeliveryPin,
+
   uploadItemPhoto,
   uploadReplacementPhoto,
   updateItemShoppingStatus,
+
   updateOrderPayment,
+
   uploadBill: uploadBillController,
 } = require('../controllers/shopperOrderController');
+
 
 // =====================================================
 // AUTH MIDDLEWARE
@@ -3196,42 +4437,65 @@ const {
 
 const authMiddleware = (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
+
+    const authHeader =
+      req.headers.authorization;
 
     if (!authHeader) {
+
       return res.status(401).json({
         success: false,
-        message: 'Authorization header is required',
+        message:
+          'Authorization header is required',
       });
+
     }
 
-    const parts = authHeader.split(' ');
+    const parts =
+      authHeader.split(' ');
 
-    if (parts.length !== 2 || parts[0] !== 'Bearer') {
+    if (
+      parts.length !== 2 ||
+      parts[0] !== 'Bearer'
+    ) {
+
       return res.status(401).json({
         success: false,
-        message: 'Invalid authorization format',
+        message:
+          'Invalid authorization format',
       });
+
     }
 
-    const token = parts[1];
+    const token =
+      parts[1];
 
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET
-    );
+    const decoded =
+      jwt.verify(
+        token,
+        process.env.JWT_SECRET
+      );
 
-    if (!decoded || !decoded.shopperId) {
+    if (
+      !decoded ||
+      !decoded.shopperId
+    ) {
+
       return res.status(401).json({
         success: false,
-        message: 'Invalid shopper token',
+        message:
+          'Invalid shopper token',
       });
+
     }
 
-    req.shopper = decoded;
+    req.shopper =
+      decoded;
 
     next();
+
   } catch (error) {
+
     console.error(
       '❌ Shopper auth error:',
       error.message
@@ -3239,10 +4503,13 @@ const authMiddleware = (req, res, next) => {
 
     return res.status(401).json({
       success: false,
-      message: 'Invalid or expired token',
+      message:
+        'Invalid or expired token',
     });
+
   }
 };
+
 
 // =====================================================
 // UPLOAD DIRECTORIES
@@ -3272,36 +4539,44 @@ const billUploadDir =
     'bills'
   );
 
+
 // =====================================================
 // CREATE DIRECTORIES
 // =====================================================
 
 if (!fs.existsSync(itemUploadDir)) {
+
   fs.mkdirSync(
     itemUploadDir,
     {
       recursive: true,
     }
   );
+
 }
 
 if (!fs.existsSync(replacementUploadDir)) {
+
   fs.mkdirSync(
     replacementUploadDir,
     {
       recursive: true,
     }
   );
+
 }
 
 if (!fs.existsSync(billUploadDir)) {
+
   fs.mkdirSync(
     billUploadDir,
     {
       recursive: true,
     }
   );
+
 }
+
 
 // =====================================================
 // IMAGE FILTER
@@ -3312,20 +4587,27 @@ const imageFilter = (
   file,
   cb
 ) => {
+
   if (
     file &&
     file.mimetype &&
     file.mimetype.startsWith('image/')
   ) {
+
     cb(null, true);
+
   } else {
+
     cb(
       new Error(
         'Only image files are allowed'
       )
     );
+
   }
+
 };
+
 
 // =====================================================
 // ITEM PHOTO STORAGE
@@ -3333,15 +4615,18 @@ const imageFilter = (
 
 const itemStorage =
   multer.diskStorage({
+
     destination: function (
       req,
       file,
       cb
     ) {
+
       cb(
         null,
         itemUploadDir
       );
+
     },
 
     filename: function (
@@ -3349,6 +4634,7 @@ const itemStorage =
       file,
       cb
     ) {
+
       const ext =
         path.extname(
           file.originalname ||
@@ -3359,8 +4645,11 @@ const itemStorage =
         null,
         `order-${req.params.orderId}-item-${req.params.itemId}-${Date.now()}${ext}`
       );
+
     },
+
   });
+
 
 // =====================================================
 // REPLACEMENT PHOTO STORAGE
@@ -3368,15 +4657,18 @@ const itemStorage =
 
 const replacementStorage =
   multer.diskStorage({
+
     destination: function (
       req,
       file,
       cb
     ) {
+
       cb(
         null,
         replacementUploadDir
       );
+
     },
 
     filename: function (
@@ -3384,6 +4676,7 @@ const replacementStorage =
       file,
       cb
     ) {
+
       const ext =
         path.extname(
           file.originalname ||
@@ -3394,8 +4687,11 @@ const replacementStorage =
         null,
         `order-${req.params.orderId}-replacement-${req.params.itemId}-${Date.now()}${ext}`
       );
+
     },
+
   });
+
 
 // =====================================================
 // BILL PHOTO STORAGE
@@ -3403,15 +4699,18 @@ const replacementStorage =
 
 const billStorage =
   multer.diskStorage({
+
     destination: function (
       req,
       file,
       cb
     ) {
+
       cb(
         null,
         billUploadDir
       );
+
     },
 
     filename: function (
@@ -3419,6 +4718,7 @@ const billStorage =
       file,
       cb
     ) {
+
       const ext =
         path.extname(
           file.originalname ||
@@ -3429,8 +4729,11 @@ const billStorage =
         null,
         `order-${req.params.orderId}-bill-${Date.now()}${ext}`
       );
+
     },
+
   });
+
 
 // =====================================================
 // MULTER UPLOADS
@@ -3438,7 +4741,9 @@ const billStorage =
 
 const uploadItem =
   multer({
-    storage: itemStorage,
+
+    storage:
+      itemStorage,
 
     fileFilter:
       imageFilter,
@@ -3447,10 +4752,13 @@ const uploadItem =
       fileSize:
         8 * 1024 * 1024,
     },
+
   });
+
 
 const uploadReplacement =
   multer({
+
     storage:
       replacementStorage,
 
@@ -3461,15 +4769,15 @@ const uploadReplacement =
       fileSize:
         8 * 1024 * 1024,
     },
+
   });
 
-// IMPORTANT:
-// This is named uploadBillFile so it does NOT
-// conflict with controller uploadBillController.
 
 const uploadBillFile =
   multer({
-    storage: billStorage,
+
+    storage:
+      billStorage,
 
     fileFilter:
       imageFilter,
@@ -3478,7 +4786,9 @@ const uploadBillFile =
       fileSize:
         8 * 1024 * 1024,
     },
+
   });
+
 
 // =====================================================
 // AVAILABLE ORDERS
@@ -3490,6 +4800,18 @@ router.get(
   getAvailableOrders
 );
 
+
+// =====================================================
+// MY ORDERS
+// =====================================================
+
+router.get(
+  '/orders/my',
+  authMiddleware,
+  getMyOrders
+);
+
+
 // =====================================================
 // GET MY ORDER BY ID
 // =====================================================
@@ -3499,6 +4821,7 @@ router.get(
   authMiddleware,
   getMyOrderById
 );
+
 
 // =====================================================
 // ACCEPT ORDER
@@ -3510,6 +4833,7 @@ router.patch(
   acceptOrder
 );
 
+
 // =====================================================
 // START SHOPPING
 // =====================================================
@@ -3520,6 +4844,59 @@ router.patch(
   startShopping
 );
 
+
+// =====================================================
+// START DELIVERY
+// =====================================================
+
+router.patch(
+  '/orders/:orderId/start-delivery',
+  authMiddleware,
+  startDelivery
+);
+
+
+// =====================================================
+// CONFIRM CUSTOMER ARRIVAL
+// =====================================================
+//
+// IMPORTANT:
+// Frontend MUST use POST.
+//
+// POST
+// /api/shopper/orders/:orderId/confirm-arrival
+//
+// =====================================================
+
+router.post(
+  '/orders/:orderId/confirm-arrival',
+  authMiddleware,
+  confirmArrival
+);
+
+
+// =====================================================
+// VERIFY CUSTOMER DELIVERY PIN
+// =====================================================
+
+router.post(
+  '/orders/:orderId/verify-delivery-pin',
+  authMiddleware,
+  verifyDeliveryPin
+);
+
+
+// =====================================================
+// NEARBY SHOPPERS
+// =====================================================
+
+router.get(
+  '/orders/:orderId/nearby-shoppers',
+  authMiddleware,
+  getNearbyShoppersForOrder
+);
+
+
 // =====================================================
 // UPDATE ITEM SHOPPING STATUS
 // =====================================================
@@ -3529,6 +4906,7 @@ router.patch(
   authMiddleware,
   updateItemShoppingStatus
 );
+
 
 // =====================================================
 // UPLOAD ITEM PHOTO
@@ -3541,6 +4919,7 @@ router.post(
   uploadItemPhoto
 );
 
+
 // =====================================================
 // UPLOAD REPLACEMENT PHOTO
 // =====================================================
@@ -3552,8 +4931,9 @@ router.post(
   uploadReplacementPhoto
 );
 
+
 // =====================================================
-// COMPLETE PAYMENT
+// UPDATE PAYMENT
 // =====================================================
 
 router.patch(
@@ -3561,6 +4941,7 @@ router.patch(
   authMiddleware,
   updateOrderPayment
 );
+
 
 // =====================================================
 // UPLOAD SUPERMARKET BILL
@@ -3573,8 +4954,9 @@ router.post(
   uploadBillController
 );
 
+
 // =====================================================
-// ERROR HANDLER FOR MULTER
+// MULTER ERROR HANDLER
 // =====================================================
 
 router.use(
@@ -3584,9 +4966,11 @@ router.use(
     res,
     next
   ) => {
+
     if (
       error instanceof multer.MulterError
     ) {
+
       console.error(
         '❌ Multer error:',
         error
@@ -3596,36 +4980,54 @@ router.use(
         error.code ===
         'LIMIT_FILE_SIZE'
       ) {
+
         return res.status(400).json({
+
           success: false,
+
           message:
             'Image file is too large. Maximum size is 8MB.',
+
         });
+
       }
 
       return res.status(400).json({
+
         success: false,
+
         message:
           error.message ||
           'File upload failed',
+
       });
+
     }
+
 
     if (
       error &&
       error.message ===
         'Only image files are allowed'
     ) {
+
       return res.status(400).json({
+
         success: false,
+
         message:
           'Only image files are allowed',
+
       });
+
     }
 
+
     next(error);
+
   }
 );
+
 
 // =====================================================
 // EXPORT
