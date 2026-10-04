@@ -17,7 +17,9 @@
     "jsonwebtoken": "^9.0.3",
     "morgan": "~1.9.1",
     "multer": "^2.4.0",
-    "pg": "^8.23.0"
+    "pg": "^8.23.0",
+    "socket.io": "^4.8.4",
+    "socket.io-client": "^4.8.4"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
