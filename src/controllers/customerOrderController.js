@@ -22358,6 +22358,18162 @@
 
 
 
+// const pool = require('../config/db');
+
+// // ==================================================
+// // UPLOAD CUSTOM ITEM MEDIA
+// // ==================================================
+
+// const uploadCustomItemMedia = async (
+//   req,
+//   res
+// ) => {
+//   try {
+
+//     if (
+//       !req.files ||
+//       req.files.length === 0
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'No files uploaded',
+
+//       });
+
+//     }
+
+//     const baseUrl =
+//       `${req.protocol}://${req.get('host')}`;
+
+//     const files =
+//       req.files.map(
+//         (file) => {
+
+//           const url =
+//             `${baseUrl}/uploads/items/${file.filename}`;
+
+//           return {
+
+//             fieldName:
+//               file.fieldname,
+
+//             originalName:
+//               file.originalname,
+
+//             fileName:
+//               file.filename,
+
+//             mimeType:
+//               file.mimetype,
+
+//             size:
+//               file.size,
+
+//             url:
+//               url,
+
+//           };
+
+//         }
+//       );
+
+//     // ==================================================
+//     // FIND IMAGE
+//     // ==================================================
+
+//     const imageExtensions = [
+//       '.jpg',
+//       '.jpeg',
+//       '.png',
+//       '.webp',
+//     ];
+
+//     const audioExtensions = [
+//       '.mp3',
+//       '.m4a',
+//       '.wav',
+//       '.aac',
+//       '.ogg',
+//       '.webm',
+//     ];
+
+//     const imageMimeTypes = [
+//       'image/jpeg',
+//       'image/jpg',
+//       'image/png',
+//       'image/webp',
+//     ];
+
+//     const audioMimeTypes = [
+//       'audio/mpeg',
+//       'audio/mp3',
+//       'audio/mp4',
+//       'audio/m4a',
+//       'audio/x-m4a',
+//       'audio/wav',
+//       'audio/x-wav',
+//       'audio/aac',
+//       'audio/ogg',
+//       'audio/webm',
+//     ];
+
+//     const imageFile =
+//       files.find(
+//         (file) => {
+
+//           const mime =
+//             (
+//               file.mimeType ||
+//               ''
+//             ).toLowerCase();
+
+//           const ext =
+//             require('path')
+//               .extname(
+//                 file.originalName ||
+//                 file.fileName ||
+//                 ''
+//               )
+//               .toLowerCase();
+
+//           return (
+//             imageMimeTypes.includes(
+//               mime
+//             ) ||
+//             imageExtensions.includes(
+//               ext
+//             )
+//           );
+
+//         }
+//       );
+
+//     // ==================================================
+//     // FIND AUDIO
+//     // ==================================================
+
+//     const audioFile =
+//       files.find(
+//         (file) => {
+
+//           const mime =
+//             (
+//               file.mimeType ||
+//               ''
+//             ).toLowerCase();
+
+//           const ext =
+//             require('path')
+//               .extname(
+//                 file.originalName ||
+//                 file.fileName ||
+//                 ''
+//               )
+//               .toLowerCase();
+
+//           return (
+//             audioMimeTypes.includes(
+//               mime
+//             ) ||
+//             audioExtensions.includes(
+//               ext
+//             )
+//           );
+
+//         }
+//       );
+
+//     // ==================================================
+//     // DEBUG
+//     // ==================================================
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📤 CUSTOM ITEM MEDIA UPLOAD'
+//     );
+
+//     console.log(
+//       'CUSTOMER ID:',
+//       req.customer?.customerId
+//     );
+
+//     console.log(
+//       'FILES:',
+//       files
+//     );
+
+//     console.log(
+//       'IMAGE:',
+//       imageFile?.url ||
+//       null
+//     );
+
+//     console.log(
+//       'VOICE:',
+//       audioFile?.url ||
+//       null
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     // ==================================================
+//     // RESPONSE
+//     // ==================================================
+
+//     return res.status(200).json({
+
+//       success: true,
+
+//       message:
+//         'Files uploaded successfully',
+
+//       imageUrl:
+//         imageFile?.url ||
+//         null,
+
+//       voiceUrl:
+//         audioFile?.url ||
+//         null,
+
+//       files,
+
+//     });
+
+//   } catch (error) {
+
+//     console.error(
+//       '❌ CUSTOM ITEM MEDIA UPLOAD ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to upload custom item media',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   }
+// };
+
+
+// // ==================================================
+// // CREATE ORDER
+// // ==================================================
+
+// const createOrder = async (
+//   req,
+//   res
+// ) => {
+
+//   const client =
+//     await pool.connect();
+
+//   try {
+
+//     const customerId =
+//       req.customer.customerId;
+
+//     const {
+//       shopId,
+//       deliveryAddress,
+//       deliveryLatitude,
+//       deliveryLongitude,
+//       deliveryOption = 'fast',
+//       paymentMethod = 'cash',
+//       items = [],
+//       deliveryFee = 0,
+//       serviceFee = 0,
+//       itemsTotal = 0,
+//       totalAmount = 0,
+//     } = req.body;
+
+//     // ==================================================
+//     // DEBUG - RAW ORDER ITEMS FROM CUSTOMER APP
+//     // ==================================================
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📥 CREATE ORDER REQUEST'
+//     );
+
+//     console.log(
+//       'CUSTOMER ID:',
+//       customerId
+//     );
+
+//     console.log(
+//       'SHOP ID:',
+//       shopId
+//     );
+
+//     console.log(
+//       'ITEM COUNT:',
+//       Array.isArray(items)
+//         ? items.length
+//         : 0
+//     );
+
+//     console.log(
+//       'RAW ITEMS:',
+//       JSON.stringify(
+//         items,
+//         null,
+//         2
+//       )
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     // ==================================================
+//     // VALIDATION
+//     // ==================================================
+
+//     if (!shopId) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Shop ID is required',
+
+//       });
+
+//     }
+
+//     if (!deliveryAddress) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Delivery address is required',
+
+//       });
+
+//     }
+
+//     if (
+//       deliveryLatitude === undefined ||
+//       deliveryLongitude === undefined
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Delivery latitude and longitude are required',
+
+//       });
+
+//     }
+
+//     const latitude =
+//       Number(
+//         deliveryLatitude
+//       );
+
+//     const longitude =
+//       Number(
+//         deliveryLongitude
+//       );
+
+//     if (
+//       !Number.isFinite(latitude) ||
+//       !Number.isFinite(longitude)
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Valid latitude and longitude are required',
+
+//       });
+
+//     }
+
+//     if (
+//       latitude < -90 ||
+//       latitude > 90 ||
+//       longitude < -180 ||
+//       longitude > 180
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Latitude or longitude is out of range',
+
+//       });
+
+//     }
+
+//     if (
+//       !Array.isArray(items) ||
+//       items.length === 0
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'At least one order item is required',
+
+//       });
+
+//     }
+
+//     // ==================================================
+//     // CHECK SHOP
+//     // ==================================================
+
+//     const shopResult =
+//       await client.query(
+//         `
+//         SELECT
+//           id,
+//           shop_name,
+//           image_url,
+//           status,
+//           latitude,
+//           longitude
+//         FROM shops
+//         WHERE id = $1
+//         `,
+//         [
+//           shopId,
+//         ]
+//       );
+
+//     if (
+//       shopResult.rows.length === 0
+//     ) {
+
+//       return res.status(404).json({
+
+//         success: false,
+
+//         message:
+//           'Shop not found',
+
+//       });
+
+//     }
+
+//     const shop =
+//       shopResult.rows[0];
+
+//     if (
+//       shop.status !==
+//       'approved'
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'This shop is not available',
+
+//       });
+
+//     }
+
+//     // ==================================================
+//     // TOTALS
+//     // ==================================================
+
+//     const safeItemsTotal =
+//       Number(itemsTotal) || 0;
+
+//     const safeDeliveryFee =
+//       Number(deliveryFee) || 0;
+
+//     const safeServiceFee =
+//       Number(serviceFee) || 0;
+
+//     const safeTotalAmount =
+//       Number(totalAmount) ||
+//       (
+//         safeItemsTotal +
+//         safeDeliveryFee +
+//         safeServiceFee
+//       );
+
+//     // ==================================================
+//     // START TRANSACTION
+//     // ==================================================
+
+//     await client.query(
+//       'BEGIN'
+//     );
+
+//     // ==================================================
+//     // CREATE ORDER
+//     // ==================================================
+
+//     const orderResult =
+//       await client.query(
+//         `
+//         INSERT INTO orders (
+//           customer_id,
+//           shop_id,
+//           delivery_address,
+//           delivery_latitude,
+//           delivery_longitude,
+//           delivery_option,
+//           payment_method,
+//           items_total,
+//           delivery_fee,
+//           service_fee,
+//           total_amount,
+//           status
+//         )
+//         VALUES (
+//           $1,
+//           $2,
+//           $3,
+//           $4,
+//           $5,
+//           $6,
+//           $7,
+//           $8,
+//           $9,
+//           $10,
+//           $11,
+//           $12
+//         )
+//         RETURNING *
+//         `,
+//         [
+//           customerId,
+//           shopId,
+//           deliveryAddress,
+//           latitude,
+//           longitude,
+//           deliveryOption,
+//           paymentMethod,
+//           safeItemsTotal,
+//           safeDeliveryFee,
+//           safeServiceFee,
+//           safeTotalAmount,
+//           'waiting_for_shopper',
+//         ]
+//       );
+
+//     const order =
+//       orderResult.rows[0];
+
+//     // ==================================================
+//     // CREATE ORDER ITEMS
+//     // ==================================================
+
+//     for (
+//       const item of items
+//     ) {
+
+//       // ==================================================
+//       // DEBUG - EACH RAW ITEM
+//       // ==================================================
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       console.log(
+//         '🛒 PROCESSING ORDER ITEM'
+//       );
+
+//       console.log(
+//         'ORDER ID:',
+//         order.id
+//       );
+
+//       console.log(
+//         'RAW ITEM:',
+//         JSON.stringify(
+//           item,
+//           null,
+//           2
+//         )
+//       );
+
+//       console.log(
+//         'CUSTOM:',
+//         item?.custom
+//       );
+
+//       console.log(
+//         'PHOTO:',
+//         item?.photo
+//       );
+
+//       console.log(
+//         'IMAGE:',
+//         item?.image
+//       );
+
+//       console.log(
+//         'VOICE:',
+//         item?.voice
+//       );
+
+//       console.log(
+//         'VOICE URL:',
+//         item?.voice_url
+//       );
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       const productId =
+//         item.productId ||
+//         item.product_id ||
+//         null;
+
+//       const itemName =
+//         item.itemName ||
+//         item.item_name ||
+//         item.name ||
+//         item.productName ||
+//         'Item';
+
+//       const quantity =
+//         Number(
+//           item.quantity
+//         ) || 1;
+
+//       const amount =
+//         Number(
+//           item.amount
+//         ) || 1;
+
+//       const unit =
+//         item.unit ||
+//         item.selectedUnit ||
+//         null;
+
+//       const price =
+//         Number(
+//           item.price
+//         ) || 0;
+
+//       const custom =
+//         item.custom === true;
+
+//       const details =
+//         item.details ||
+//         null;
+
+//       // ==================================================
+//       // CUSTOMER ITEM PHOTO
+//       // ==================================================
+
+//       const image =
+//         item.image ||
+//         item.imageUrl ||
+//         item.image_url ||
+//         item.photo ||
+//         item.photoUrl ||
+//         item.photo_url ||
+//         null;
+
+//       // ==================================================
+//       // CUSTOMER VOICE NOTE
+//       // ==================================================
+
+//       const voiceUrl =
+//         item.voice_url ||
+//         item.voiceUrl ||
+//         item.voice ||
+//         null;
+
+//       // ==================================================
+//       // DEBUG - FINAL MEDIA VALUES
+//       // ==================================================
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       console.log(
+//         '💾 FINAL ORDER ITEM VALUES'
+//       );
+
+//       console.log(
+//         'ORDER ID:',
+//         order.id
+//       );
+
+//       console.log(
+//         'ITEM NAME:',
+//         itemName
+//       );
+
+//       console.log(
+//         'CUSTOM:',
+//         custom
+//       );
+
+//       console.log(
+//         'IMAGE TO DB:',
+//         image
+//       );
+
+//       console.log(
+//         'VOICE TO DB:',
+//         voiceUrl
+//       );
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       // ==================================================
+//       // INSERT ORDER ITEM
+//       // ==================================================
+
+//       const insertItemResult =
+//         await client.query(
+//           `
+//           INSERT INTO order_items (
+//             order_id,
+//             product_id,
+//             item_name,
+//             quantity,
+//             amount,
+//             unit,
+//             price,
+//             custom,
+//             details,
+//             image,
+//             voice_url
+//           )
+//           VALUES (
+//             $1,
+//             $2,
+//             $3,
+//             $4,
+//             $5,
+//             $6,
+//             $7,
+//             $8,
+//             $9,
+//             $10,
+//             $11
+//           )
+//           RETURNING
+//             id,
+//             order_id,
+//             item_name,
+//             custom,
+//             image,
+//             voice_url
+//           `,
+//           [
+//             order.id,
+//             productId,
+//             itemName,
+//             quantity,
+//             amount,
+//             unit,
+//             price,
+//             custom,
+//             details,
+//             image,
+//             voiceUrl,
+//           ]
+//         );
+
+//       // ==================================================
+//       // DEBUG - DATABASE INSERT RESULT
+//       // ==================================================
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       console.log(
+//         '✅ ORDER ITEM INSERTED'
+//       );
+
+//       console.log(
+//         'DATABASE RESULT:',
+//         insertItemResult.rows[0]
+//       );
+
+//       console.log(
+//         '===================================='
+//       );
+
+//     }
+
+//     // ==================================================
+//     // COMMIT
+//     // ==================================================
+
+//     await client.query(
+//       'COMMIT'
+//     );
+
+//     // ==================================================
+//     // GET CREATED ITEMS
+//     // ==================================================
+
+//     const createdItemsResult =
+//       await pool.query(
+//         `
+//         SELECT
+//           id,
+//           order_id,
+//           product_id,
+//           item_name,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voice_url,
+
+//           shopper_photo_url,
+//           shopping_status,
+//           found_quantity,
+//           found_weight,
+//           found_weight_unit,
+//           barcode_scanned,
+//           completed_at,
+
+//           created_at
+//         FROM order_items
+//         WHERE order_id = $1
+//         ORDER BY id ASC
+//         `,
+//         [
+//           order.id,
+//         ]
+//       );
+
+//     const createdItems =
+//       createdItemsResult.rows.map(
+//         (item) => ({
+
+//           ...item,
+
+//           // ==================================================
+//           // CUSTOMER VOICE NOTE
+//           // ==================================================
+
+//           voice_url:
+//             item.voice_url ||
+//             null,
+
+//           voiceUrl:
+//             item.voice_url ||
+//             null,
+
+//           // ==================================================
+//           // SHOPPING STATUS
+//           // ==================================================
+
+//           shoppingStatus:
+//             item.shopping_status ||
+//             'pending',
+
+//           // ==================================================
+//           // FOUND QUANTITY
+//           // ==================================================
+
+//           foundQuantity:
+//             item.found_quantity !== null
+//               ? Number(
+//                   item.found_quantity
+//                 )
+//               : null,
+
+//           // ==================================================
+//           // FOUND WEIGHT
+//           // ==================================================
+
+//           foundWeight:
+//             item.found_weight !== null
+//               ? Number(
+//                   item.found_weight
+//                 )
+//               : null,
+
+//           // ==================================================
+//           // WEIGHT UNIT
+//           // ==================================================
+
+//           foundWeightUnit:
+//             item.found_weight_unit ||
+//             null,
+
+//           // ==================================================
+//           // BARCODE
+//           // ==================================================
+
+//           barcodeScanned:
+//             item.barcode_scanned === true,
+
+//           // ==================================================
+//           // SHOPPER PHOTO
+//           // ==================================================
+
+//           shopperPhotoUrl:
+//             item.shopper_photo_url ||
+//             null,
+
+//           // ==================================================
+//           // COMPLETED TIME
+//           // ==================================================
+
+//           completedAt:
+//             item.completed_at ||
+//             null,
+
+//         })
+//       );
+
+//     // ==================================================
+//     // RESPONSE
+//     // ==================================================
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '✅ ORDER CREATED'
+//     );
+
+//     console.log(
+//       'ORDER ID:',
+//       order.id
+//     );
+
+//     console.log(
+//       'CUSTOMER ID:',
+//       customerId
+//     );
+
+//     console.log(
+//       'SHOP ID:',
+//       shopId
+//     );
+
+//     console.log(
+//       'ITEM COUNT:',
+//       createdItems.length
+//     );
+
+//     console.log(
+//       'ITEMS TOTAL:',
+//       order.items_total
+//     );
+
+//     console.log(
+//       'TOTAL AMOUNT:',
+//       order.total_amount
+//     );
+
+//     console.log(
+//       'CUSTOM ITEM MEDIA:',
+//       createdItems.map(
+//         (item) => ({
+
+//           id:
+//             item.id,
+
+//           name:
+//             item.item_name,
+
+//           custom:
+//             item.custom,
+
+//           image:
+//             item.image,
+
+//           voice_url:
+//             item.voice_url,
+
+//         })
+//       )
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     return res.status(201).json({
+
+//       success: true,
+
+//       message:
+//         'Order created successfully',
+
+//       order: {
+
+//         ...order,
+
+//         total:
+//           Number(
+//             order.total_amount
+//           ),
+
+//         totalAmount:
+//           Number(
+//             order.total_amount
+//           ),
+
+//         itemsTotal:
+//           Number(
+//             order.items_total
+//           ),
+
+//         deliveryFee:
+//           Number(
+//             order.delivery_fee
+//           ),
+
+//         serviceFee:
+//           Number(
+//             order.service_fee
+//           ),
+
+//         shop: {
+
+//           id:
+//             shop.id,
+
+//           name:
+//             shop.shop_name,
+
+//           image:
+//             shop.image_url,
+
+//           latitude:
+//             Number(
+//               shop.latitude
+//             ),
+
+//           longitude:
+//             Number(
+//               shop.longitude
+//             ),
+
+//         },
+
+//         items:
+//           createdItems,
+
+//       },
+
+//     });
+
+//   } catch (error) {
+
+//     try {
+
+//       await client.query(
+//         'ROLLBACK'
+//       );
+
+//     } catch (
+//       rollbackError
+//     ) {
+
+//       console.error(
+//         '❌ Rollback error:',
+//         rollbackError.message
+//       );
+
+//     }
+
+//     console.error(
+//       '❌ CREATE ORDER ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to create order',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   } finally {
+
+//     client.release();
+
+//   }
+
+// };
+
+
+// // ==================================================
+// // GET CUSTOMER ORDERS
+// // ==================================================
+
+// const getCustomerOrders = async (
+//   req,
+//   res
+// ) => {
+
+//   try {
+
+//     const customerId =
+//       req.customer.customerId;
+
+//     const ordersResult =
+//       await pool.query(
+//         `
+//         SELECT
+//           o.id,
+//           o.customer_id,
+//           o.shop_id,
+//           o.shopper_id,
+
+//           o.delivery_address,
+//           o.delivery_latitude,
+//           o.delivery_longitude,
+
+//           o.delivery_option,
+//           o.payment_method,
+
+//           o.items_total,
+//           o.delivery_fee,
+//           o.service_fee,
+//           o.total_amount,
+
+//           o.status,
+
+//           o.created_at,
+//           o.updated_at,
+
+//           s.shop_name,
+//           s.image_url AS shop_image,
+
+//           s.latitude AS shop_latitude,
+//           s.longitude AS shop_longitude,
+
+//           sh.id AS shopper_id_joined,
+//           sh.full_name AS shopper_name,
+//           sh.mobile AS shopper_mobile,
+//           sh.status AS shopper_status,
+//           sh.latitude AS shopper_latitude,
+//           sh.longitude AS shopper_longitude
+
+//         FROM orders o
+
+//         LEFT JOIN shops s
+//           ON s.id = o.shop_id
+
+//         LEFT JOIN shoppers sh
+//           ON sh.id = o.shopper_id
+
+//         WHERE o.customer_id = $1
+
+//         ORDER BY
+//           o.created_at DESC
+//         `,
+//         [
+//           customerId,
+//         ]
+//       );
+
+//     const formattedOrders =
+//       await Promise.all(
+//         ordersResult.rows.map(
+//           async (order) => {
+
+//             const itemsResult =
+//               await pool.query(
+//                 `
+//                 SELECT
+//                   oi.id,
+//                   oi.order_id,
+
+//                   oi.product_id,
+
+//                   oi.item_name,
+
+//                   oi.quantity,
+//                   oi.amount,
+//                   oi.unit,
+//                   oi.price,
+
+//                   oi.custom,
+//                   oi.details,
+//                   oi.image,
+//                   oi.voice_url,
+
+//                   oi.shopper_photo_url,
+//                   oi.shopping_status,
+//                   oi.found_quantity,
+//                   oi.found_weight,
+//                   oi.found_weight_unit,
+//                   oi.barcode_scanned,
+//                   oi.completed_at,
+
+//                   oi.created_at,
+
+//                   COALESCE(
+//                     (
+//                       SELECT json_agg(
+//                         json_build_object(
+//                           'id', ri.id,
+//                           'order_id', ri.order_id,
+//                           'original_item_id', ri.original_item_id,
+//                           'shopper_id', ri.shopper_id,
+//                           'option_number', ri.option_number,
+
+//                           'photo_url', ri.photo_url,
+//                           'photoUrl', ri.photo_url,
+
+//                           'replacement_photo_url', ri.photo_url,
+//                           'replacementPhotoUrl', ri.photo_url,
+
+//                           'status', ri.status,
+
+//                           'created_at', ri.created_at,
+//                           'updated_at', ri.updated_at
+//                         )
+//                         ORDER BY
+//                           ri.option_number ASC
+//                       )
+//                       FROM replacement_items ri
+//                       WHERE
+//                         ri.order_id = oi.order_id
+//                         AND ri.original_item_id = oi.id
+//                     ),
+//                     '[]'::json
+//                   ) AS replacement_items
+
+//                 FROM order_items oi
+
+//                 WHERE oi.order_id = $1
+
+//                 ORDER BY
+//                   oi.id ASC
+//                 `,
+//                 [
+//                   order.id,
+//                 ]
+//               );
+
+//             const items =
+//               itemsResult.rows.map(
+//                 (item) => ({
+
+//                   ...item,
+
+//                   image:
+//                     item.image ||
+//                     null,
+
+//                   voice_url:
+//                     item.voice_url ||
+//                     null,
+
+//                   voiceUrl:
+//                     item.voice_url ||
+//                     null,
+
+//                   replacement_items:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   replacementItems:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   replacements:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   shopping_status:
+//                     item.shopping_status ||
+//                     'pending',
+
+//                   shoppingStatus:
+//                     item.shopping_status ||
+//                     'pending',
+
+//                   found_quantity:
+//                     item.found_quantity !== null
+//                       ? Number(
+//                           item.found_quantity
+//                         )
+//                       : null,
+
+//                   foundQuantity:
+//                     item.found_quantity !== null
+//                       ? Number(
+//                           item.found_quantity
+//                         )
+//                       : null,
+
+//                   found_weight:
+//                     item.found_weight !== null
+//                       ? Number(
+//                           item.found_weight
+//                         )
+//                       : null,
+
+//                   foundWeight:
+//                     item.found_weight !== null
+//                       ? Number(
+//                           item.found_weight
+//                         )
+//                       : null,
+
+//                   found_weight_unit:
+//                     item.found_weight_unit ||
+//                     null,
+
+//                   foundWeightUnit:
+//                     item.found_weight_unit ||
+//                     null,
+
+//                   barcode_scanned:
+//                     item.barcode_scanned === true,
+
+//                   barcodeScanned:
+//                     item.barcode_scanned === true,
+
+//                   shopper_photo_url:
+//                     item.shopper_photo_url ||
+//                     null,
+
+//                   shopperPhotoUrl:
+//                     item.shopper_photo_url ||
+//                     null,
+
+//                   completed_at:
+//                     item.completed_at ||
+//                     null,
+
+//                   completedAt:
+//                     item.completed_at ||
+//                     null,
+
+//                 })
+//               );
+
+//             const totalAmount =
+//               Number(
+//                 order.total_amount
+//               ) || 0;
+
+//             const itemsTotal =
+//               Number(
+//                 order.items_total
+//               ) || 0;
+
+//             const deliveryFee =
+//               Number(
+//                 order.delivery_fee
+//               ) || 0;
+
+//             const serviceFee =
+//               Number(
+//                 order.service_fee
+//               ) || 0;
+
+//             const shopper =
+//               order.shopper_id
+//                 ? {
+
+//                     id:
+//                       Number(
+//                         order.shopper_id
+//                       ),
+
+//                     name:
+//                       order.shopper_name ||
+//                       'Shopper',
+
+//                     full_name:
+//                       order.shopper_name ||
+//                       'Shopper',
+
+//                     mobile:
+//                       order.shopper_mobile ||
+//                       null,
+
+//                     status:
+//                       order.shopper_status ||
+//                       null,
+
+//                     latitude:
+//                       Number(
+//                         order.shopper_latitude
+//                       ),
+
+//                     longitude:
+//                       Number(
+//                         order.shopper_longitude
+//                       ),
+
+//                   }
+//                 : null;
+
+//             return {
+
+//               id:
+//                 order.id,
+
+//               customer_id:
+//                 order.customer_id,
+
+//               shop_id:
+//                 order.shop_id,
+
+//               shopper_id:
+//                 order.shopper_id
+//                   ? Number(
+//                       order.shopper_id
+//                     )
+//                   : null,
+
+//               delivery_address:
+//                 order.delivery_address,
+
+//               delivery_latitude:
+//                 Number(
+//                   order.delivery_latitude
+//                 ),
+
+//               delivery_longitude:
+//                 Number(
+//                   order.delivery_longitude
+//                 ),
+
+//               delivery_option:
+//                 order.delivery_option,
+
+//               payment_method:
+//                 order.payment_method,
+
+//               items_total:
+//                 itemsTotal,
+
+//               delivery_fee:
+//                 deliveryFee,
+
+//               service_fee:
+//                 serviceFee,
+
+//               total_amount:
+//                 totalAmount,
+
+//               total:
+//                 totalAmount,
+
+//               totalAmount:
+//                 totalAmount,
+
+//               itemsTotal:
+//                 itemsTotal,
+
+//               deliveryFee:
+//                 deliveryFee,
+
+//               serviceFee:
+//                 serviceFee,
+
+//               status:
+//                 order.status,
+
+//               created_at:
+//                 order.created_at,
+
+//               updated_at:
+//                 order.updated_at,
+
+//               shop: {
+
+//                 id:
+//                   order.shop_id,
+
+//                 name:
+//                   order.shop_name ||
+//                   'Selected Shop',
+
+//                 shop_name:
+//                   order.shop_name ||
+//                   'Selected Shop',
+
+//                 image:
+//                   order.shop_image ||
+//                   null,
+
+//                 image_url:
+//                   order.shop_image ||
+//                   null,
+
+//                 latitude:
+//                   Number(
+//                     order.shop_latitude
+//                   ),
+
+//                 longitude:
+//                   Number(
+//                     order.shop_longitude
+//                   ),
+
+//               },
+
+//               shopper:
+//                 shopper,
+
+//               assignedShopper:
+//                 shopper,
+
+//               assigned_shopper:
+//                 shopper,
+
+//               items:
+//                 items,
+
+//               shoppingList:
+//                 items,
+
+//               orderItems:
+//                 items,
+
+//             };
+
+//           }
+//         )
+//       );
+
+//     // ==================================================
+//     // DEBUG
+//     // ==================================================
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📦 CUSTOMER ORDERS'
+//     );
+
+//     console.log(
+//       'CUSTOMER ID:',
+//       customerId
+//     );
+
+//     formattedOrders.forEach(
+//       (order) => {
+
+//         console.log(
+//           `ORDER #${order.id}`
+//         );
+
+//         console.log(
+//           'ITEM COUNT:',
+//           order.items.length
+//         );
+
+//         console.log(
+//           'ITEMS TOTAL:',
+//           order.items_total
+//         );
+
+//         console.log(
+//           'TOTAL:',
+//           order.total_amount
+//         );
+
+//         console.log(
+//           'SHOPPER ID:',
+//           order.shopper_id
+//         );
+
+//         console.log(
+//           'SHOPPER:',
+//           order.shopper?.name ||
+//           'Not assigned'
+//         );
+
+//         console.log(
+//           'CUSTOM ITEM MEDIA:',
+//           order.items.map(
+//             (item) => ({
+
+//               id:
+//                 item.id,
+
+//               name:
+//                 item.item_name,
+
+//               custom:
+//                 item.custom,
+
+//               image:
+//                 item.image,
+
+//               voice_url:
+//                 item.voice_url,
+
+//             })
+//           )
+//         );
+
+//         console.log(
+//           'SHOPPING STATUS:',
+//           order.items.map(
+//             (item) => ({
+
+//               id:
+//                 item.id,
+
+//               name:
+//                 item.item_name,
+
+//               status:
+//                 item.shopping_status,
+
+//             })
+//           )
+//         );
+
+//         console.log(
+//           'REPLACEMENTS:',
+//           order.items.map(
+//             (item) => ({
+
+//               itemId:
+//                 item.id,
+
+//               itemName:
+//                 item.item_name,
+
+//               replacements:
+//                 item.replacement_items?.map(
+//                   (replacement) => ({
+
+//                     id:
+//                       replacement.id,
+
+//                     photo:
+//                       replacement.photo_url,
+
+//                     status:
+//                       replacement.status,
+
+//                     option:
+//                       replacement.option_number,
+
+//                   })
+//                 ) || [],
+
+//             })
+//           )
+//         );
+
+//       }
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     return res.status(200).json({
+
+//       success: true,
+
+//       orders:
+//         formattedOrders,
+
+//     });
+
+//   } catch (error) {
+
+//     console.error(
+//       '❌ GET CUSTOMER ORDERS ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to load customer orders',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   }
+
+// };
+
+
+// // ==================================================
+// // GET CUSTOMER ORDER BY ID
+// // ==================================================
+
+// const getCustomerOrderById =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             o.*,
+
+//             s.shop_name,
+//             s.image_url AS shop_image,
+
+//             s.latitude AS shop_latitude,
+//             s.longitude AS shop_longitude,
+
+//             sh.id AS shopper_id_joined,
+//             sh.full_name AS shopper_name,
+//             sh.mobile AS shopper_mobile,
+//             sh.status AS shopper_status,
+//             sh.latitude AS shopper_latitude,
+//             sh.longitude AS shopper_longitude
+
+//           FROM orders o
+
+//           LEFT JOIN shops s
+//             ON s.id = o.shop_id
+
+//           LEFT JOIN shoppers sh
+//             ON sh.id = o.shopper_id
+
+//           WHERE
+//             o.id = $1
+//             AND o.customer_id = $2
+
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       const itemsResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             oi.id,
+//             oi.order_id,
+
+//             oi.product_id,
+
+//             oi.item_name,
+
+//             oi.quantity,
+//             oi.amount,
+//             oi.unit,
+//             oi.price,
+
+//             oi.custom,
+//             oi.details,
+//             oi.image,
+//             oi.voice_url,
+
+//             oi.shopper_photo_url,
+//             oi.shopping_status,
+//             oi.found_quantity,
+//             oi.found_weight,
+//             oi.found_weight_unit,
+//             oi.barcode_scanned,
+//             oi.completed_at,
+
+//             oi.created_at,
+
+//             COALESCE(
+//               (
+//                 SELECT json_agg(
+//                   json_build_object(
+//                     'id', ri.id,
+//                     'order_id', ri.order_id,
+//                     'original_item_id', ri.original_item_id,
+//                     'shopper_id', ri.shopper_id,
+//                     'option_number', ri.option_number,
+
+//                     'photo_url', ri.photo_url,
+//                     'photoUrl', ri.photo_url,
+
+//                     'replacement_photo_url', ri.photo_url,
+//                     'replacementPhotoUrl', ri.photo_url,
+
+//                     'status', ri.status,
+
+//                     'created_at', ri.created_at,
+//                     'updated_at', ri.updated_at
+//                   )
+//                   ORDER BY
+//                     ri.option_number ASC
+//                 )
+//                 FROM replacement_items ri
+//                 WHERE
+//                   ri.order_id = oi.order_id
+//                   AND ri.original_item_id = oi.id
+//               ),
+//               '[]'::json
+//             ) AS replacement_items
+
+//           FROM order_items oi
+
+//           WHERE oi.order_id = $1
+
+//           ORDER BY oi.id ASC
+//           `,
+//           [
+//             orderId,
+//           ]
+//         );
+
+//       const items =
+//         itemsResult.rows.map(
+//           (item) => ({
+
+//             ...item,
+
+//             image:
+//               item.image ||
+//               null,
+
+//             voice_url:
+//               item.voice_url ||
+//               null,
+
+//             voiceUrl:
+//               item.voice_url ||
+//               null,
+
+//             replacement_items:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             replacementItems:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             replacements:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             shopping_status:
+//               item.shopping_status ||
+//               'pending',
+
+//             shoppingStatus:
+//               item.shopping_status ||
+//               'pending',
+
+//             found_quantity:
+//               item.found_quantity !== null
+//                 ? Number(
+//                     item.found_quantity
+//                   )
+//                 : null,
+
+//             foundQuantity:
+//               item.found_quantity !== null
+//                 ? Number(
+//                     item.found_quantity
+//                   )
+//                 : null,
+
+//             found_weight:
+//               item.found_weight !== null
+//                 ? Number(
+//                     item.found_weight
+//                   )
+//                 : null,
+
+//             foundWeight:
+//               item.found_weight !== null
+//                 ? Number(
+//                     item.found_weight
+//                   )
+//                 : null,
+
+//             found_weight_unit:
+//               item.found_weight_unit ||
+//               null,
+
+//             foundWeightUnit:
+//               item.found_weight_unit ||
+//               null,
+
+//             barcode_scanned:
+//               item.barcode_scanned === true,
+
+//             barcodeScanned:
+//               item.barcode_scanned === true,
+
+//             shopper_photo_url:
+//               item.shopper_photo_url ||
+//               null,
+
+//             shopperPhotoUrl:
+//               item.shopper_photo_url ||
+//               null,
+
+//             completed_at:
+//               item.completed_at ||
+//               null,
+
+//             completedAt:
+//               item.completed_at ||
+//               null,
+
+//           })
+//         );
+
+//       const totalAmount =
+//         Number(
+//           order.total_amount
+//         ) || 0;
+
+//       const itemsTotal =
+//         Number(
+//           order.items_total
+//         ) || 0;
+
+//       const deliveryFee =
+//         Number(
+//           order.delivery_fee
+//         ) || 0;
+
+//       const serviceFee =
+//         Number(
+//           order.service_fee
+//         ) || 0;
+
+//       const shopper =
+//         order.shopper_id
+//           ? {
+
+//               id:
+//                 Number(
+//                   order.shopper_id
+//                 ),
+
+//               name:
+//                 order.shopper_name ||
+//                 'Shopper',
+
+//               full_name:
+//                 order.shopper_name ||
+//                 'Shopper',
+
+//               mobile:
+//                 order.shopper_mobile ||
+//                 null,
+
+//               status:
+//                 order.shopper_status ||
+//                 null,
+
+//               latitude:
+//                 Number(
+//                   order.shopper_latitude
+//                 ),
+
+//               longitude:
+//                 Number(
+//                   order.shopper_longitude
+//                 ),
+
+//             }
+//           : null;
+
+//       // ==================================================
+//       // DEBUG
+//       // ==================================================
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       console.log(
+//         '📦 CUSTOMER ORDER'
+//       );
+
+//       console.log(
+//         'ORDER ID:',
+//         order.id
+//       );
+
+//       console.log(
+//         'STATUS:',
+//         order.status
+//       );
+
+//       console.log(
+//         'SHOPPER ID:',
+//         order.shopper_id
+//       );
+
+//       console.log(
+//         'SHOPPER:',
+//         shopper?.name ||
+//         'Not assigned'
+//       );
+
+//       console.log(
+//         'SHOPPER LOCATION:',
+//         shopper
+//           ? `${shopper.latitude}, ${shopper.longitude}`
+//           : 'Not available'
+//       );
+
+//       console.log(
+//         'CUSTOM ITEM MEDIA:',
+//         items.map(
+//           (item) => ({
+
+//             id:
+//               item.id,
+
+//             name:
+//               item.item_name,
+
+//             custom:
+//               item.custom,
+
+//             image:
+//               item.image,
+
+//             voice_url:
+//               item.voice_url,
+
+//           })
+//         )
+//       );
+
+//       console.log(
+//         'ITEM SHOPPING STATUS:',
+//         items.map(
+//           (item) => ({
+
+//             id:
+//               item.id,
+
+//             name:
+//               item.item_name,
+
+//             status:
+//               item.shopping_status,
+
+//             foundQuantity:
+//               item.found_quantity,
+
+//             foundWeight:
+//               item.found_weight,
+
+//             photo:
+//               item.shopper_photo_url,
+
+//             completedAt:
+//               item.completed_at,
+
+//           })
+//         )
+//       );
+
+//       console.log(
+//         'REPLACEMENT ITEMS:',
+//         items.map(
+//           (item) => ({
+
+//             itemId:
+//               item.id,
+
+//             itemName:
+//               item.item_name,
+
+//             replacements:
+//               item.replacement_items?.map(
+//                 (replacement) => ({
+
+//                   id:
+//                     replacement.id,
+
+//                   originalItemId:
+//                     replacement.original_item_id,
+
+//                   option:
+//                     replacement.option_number,
+
+//                   photo:
+//                     replacement.photo_url,
+
+//                   status:
+//                     replacement.status,
+
+//                 })
+//               ) || [],
+
+//           })
+//         )
+//       );
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         order: {
+
+//           ...order,
+
+//           delivery_latitude:
+//             Number(
+//               order.delivery_latitude
+//             ),
+
+//           delivery_longitude:
+//             Number(
+//               order.delivery_longitude
+//             ),
+
+//           items_total:
+//             itemsTotal,
+
+//           delivery_fee:
+//             deliveryFee,
+
+//           service_fee:
+//             serviceFee,
+
+//           total_amount:
+//             totalAmount,
+
+//           total:
+//             totalAmount,
+
+//           totalAmount:
+//             totalAmount,
+
+//           itemsTotal:
+//             itemsTotal,
+
+//           deliveryFee:
+//             deliveryFee,
+
+//           serviceFee:
+//             serviceFee,
+
+//           shop: {
+
+//             id:
+//               order.shop_id,
+
+//             name:
+//               order.shop_name ||
+//               'Selected Shop',
+
+//             shop_name:
+//               order.shop_name ||
+//               'Selected Shop',
+
+//             image:
+//               order.shop_image ||
+//               null,
+
+//             image_url:
+//               order.shop_image ||
+//               null,
+
+//             latitude:
+//               Number(
+//                 order.shop_latitude
+//               ),
+
+//             longitude:
+//               Number(
+//                 order.shop_longitude
+//               ),
+
+//           },
+
+//           shopper:
+//             shopper,
+
+//           assignedShopper:
+//             shopper,
+
+//           assigned_shopper:
+//             shopper,
+
+//           items:
+//             items,
+
+//           shoppingList:
+//             items,
+
+//           orderItems:
+//             items,
+
+//         },
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ GET CUSTOMER ORDER ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to load order',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // GET NEARBY ONLINE SHOPPERS FOR ORDER
+// // ==================================================
+
+// const getNearbyShoppersForOrder =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+
+//             o.id,
+//             o.customer_id,
+//             o.shop_id,
+//             o.status,
+//             o.shopper_id,
+
+//             s.shop_name,
+
+//             s.latitude AS shop_latitude,
+//             s.longitude AS shop_longitude
+
+//           FROM orders o
+
+//           LEFT JOIN shops s
+//             ON s.id = o.shop_id
+
+//           WHERE
+//             o.id = $1
+//             AND o.customer_id = $2
+
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       let acceptedShopper =
+//         null;
+
+//       if (
+//         order.shopper_id
+//       ) {
+
+//         const acceptedShopperResult =
+//           await pool.query(
+//             `
+//             SELECT
+//               id,
+//               full_name,
+//               mobile,
+//               status,
+//               latitude,
+//               longitude
+//             FROM shoppers
+//             WHERE id = $1
+//             LIMIT 1
+//             `,
+//             [
+//               order.shopper_id,
+//             ]
+//           );
+
+//         if (
+//           acceptedShopperResult.rows.length > 0
+//         ) {
+
+//           const shopper =
+//             acceptedShopperResult.rows[0];
+
+//           acceptedShopper = {
+
+//             id:
+//               Number(
+//                 shopper.id
+//               ),
+
+//             name:
+//               shopper.full_name ||
+//               'Shopper',
+
+//             full_name:
+//               shopper.full_name ||
+//               'Shopper',
+
+//             mobile:
+//               shopper.mobile ||
+//               null,
+
+//             status:
+//               shopper.status ||
+//               null,
+
+//             latitude:
+//               Number(
+//                 shopper.latitude
+//               ),
+
+//             longitude:
+//               Number(
+//                 shopper.longitude
+//               ),
+
+//           };
+
+//         }
+
+//       }
+
+//       const shopLatitude =
+//         Number(
+//           order.shop_latitude
+//         );
+
+//       const shopLongitude =
+//         Number(
+//           order.shop_longitude
+//         );
+
+//       if (
+//         !Number.isFinite(
+//           shopLatitude
+//         ) ||
+//         !Number.isFinite(
+//           shopLongitude
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Shop location is not available',
+
+//         });
+
+//       }
+
+//       const shoppersResult =
+//         await pool.query(
+//           `
+//           SELECT
+
+//             sh.id,
+
+//             sh.full_name,
+
+//             sh.mobile,
+
+//             sh.status,
+
+//             sh.latitude,
+
+//             sh.longitude,
+
+//             (
+//               6371 *
+//               acos(
+//                 LEAST(
+//                   1,
+//                   GREATEST(
+//                     -1,
+//                     cos(
+//                       radians($1)
+//                     ) *
+//                     cos(
+//                       radians(sh.latitude)
+//                     ) *
+//                     cos(
+//                       radians(sh.longitude) -
+//                       radians($2)
+//                     ) +
+//                     sin(
+//                       radians($1)
+//                     ) *
+//                     sin(
+//                       radians(sh.latitude)
+//                     )
+//                   )
+//                 )
+//               )
+//             ) AS distance_km
+
+//           FROM shoppers sh
+
+//           WHERE
+//             sh.status = 'online'
+
+//             AND sh.latitude IS NOT NULL
+
+//             AND sh.longitude IS NOT NULL
+
+//             AND sh.latitude BETWEEN -90 AND 90
+
+//             AND sh.longitude BETWEEN -180 AND 180
+
+//           ORDER BY
+//             distance_km ASC
+//           `,
+//           [
+//             shopLatitude,
+//             shopLongitude,
+//           ]
+//         );
+
+//       const shoppers =
+//         shoppersResult.rows
+
+//           .filter(
+//             (shopper) => {
+
+//               const distance =
+//                 Number(
+//                   shopper.distance_km
+//                 );
+
+//               return (
+//                 Number.isFinite(
+//                   distance
+//                 ) &&
+//                 distance <= 10
+//               );
+
+//             }
+//           )
+
+//           .map(
+//             (shopper) => ({
+
+//               id:
+//                 shopper.id,
+
+//               name:
+//                 shopper.full_name,
+
+//               full_name:
+//                 shopper.full_name,
+
+//               mobile:
+//                 shopper.mobile,
+
+//               status:
+//                 shopper.status,
+
+//               latitude:
+//                 Number(
+//                   shopper.latitude
+//                 ),
+
+//               longitude:
+//                 Number(
+//                   shopper.longitude
+//                 ),
+
+//               distance_km:
+//                 Number(
+//                   shopper.distance_km
+//                 ),
+
+//             })
+//           );
+
+//       // ==================================================
+//       // DEBUG
+//       // ==================================================
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       console.log(
+//         '📍 NEARBY ONLINE SHOPPERS'
+//       );
+
+//       console.log(
+//         'ORDER ID:',
+//         orderId
+//       );
+
+//       console.log(
+//         'SHOP ID:',
+//         order.shop_id
+//       );
+
+//       console.log(
+//         'SHOP:',
+//         order.shop_name
+//       );
+
+//       console.log(
+//         'SHOP LOCATION:',
+//         shopLatitude,
+//         shopLongitude
+//       );
+
+//       console.log(
+//         'ORDER STATUS:',
+//         order.status
+//       );
+
+//       console.log(
+//         'ACCEPTED SHOPPER:',
+//         acceptedShopper
+//       );
+
+//       console.log(
+//         'ONLINE SHOPPERS:',
+//         shoppers.length
+//       );
+
+//       shoppers.forEach(
+//         (shopper) => {
+
+//           console.log(
+//             '--------------------------------'
+//           );
+
+//           console.log(
+//             'SHOPPER ID:',
+//             shopper.id
+//           );
+
+//           console.log(
+//             'SHOPPER NAME:',
+//             shopper.name
+//           );
+
+//           console.log(
+//             'STATUS:',
+//             shopper.status
+//           );
+
+//           console.log(
+//             'LOCATION:',
+//             shopper.latitude,
+//             shopper.longitude
+//           );
+
+//           console.log(
+//             'DISTANCE:',
+//             shopper.distance_km,
+//             'KM'
+//           );
+
+//         }
+//       );
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         orderId:
+//           order.id,
+
+//         orderStatus:
+//           order.status,
+
+//         shop: {
+
+//           id:
+//             order.shop_id,
+
+//           name:
+//             order.shop_name ||
+//             'Selected Shop',
+
+//           latitude:
+//             shopLatitude,
+
+//           longitude:
+//             shopLongitude,
+
+//         },
+
+//         shopper:
+//           acceptedShopper,
+
+//         acceptedShopper:
+//           acceptedShopper,
+
+//         assignedShopper:
+//           acceptedShopper,
+
+//         assigned_shopper:
+//           acceptedShopper,
+
+//         shoppers:
+//           shoppers,
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ GET NEARBY SHOPPERS ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to load nearby shoppers',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // CANCEL CUSTOMER ORDER
+// // ==================================================
+
+// const cancelCustomerOrder =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             id,
+//             status
+//           FROM orders
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       if (
+//         order.status !==
+//         'waiting_for_shopper'
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'This order cannot be cancelled now',
+
+//         });
+
+//       }
+
+//       const updateResult =
+//         await pool.query(
+//           `
+//           UPDATE orders
+
+//           SET
+//             status = 'cancelled',
+//             updated_at = CURRENT_TIMESTAMP
+
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+
+//           RETURNING *
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         message:
+//           'Order cancelled successfully',
+
+//         order:
+//           updateResult.rows[0],
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ CANCEL ORDER ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to cancel order',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // UPDATE REPLACEMENT STATUS
+// // ==================================================
+
+// const updateReplacementStatus =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       const replacementId =
+//         Number(
+//           req.params.replacementId
+//         );
+
+//       const {
+//         status,
+//         decision
+//       } = req.body;
+
+//       if (
+//         !Number.isInteger(orderId) ||
+//         !Number.isInteger(replacementId)
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order or replacement ID',
+
+//         });
+
+//       }
+
+//       const finalStatus =
+//         decision === 'accepted'
+//           ? 'accepted'
+//           : decision === 'rejected'
+//             ? 'rejected'
+//             : status === 'accepted'
+//               ? 'accepted'
+//               : status === 'rejected'
+//                 ? 'rejected'
+//                 : null;
+
+//       if (!finalStatus) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Decision must be accepted or rejected',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             id,
+//             customer_id
+//           FROM orders
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const replacementResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             id,
+//             order_id,
+//             original_item_id,
+//             shopper_id,
+//             option_number,
+//             photo_url,
+//             status,
+//             created_at,
+//             updated_at
+//           FROM replacement_items
+//           WHERE
+//             id = $1
+//             AND order_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             replacementId,
+//             orderId,
+//           ]
+//         );
+
+//       if (
+//         replacementResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Replacement item not found',
+
+//         });
+
+//       }
+
+//       const replacement =
+//         replacementResult.rows[0];
+
+//       if (
+//         replacement.status !==
+//         'waiting_customer'
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'This replacement has already been processed',
+
+//           status:
+//             replacement.status,
+
+//         });
+
+//       }
+
+//       const databaseStatus =
+//         finalStatus === 'accepted'
+//           ? 'customer_accepted'
+//           : 'customer_rejected';
+
+//       const updateResult =
+//         await pool.query(
+//           `
+//           UPDATE replacement_items
+
+//           SET
+//             status = $1,
+//             updated_at = CURRENT_TIMESTAMP
+
+//           WHERE
+//             id = $2
+//             AND order_id = $3
+
+//           RETURNING
+//             id,
+//             order_id,
+//             original_item_id,
+//             shopper_id,
+//             option_number,
+//             photo_url,
+//             status,
+//             created_at,
+//             updated_at
+//           `,
+//           [
+//             databaseStatus,
+//             replacementId,
+//             orderId,
+//           ]
+//         );
+
+//       if (
+//         updateResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Replacement item could not be updated',
+
+//         });
+
+//       }
+
+//       const updatedReplacement =
+//         updateResult.rows[0];
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       console.log(
+//         '🔄 REPLACEMENT STATUS UPDATED'
+//       );
+
+//       console.log(
+//         'CUSTOMER ID:',
+//         customerId
+//       );
+
+//       console.log(
+//         'ORDER ID:',
+//         orderId
+//       );
+
+//       console.log(
+//         'REPLACEMENT ID:',
+//         replacementId
+//       );
+
+//       console.log(
+//         'ORIGINAL ITEM ID:',
+//         replacement.original_item_id
+//       );
+
+//       console.log(
+//         'OLD STATUS:',
+//         replacement.status
+//       );
+
+//       console.log(
+//         'NEW STATUS:',
+//         updatedReplacement.status
+//       );
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         message:
+//           finalStatus === 'accepted'
+//             ? 'Replacement accepted successfully'
+//             : 'Replacement rejected successfully',
+
+//         replacement: {
+
+//           id:
+//             updatedReplacement.id,
+
+//           orderId:
+//             updatedReplacement.order_id,
+
+//           originalItemId:
+//             updatedReplacement.original_item_id,
+
+//           shopperId:
+//             updatedReplacement.shopper_id,
+
+//           optionNumber:
+//             updatedReplacement.option_number,
+
+//           photoUrl:
+//             updatedReplacement.photo_url,
+
+//           photo_url:
+//             updatedReplacement.photo_url,
+
+//           replacementPhotoUrl:
+//             updatedReplacement.photo_url,
+
+//           replacement_photo_url:
+//             updatedReplacement.photo_url,
+
+//           status:
+//             updatedReplacement.status,
+
+//           createdAt:
+//             updatedReplacement.created_at,
+
+//           updatedAt:
+//             updatedReplacement.updated_at,
+
+//         },
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ UPDATE REPLACEMENT STATUS ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to update replacement status',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // EXPORT
+// // ==================================================
+
+// module.exports = {
+
+//   createOrder,
+
+//   getCustomerOrders,
+
+//   getCustomerOrderById,
+
+//   getNearbyShoppersForOrder,
+
+//   cancelCustomerOrder,
+
+//   updateReplacementStatus,
+
+//   uploadCustomItemMedia,
+
+// };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// const pool = require('../config/db');
+
+// // ==================================================
+// // UPLOAD CUSTOM ITEM MEDIA
+// // ==================================================
+
+// const uploadCustomItemMedia = async (
+//   req,
+//   res
+// ) => {
+//   try {
+
+//     if (
+//       !req.files ||
+//       req.files.length === 0
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'No files uploaded',
+
+//       });
+
+//     }
+
+//     const baseUrl =
+//       `${req.protocol}://${req.get('host')}`;
+
+//     const files =
+//       req.files.map(
+//         (file) => {
+
+//           const url =
+//             `${baseUrl}/uploads/items/${file.filename}`;
+
+//           return {
+
+//             fieldName:
+//               file.fieldname,
+
+//             originalName:
+//               file.originalname,
+
+//             fileName:
+//               file.filename,
+
+//             mimeType:
+//               file.mimetype,
+
+//             size:
+//               file.size,
+
+//             url:
+//               url,
+
+//           };
+
+//         }
+//       );
+
+//     const imageExtensions = [
+//       '.jpg',
+//       '.jpeg',
+//       '.png',
+//       '.webp',
+//     ];
+
+//     const audioExtensions = [
+//       '.mp3',
+//       '.m4a',
+//       '.wav',
+//       '.aac',
+//       '.ogg',
+//       '.webm',
+//     ];
+
+//     const imageMimeTypes = [
+//       'image/jpeg',
+//       'image/jpg',
+//       'image/png',
+//       'image/webp',
+//     ];
+
+//     const audioMimeTypes = [
+//       'audio/mpeg',
+//       'audio/mp3',
+//       'audio/mp4',
+//       'audio/m4a',
+//       'audio/x-m4a',
+//       'audio/wav',
+//       'audio/x-wav',
+//       'audio/aac',
+//       'audio/ogg',
+//       'audio/webm',
+//     ];
+
+//     const imageFile =
+//       files.find(
+//         (file) => {
+
+//           const mime =
+//             (
+//               file.mimeType ||
+//               ''
+//             ).toLowerCase();
+
+//           const ext =
+//             require('path')
+//               .extname(
+//                 file.originalName ||
+//                 file.fileName ||
+//                 ''
+//               )
+//               .toLowerCase();
+
+//           return (
+//             imageMimeTypes.includes(
+//               mime
+//             ) ||
+//             imageExtensions.includes(
+//               ext
+//             )
+//           );
+
+//         }
+//       );
+
+//     const audioFile =
+//       files.find(
+//         (file) => {
+
+//           const mime =
+//             (
+//               file.mimeType ||
+//               ''
+//             ).toLowerCase();
+
+//           const ext =
+//             require('path')
+//               .extname(
+//                 file.originalName ||
+//                 file.fileName ||
+//                 ''
+//               )
+//               .toLowerCase();
+
+//           return (
+//             audioMimeTypes.includes(
+//               mime
+//             ) ||
+//             audioExtensions.includes(
+//               ext
+//             )
+//           );
+
+//         }
+//       );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📤 CUSTOM ITEM MEDIA UPLOAD'
+//     );
+
+//     console.log(
+//       'CUSTOMER ID:',
+//       req.customer?.customerId
+//     );
+
+//     console.log(
+//       'FILES:',
+//       files
+//     );
+
+//     console.log(
+//       'IMAGE:',
+//       imageFile?.url ||
+//       null
+//     );
+
+//     console.log(
+//       'VOICE:',
+//       audioFile?.url ||
+//       null
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     return res.status(200).json({
+
+//       success: true,
+
+//       message:
+//         'Files uploaded successfully',
+
+//       imageUrl:
+//         imageFile?.url ||
+//         null,
+
+//       voiceUrl:
+//         audioFile?.url ||
+//         null,
+
+//       files,
+
+//     });
+
+//   } catch (error) {
+
+//     console.error(
+//       '❌ CUSTOM ITEM MEDIA UPLOAD ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to upload custom item media',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   }
+// };
+
+
+// // ==================================================
+// // CREATE ORDER
+// // ==================================================
+
+// const createOrder = async (
+//   req,
+//   res
+// ) => {
+
+//   const client =
+//     await pool.connect();
+
+//   try {
+
+//     const customerId =
+//       req.customer.customerId;
+
+//     const {
+//       shopId,
+//       deliveryAddress,
+//       deliveryLatitude,
+//       deliveryLongitude,
+//       deliveryOption = 'fast',
+//       paymentMethod = 'cash',
+//       items = [],
+//       deliveryFee = 0,
+//       serviceFee = 0,
+//       itemsTotal = 0,
+//       totalAmount = 0,
+//     } = req.body;
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📥 CREATE ORDER REQUEST'
+//     );
+
+//     console.log(
+//       'CUSTOMER ID:',
+//       customerId
+//     );
+
+//     console.log(
+//       'SHOP ID:',
+//       shopId
+//     );
+
+//     console.log(
+//       'ITEM COUNT:',
+//       Array.isArray(items)
+//         ? items.length
+//         : 0
+//     );
+
+//     console.log(
+//       'RAW ITEMS:',
+//       JSON.stringify(
+//         items,
+//         null,
+//         2
+//       )
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     if (!shopId) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Shop ID is required',
+
+//       });
+
+//     }
+
+//     if (!deliveryAddress) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Delivery address is required',
+
+//       });
+
+//     }
+
+//     if (
+//       deliveryLatitude === undefined ||
+//       deliveryLongitude === undefined
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Delivery latitude and longitude are required',
+
+//       });
+
+//     }
+
+//     const latitude =
+//       Number(
+//         deliveryLatitude
+//       );
+
+//     const longitude =
+//       Number(
+//         deliveryLongitude
+//       );
+
+//     if (
+//       !Number.isFinite(latitude) ||
+//       !Number.isFinite(longitude)
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Valid latitude and longitude are required',
+
+//       });
+
+//     }
+
+//     if (
+//       latitude < -90 ||
+//       latitude > 90 ||
+//       longitude < -180 ||
+//       longitude > 180
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Latitude or longitude is out of range',
+
+//       });
+
+//     }
+
+//     if (
+//       !Array.isArray(items) ||
+//       items.length === 0
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'At least one order item is required',
+
+//       });
+
+//     }
+
+//     const shopResult =
+//       await client.query(
+//         `
+//         SELECT
+//           id,
+//           shop_name,
+//           image_url,
+//           status,
+//           latitude,
+//           longitude
+//         FROM shops
+//         WHERE id = $1
+//         `,
+//         [
+//           shopId,
+//         ]
+//       );
+
+//     if (
+//       shopResult.rows.length === 0
+//     ) {
+
+//       return res.status(404).json({
+
+//         success: false,
+
+//         message:
+//           'Shop not found',
+
+//       });
+
+//     }
+
+//     const shop =
+//       shopResult.rows[0];
+
+//     if (
+//       shop.status !==
+//       'approved'
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'This shop is not available',
+
+//       });
+
+//     }
+
+//     const safeItemsTotal =
+//       Number(itemsTotal) || 0;
+
+//     const safeDeliveryFee =
+//       Number(deliveryFee) || 0;
+
+//     const safeServiceFee =
+//       Number(serviceFee) || 0;
+
+//     const safeTotalAmount =
+//       Number(totalAmount) ||
+//       (
+//         safeItemsTotal +
+//         safeDeliveryFee +
+//         safeServiceFee
+//       );
+
+//     await client.query(
+//       'BEGIN'
+//     );
+
+//     const orderResult =
+//       await client.query(
+//         `
+//         INSERT INTO orders (
+//           customer_id,
+//           shop_id,
+//           delivery_address,
+//           delivery_latitude,
+//           delivery_longitude,
+//           delivery_option,
+//           payment_method,
+//           items_total,
+//           delivery_fee,
+//           service_fee,
+//           total_amount,
+//           status
+//         )
+//         VALUES (
+//           $1,
+//           $2,
+//           $3,
+//           $4,
+//           $5,
+//           $6,
+//           $7,
+//           $8,
+//           $9,
+//           $10,
+//           $11,
+//           $12
+//         )
+//         RETURNING *
+//         `,
+//         [
+//           customerId,
+//           shopId,
+//           deliveryAddress,
+//           latitude,
+//           longitude,
+//           deliveryOption,
+//           paymentMethod,
+//           safeItemsTotal,
+//           safeDeliveryFee,
+//           safeServiceFee,
+//           safeTotalAmount,
+//           'waiting_for_shopper',
+//         ]
+//       );
+
+//     const order =
+//       orderResult.rows[0];
+
+//     for (
+//       const item of items
+//     ) {
+
+//       const productId =
+//         item.productId ||
+//         item.product_id ||
+//         null;
+
+//       const itemName =
+//         item.itemName ||
+//         item.item_name ||
+//         item.name ||
+//         item.productName ||
+//         'Item';
+
+//       const quantity =
+//         Number(
+//           item.quantity
+//         ) || 1;
+
+//       const amount =
+//         Number(
+//           item.amount
+//         ) || 1;
+
+//       const unit =
+//         item.unit ||
+//         item.selectedUnit ||
+//         null;
+
+//       const price =
+//         Number(
+//           item.price
+//         ) || 0;
+
+//       const custom =
+//         item.custom === true;
+
+//       const details =
+//         item.details ||
+//         null;
+
+//       const image =
+//         item.image ||
+//         item.imageUrl ||
+//         item.image_url ||
+//         item.photo ||
+//         item.photoUrl ||
+//         item.photo_url ||
+//         null;
+
+//       const voiceUrl =
+//         item.voice_url ||
+//         item.voiceUrl ||
+//         item.voice ||
+//         null;
+
+//       await client.query(
+//         `
+//         INSERT INTO order_items (
+//           order_id,
+//           product_id,
+//           item_name,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voice_url
+//         )
+//         VALUES (
+//           $1,
+//           $2,
+//           $3,
+//           $4,
+//           $5,
+//           $6,
+//           $7,
+//           $8,
+//           $9,
+//           $10,
+//           $11
+//         )
+//         `,
+//         [
+//           order.id,
+//           productId,
+//           itemName,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voiceUrl,
+//         ]
+//       );
+
+//     }
+
+//     await client.query(
+//       'COMMIT'
+//     );
+
+//     const createdItemsResult =
+//       await pool.query(
+//         `
+//         SELECT
+//           id,
+//           order_id,
+//           product_id,
+//           item_name,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voice_url,
+
+//           shopper_photo_url,
+//           shopping_status,
+//           found_quantity,
+//           found_weight,
+//           found_weight_unit,
+//           barcode_scanned,
+//           completed_at,
+
+//           created_at
+//         FROM order_items
+//         WHERE order_id = $1
+//         ORDER BY id ASC
+//         `,
+//         [
+//           order.id,
+//         ]
+//       );
+
+//     const createdItems =
+//       createdItemsResult.rows.map(
+//         (item) => ({
+
+//           ...item,
+
+//           voice_url:
+//             item.voice_url ||
+//             null,
+
+//           voiceUrl:
+//             item.voice_url ||
+//             null,
+
+//           shoppingStatus:
+//             item.shopping_status ||
+//             'pending',
+
+//           foundQuantity:
+//             item.found_quantity !== null
+//               ? Number(
+//                   item.found_quantity
+//                 )
+//               : null,
+
+//           foundWeight:
+//             item.found_weight !== null
+//               ? Number(
+//                   item.found_weight
+//                 )
+//               : null,
+
+//           foundWeightUnit:
+//             item.found_weight_unit ||
+//             null,
+
+//           barcodeScanned:
+//             item.barcode_scanned === true,
+
+//           shopperPhotoUrl:
+//             item.shopper_photo_url ||
+//             null,
+
+//           completedAt:
+//             item.completed_at ||
+//             null,
+
+//         })
+//       );
+
+//     return res.status(201).json({
+
+//       success: true,
+
+//       message:
+//         'Order created successfully',
+
+//       order: {
+
+//         ...order,
+
+//         total:
+//           Number(
+//             order.total_amount
+//           ),
+
+//         totalAmount:
+//           Number(
+//             order.total_amount
+//           ),
+
+//         itemsTotal:
+//           Number(
+//             order.items_total
+//           ),
+
+//         deliveryFee:
+//           Number(
+//             order.delivery_fee
+//           ),
+
+//         serviceFee:
+//           Number(
+//             order.service_fee
+//           ),
+
+//         shop: {
+
+//           id:
+//             shop.id,
+
+//           name:
+//             shop.shop_name,
+
+//           image:
+//             shop.image_url,
+
+//           latitude:
+//             Number(
+//               shop.latitude
+//             ),
+
+//           longitude:
+//             Number(
+//               shop.longitude
+//             ),
+
+//         },
+
+//         items:
+//           createdItems,
+
+//       },
+
+//     });
+
+//   } catch (error) {
+
+//     try {
+
+//       await client.query(
+//         'ROLLBACK'
+//       );
+
+//     } catch (
+//       rollbackError
+//     ) {
+
+//       console.error(
+//         '❌ Rollback error:',
+//         rollbackError.message
+//       );
+
+//     }
+
+//     console.error(
+//       '❌ CREATE ORDER ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to create order',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   } finally {
+
+//     client.release();
+
+//   }
+
+// };
+
+
+// // ==================================================
+// // GET CUSTOMER ORDERS
+// // ==================================================
+
+// const getCustomerOrders = async (
+//   req,
+//   res
+// ) => {
+
+//   try {
+
+//     const customerId =
+//       req.customer.customerId;
+
+//     const ordersResult =
+//       await pool.query(
+//         `
+//         SELECT
+//           o.id,
+//           o.customer_id,
+//           o.shop_id,
+//           o.shopper_id,
+
+//           o.delivery_address,
+//           o.delivery_latitude,
+//           o.delivery_longitude,
+
+//           o.delivery_option,
+//           o.payment_method,
+
+//           o.items_total,
+//           o.delivery_fee,
+//           o.service_fee,
+//           o.total_amount,
+
+//           o.status,
+
+//           o.created_at,
+//           o.updated_at,
+
+//           s.shop_name,
+//           s.image_url AS shop_image,
+
+//           s.latitude AS shop_latitude,
+//           s.longitude AS shop_longitude,
+
+//           sh.id AS shopper_id_joined,
+//           sh.full_name AS shopper_name,
+//           sh.mobile AS shopper_mobile,
+//           sh.status AS shopper_status,
+//           sh.latitude AS shopper_latitude,
+//           sh.longitude AS shopper_longitude
+
+//         FROM orders o
+
+//         LEFT JOIN shops s
+//           ON s.id = o.shop_id
+
+//         LEFT JOIN shoppers sh
+//           ON sh.id = o.shopper_id
+
+//         WHERE o.customer_id = $1
+
+//         ORDER BY
+//           o.created_at DESC
+//         `,
+//         [
+//           customerId,
+//         ]
+//       );
+
+//     const formattedOrders =
+//       await Promise.all(
+//         ordersResult.rows.map(
+//           async (order) => {
+
+//             const itemsResult =
+//               await pool.query(
+//                 `
+//                 SELECT
+//                   oi.id,
+//                   oi.order_id,
+//                   oi.product_id,
+//                   oi.item_name,
+//                   oi.quantity,
+//                   oi.amount,
+//                   oi.unit,
+//                   oi.price,
+//                   oi.custom,
+//                   oi.details,
+//                   oi.image,
+//                   oi.voice_url,
+//                   oi.shopper_photo_url,
+//                   oi.shopping_status,
+//                   oi.found_quantity,
+//                   oi.found_weight,
+//                   oi.found_weight_unit,
+//                   oi.barcode_scanned,
+//                   oi.completed_at,
+//                   oi.created_at,
+
+//                   COALESCE(
+//                     (
+//                       SELECT json_agg(
+//                         json_build_object(
+//                           'id', ri.id,
+//                           'order_id', ri.order_id,
+//                           'original_item_id', ri.original_item_id,
+//                           'shopper_id', ri.shopper_id,
+//                           'option_number', ri.option_number,
+
+//                           'photo_url', ri.photo_url,
+//                           'photoUrl', ri.photo_url,
+
+//                           'replacement_photo_url', ri.photo_url,
+//                           'replacementPhotoUrl', ri.photo_url,
+
+//                           'status', ri.status,
+
+//                           'created_at', ri.created_at,
+//                           'updated_at', ri.updated_at
+//                         )
+//                         ORDER BY
+//                           ri.option_number ASC
+//                       )
+//                       FROM replacement_items ri
+//                       WHERE
+//                         ri.order_id = oi.order_id
+//                         AND ri.original_item_id = oi.id
+//                     ),
+//                     '[]'::json
+//                   ) AS replacement_items
+
+//                 FROM order_items oi
+
+//                 WHERE oi.order_id = $1
+
+//                 ORDER BY
+//                   oi.id ASC
+//                 `,
+//                 [
+//                   order.id,
+//                 ]
+//               );
+
+//             const items =
+//               itemsResult.rows.map(
+//                 (item) => ({
+
+//                   ...item,
+
+//                   image:
+//                     item.image ||
+//                     null,
+
+//                   voice_url:
+//                     item.voice_url ||
+//                     null,
+
+//                   voiceUrl:
+//                     item.voice_url ||
+//                     null,
+
+//                   replacement_items:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   replacementItems:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   replacements:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   shopping_status:
+//                     item.shopping_status ||
+//                     'pending',
+
+//                   shoppingStatus:
+//                     item.shopping_status ||
+//                     'pending',
+
+//                   found_quantity:
+//                     item.found_quantity !== null
+//                       ? Number(
+//                           item.found_quantity
+//                         )
+//                       : null,
+
+//                   foundQuantity:
+//                     item.found_quantity !== null
+//                       ? Number(
+//                           item.found_quantity
+//                         )
+//                       : null,
+
+//                   found_weight:
+//                     item.found_weight !== null
+//                       ? Number(
+//                           item.found_weight
+//                         )
+//                       : null,
+
+//                   foundWeight:
+//                     item.found_weight !== null
+//                       ? Number(
+//                           item.found_weight
+//                         )
+//                       : null,
+
+//                   found_weight_unit:
+//                     item.found_weight_unit ||
+//                     null,
+
+//                   foundWeightUnit:
+//                     item.found_weight_unit ||
+//                     null,
+
+//                   barcode_scanned:
+//                     item.barcode_scanned === true,
+
+//                   barcodeScanned:
+//                     item.barcode_scanned === true,
+
+//                   shopper_photo_url:
+//                     item.shopper_photo_url ||
+//                     null,
+
+//                   shopperPhotoUrl:
+//                     item.shopper_photo_url ||
+//                     null,
+
+//                   completed_at:
+//                     item.completed_at ||
+//                     null,
+
+//                   completedAt:
+//                     item.completed_at ||
+//                     null,
+
+//                 })
+//               );
+
+//             const totalAmount =
+//               Number(
+//                 order.total_amount
+//               ) || 0;
+
+//             const itemsTotal =
+//               Number(
+//                 order.items_total
+//               ) || 0;
+
+//             const deliveryFee =
+//               Number(
+//                 order.delivery_fee
+//               ) || 0;
+
+//             const serviceFee =
+//               Number(
+//                 order.service_fee
+//               ) || 0;
+
+//             const shopper =
+//               order.shopper_id
+//                 ? {
+
+//                     id:
+//                       Number(
+//                         order.shopper_id
+//                       ),
+
+//                     name:
+//                       order.shopper_name ||
+//                       'Shopper',
+
+//                     full_name:
+//                       order.shopper_name ||
+//                       'Shopper',
+
+//                     mobile:
+//                       order.shopper_mobile ||
+//                       null,
+
+//                     status:
+//                       order.shopper_status ||
+//                       null,
+
+//                     latitude:
+//                       Number(
+//                         order.shopper_latitude
+//                       ),
+
+//                     longitude:
+//                       Number(
+//                         order.shopper_longitude
+//                       ),
+
+//                   }
+//                 : null;
+
+//             return {
+
+//               id:
+//                 order.id,
+
+//               customer_id:
+//                 order.customer_id,
+
+//               shop_id:
+//                 order.shop_id,
+
+//               shopper_id:
+//                 order.shopper_id
+//                   ? Number(
+//                       order.shopper_id
+//                     )
+//                   : null,
+
+//               delivery_address:
+//                 order.delivery_address,
+
+//               delivery_latitude:
+//                 Number(
+//                   order.delivery_latitude
+//                 ),
+
+//               delivery_longitude:
+//                 Number(
+//                   order.delivery_longitude
+//                 ),
+
+//               delivery_option:
+//                 order.delivery_option,
+
+//               payment_method:
+//                 order.payment_method,
+
+//               items_total:
+//                 itemsTotal,
+
+//               delivery_fee:
+//                 deliveryFee,
+
+//               service_fee:
+//                 serviceFee,
+
+//               total_amount:
+//                 totalAmount,
+
+//               total:
+//                 totalAmount,
+
+//               totalAmount:
+//                 totalAmount,
+
+//               itemsTotal:
+//                 itemsTotal,
+
+//               deliveryFee:
+//                 deliveryFee,
+
+//               serviceFee:
+//                 serviceFee,
+
+//               status:
+//                 order.status,
+
+//               created_at:
+//                 order.created_at,
+
+//               updated_at:
+//                 order.updated_at,
+
+//               shop: {
+
+//                 id:
+//                   order.shop_id,
+
+//                 name:
+//                   order.shop_name ||
+//                   'Selected Shop',
+
+//                 shop_name:
+//                   order.shop_name ||
+//                   'Selected Shop',
+
+//                 image:
+//                   order.shop_image ||
+//                   null,
+
+//                 image_url:
+//                   order.shop_image ||
+//                   null,
+
+//                 latitude:
+//                   Number(
+//                     order.shop_latitude
+//                   ),
+
+//                 longitude:
+//                   Number(
+//                     order.shop_longitude
+//                   ),
+
+//               },
+
+//               shopper:
+//                 shopper,
+
+//               assignedShopper:
+//                 shopper,
+
+//               assigned_shopper:
+//                 shopper,
+
+//               items:
+//                 items,
+
+//               shoppingList:
+//                 items,
+
+//               orderItems:
+//                 items,
+
+//             };
+
+//           }
+//         )
+//       );
+
+//     return res.status(200).json({
+
+//       success: true,
+
+//       orders:
+//         formattedOrders,
+
+//     });
+
+//   } catch (error) {
+
+//     console.error(
+//       '❌ GET CUSTOMER ORDERS ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to load customer orders',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   }
+
+// };
+
+
+// // ==================================================
+// // GET CUSTOMER ORDER BY ID
+// // ==================================================
+
+// const getCustomerOrderById =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             o.*,
+
+//             s.shop_name,
+//             s.image_url AS shop_image,
+
+//             s.latitude AS shop_latitude,
+//             s.longitude AS shop_longitude,
+
+//             sh.id AS shopper_id_joined,
+//             sh.full_name AS shopper_name,
+//             sh.mobile AS shopper_mobile,
+//             sh.status AS shopper_status,
+//             sh.latitude AS shopper_latitude,
+//             sh.longitude AS shopper_longitude
+
+//           FROM orders o
+
+//           LEFT JOIN shops s
+//             ON s.id = o.shop_id
+
+//           LEFT JOIN shoppers sh
+//             ON sh.id = o.shopper_id
+
+//           WHERE
+//             o.id = $1
+//             AND o.customer_id = $2
+
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       const itemsResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             oi.id,
+//             oi.order_id,
+//             oi.product_id,
+//             oi.item_name,
+//             oi.quantity,
+//             oi.amount,
+//             oi.unit,
+//             oi.price,
+//             oi.custom,
+//             oi.details,
+//             oi.image,
+//             oi.voice_url,
+//             oi.shopper_photo_url,
+//             oi.shopping_status,
+//             oi.found_quantity,
+//             oi.found_weight,
+//             oi.found_weight_unit,
+//             oi.barcode_scanned,
+//             oi.completed_at,
+//             oi.created_at,
+
+//             COALESCE(
+//               (
+//                 SELECT json_agg(
+//                   json_build_object(
+//                     'id', ri.id,
+//                     'order_id', ri.order_id,
+//                     'original_item_id', ri.original_item_id,
+//                     'shopper_id', ri.shopper_id,
+//                     'option_number', ri.option_number,
+
+//                     'photo_url', ri.photo_url,
+//                     'photoUrl', ri.photo_url,
+
+//                     'replacement_photo_url', ri.photo_url,
+//                     'replacementPhotoUrl', ri.photo_url,
+
+//                     'status', ri.status,
+
+//                     'created_at', ri.created_at,
+//                     'updated_at', ri.updated_at
+//                   )
+//                   ORDER BY
+//                     ri.option_number ASC
+//                 )
+//                 FROM replacement_items ri
+//                 WHERE
+//                   ri.order_id = oi.order_id
+//                   AND ri.original_item_id = oi.id
+//               ),
+//               '[]'::json
+//             ) AS replacement_items
+
+//           FROM order_items oi
+
+//           WHERE oi.order_id = $1
+
+//           ORDER BY oi.id ASC
+//           `,
+//           [
+//             orderId,
+//           ]
+//         );
+
+//       const items =
+//         itemsResult.rows.map(
+//           (item) => ({
+
+//             ...item,
+
+//             image:
+//               item.image ||
+//               null,
+
+//             voice_url:
+//               item.voice_url ||
+//               null,
+
+//             voiceUrl:
+//               item.voice_url ||
+//               null,
+
+//             replacement_items:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             replacementItems:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             replacements:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             shopping_status:
+//               item.shopping_status ||
+//               'pending',
+
+//             shoppingStatus:
+//               item.shopping_status ||
+//               'pending',
+
+//             found_quantity:
+//               item.found_quantity !== null
+//                 ? Number(
+//                     item.found_quantity
+//                   )
+//                 : null,
+
+//             foundQuantity:
+//               item.found_quantity !== null
+//                 ? Number(
+//                     item.found_quantity
+//                   )
+//                 : null,
+
+//             found_weight:
+//               item.found_weight !== null
+//                 ? Number(
+//                     item.found_weight
+//                   )
+//                 : null,
+
+//             foundWeight:
+//               item.found_weight !== null
+//                 ? Number(
+//                     item.found_weight
+//                   )
+//                 : null,
+
+//             found_weight_unit:
+//               item.found_weight_unit ||
+//               null,
+
+//             foundWeightUnit:
+//               item.found_weight_unit ||
+//               null,
+
+//             barcode_scanned:
+//               item.barcode_scanned === true,
+
+//             barcodeScanned:
+//               item.barcode_scanned === true,
+
+//             shopper_photo_url:
+//               item.shopper_photo_url ||
+//               null,
+
+//             shopperPhotoUrl:
+//               item.shopper_photo_url ||
+//               null,
+
+//             completed_at:
+//               item.completed_at ||
+//               null,
+
+//             completedAt:
+//               item.completed_at ||
+//               null,
+
+//           })
+//         );
+
+//       const totalAmount =
+//         Number(
+//           order.total_amount
+//         ) || 0;
+
+//       const itemsTotal =
+//         Number(
+//           order.items_total
+//         ) || 0;
+
+//       const deliveryFee =
+//         Number(
+//           order.delivery_fee
+//         ) || 0;
+
+//       const serviceFee =
+//         Number(
+//           order.service_fee
+//         ) || 0;
+
+//       const shopper =
+//         order.shopper_id
+//           ? {
+
+//               id:
+//                 Number(
+//                   order.shopper_id
+//                 ),
+
+//               name:
+//                 order.shopper_name ||
+//                 'Shopper',
+
+//               full_name:
+//                 order.shopper_name ||
+//                 'Shopper',
+
+//               mobile:
+//                 order.shopper_mobile ||
+//                 null,
+
+//               status:
+//                 order.shopper_status ||
+//                 null,
+
+//               latitude:
+//                 Number(
+//                   order.shopper_latitude
+//                 ),
+
+//               longitude:
+//                 Number(
+//                   order.shopper_longitude
+//                 ),
+
+//             }
+//           : null;
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         order: {
+
+//           ...order,
+
+//           delivery_latitude:
+//             Number(
+//               order.delivery_latitude
+//             ),
+
+//           delivery_longitude:
+//             Number(
+//               order.delivery_longitude
+//             ),
+
+//           items_total:
+//             itemsTotal,
+
+//           delivery_fee:
+//             deliveryFee,
+
+//           service_fee:
+//             serviceFee,
+
+//           total_amount:
+//             totalAmount,
+
+//           total:
+//             totalAmount,
+
+//           totalAmount:
+//             totalAmount,
+
+//           itemsTotal:
+//             itemsTotal,
+
+//           deliveryFee:
+//             deliveryFee,
+
+//           serviceFee:
+//             serviceFee,
+
+//           shop: {
+
+//             id:
+//               order.shop_id,
+
+//             name:
+//               order.shop_name ||
+//               'Selected Shop',
+
+//             shop_name:
+//               order.shop_name ||
+//               'Selected Shop',
+
+//             image:
+//               order.shop_image ||
+//               null,
+
+//             image_url:
+//               order.shop_image ||
+//               null,
+
+//             latitude:
+//               Number(
+//                 order.shop_latitude
+//               ),
+
+//             longitude:
+//               Number(
+//                 order.shop_longitude
+//               ),
+
+//           },
+
+//           shopper:
+//             shopper,
+
+//           assignedShopper:
+//             shopper,
+
+//           assigned_shopper:
+//             shopper,
+
+//           items:
+//             items,
+
+//           shoppingList:
+//             items,
+
+//           orderItems:
+//             items,
+
+//         },
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ GET CUSTOMER ORDER ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to load order',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // GET NEARBY ONLINE SHOPPERS FOR ORDER
+// // ==================================================
+
+// const getNearbyShoppersForOrder =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+
+//             o.id,
+//             o.customer_id,
+//             o.shop_id,
+//             o.status,
+//             o.shopper_id,
+
+//             s.shop_name,
+
+//             s.latitude AS shop_latitude,
+//             s.longitude AS shop_longitude
+
+//           FROM orders o
+
+//           LEFT JOIN shops s
+//             ON s.id = o.shop_id
+
+//           WHERE
+//             o.id = $1
+//             AND o.customer_id = $2
+
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       let acceptedShopper =
+//         null;
+
+//       if (
+//         order.shopper_id
+//       ) {
+
+//         const acceptedShopperResult =
+//           await pool.query(
+//             `
+//             SELECT
+//               id,
+//               full_name,
+//               mobile,
+//               status,
+//               latitude,
+//               longitude
+//             FROM shoppers
+//             WHERE id = $1
+//             LIMIT 1
+//             `,
+//             [
+//               order.shopper_id,
+//             ]
+//           );
+
+//         if (
+//           acceptedShopperResult.rows.length > 0
+//         ) {
+
+//           const shopper =
+//             acceptedShopperResult.rows[0];
+
+//           acceptedShopper = {
+
+//             id:
+//               Number(
+//                 shopper.id
+//               ),
+
+//             name:
+//               shopper.full_name ||
+//               'Shopper',
+
+//             full_name:
+//               shopper.full_name ||
+//               'Shopper',
+
+//             mobile:
+//               shopper.mobile ||
+//               null,
+
+//             status:
+//               shopper.status ||
+//               null,
+
+//             latitude:
+//               Number(
+//                 shopper.latitude
+//               ),
+
+//             longitude:
+//               Number(
+//                 shopper.longitude
+//               ),
+
+//           };
+
+//         }
+
+//       }
+
+//       const shopLatitude =
+//         Number(
+//           order.shop_latitude
+//         );
+
+//       const shopLongitude =
+//         Number(
+//           order.shop_longitude
+//         );
+
+//       if (
+//         !Number.isFinite(
+//           shopLatitude
+//         ) ||
+//         !Number.isFinite(
+//           shopLongitude
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Shop location is not available',
+
+//         });
+
+//       }
+
+//       const shoppersResult =
+//         await pool.query(
+//           `
+//           SELECT
+
+//             sh.id,
+//             sh.full_name,
+//             sh.mobile,
+//             sh.status,
+//             sh.latitude,
+//             sh.longitude,
+
+//             (
+//               6371 *
+//               acos(
+//                 LEAST(
+//                   1,
+//                   GREATEST(
+//                     -1,
+//                     cos(
+//                       radians($1)
+//                     ) *
+//                     cos(
+//                       radians(sh.latitude)
+//                     ) *
+//                     cos(
+//                       radians(sh.longitude) -
+//                       radians($2)
+//                     ) +
+//                     sin(
+//                       radians($1)
+//                     ) *
+//                     sin(
+//                       radians(sh.latitude)
+//                     )
+//                   )
+//                 )
+//               )
+//             ) AS distance_km
+
+//           FROM shoppers sh
+
+//           WHERE
+//             sh.status = 'online'
+
+//             AND sh.latitude IS NOT NULL
+
+//             AND sh.longitude IS NOT NULL
+
+//             AND sh.latitude BETWEEN -90 AND 90
+
+//             AND sh.longitude BETWEEN -180 AND 180
+
+//           ORDER BY
+//             distance_km ASC
+//           `,
+//           [
+//             shopLatitude,
+//             shopLongitude,
+//           ]
+//         );
+
+//       const shoppers =
+//         shoppersResult.rows
+
+//           .filter(
+//             (shopper) => {
+
+//               const distance =
+//                 Number(
+//                   shopper.distance_km
+//                 );
+
+//               return (
+//                 Number.isFinite(
+//                   distance
+//                 ) &&
+//                 distance <= 10
+//               );
+
+//             }
+//           )
+
+//           .map(
+//             (shopper) => ({
+
+//               id:
+//                 shopper.id,
+
+//               name:
+//                 shopper.full_name,
+
+//               full_name:
+//                 shopper.full_name,
+
+//               mobile:
+//                 shopper.mobile,
+
+//               status:
+//                 shopper.status,
+
+//               latitude:
+//                 Number(
+//                   shopper.latitude
+//                 ),
+
+//               longitude:
+//                 Number(
+//                   shopper.longitude
+//                 ),
+
+//               distance_km:
+//                 Number(
+//                   shopper.distance_km
+//                 ),
+
+//             })
+//           );
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         orderId:
+//           order.id,
+
+//         orderStatus:
+//           order.status,
+
+//         shop: {
+
+//           id:
+//             order.shop_id,
+
+//           name:
+//             order.shop_name ||
+//             'Selected Shop',
+
+//           latitude:
+//             shopLatitude,
+
+//           longitude:
+//             shopLongitude,
+
+//         },
+
+//         shopper:
+//           acceptedShopper,
+
+//         acceptedShopper:
+//           acceptedShopper,
+
+//         assignedShopper:
+//           acceptedShopper,
+
+//         assigned_shopper:
+//           acceptedShopper,
+
+//         shoppers:
+//           shoppers,
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ GET NEARBY SHOPPERS ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to load nearby shoppers',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // CANCEL CUSTOMER ORDER
+// // ==================================================
+
+// const cancelCustomerOrder =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             id,
+//             status
+//           FROM orders
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       if (
+//         order.status !==
+//         'waiting_for_shopper'
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'This order cannot be cancelled now',
+
+//         });
+
+//       }
+
+//       const updateResult =
+//         await pool.query(
+//           `
+//           UPDATE orders
+
+//           SET
+//             status = 'cancelled',
+//             updated_at = CURRENT_TIMESTAMP
+
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+
+//           RETURNING *
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         message:
+//           'Order cancelled successfully',
+
+//         order:
+//           updateResult.rows[0],
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ CANCEL ORDER ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to cancel order',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // UPDATE REPLACEMENT STATUS
+// // ==================================================
+
+// const updateReplacementStatus =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     const client =
+//       await pool.connect();
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       const replacementId =
+//         Number(
+//           req.params.replacementId
+//         );
+
+//       const {
+//         status,
+//         decision
+//       } = req.body;
+
+//       // ==================================================
+//       // VALIDATION
+//       // ==================================================
+
+//       if (
+//         !Number.isInteger(orderId) ||
+//         !Number.isInteger(replacementId)
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order or replacement ID',
+
+//         });
+
+//       }
+
+//       const finalStatus =
+//         decision === 'accepted'
+//           ? 'accepted'
+//           : decision === 'rejected'
+//             ? 'rejected'
+//             : status === 'accepted'
+//               ? 'accepted'
+//               : status === 'rejected'
+//                 ? 'rejected'
+//                 : null;
+
+//       if (!finalStatus) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Decision must be accepted or rejected',
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // START TRANSACTION
+//       // ==================================================
+
+//       await client.query(
+//         'BEGIN'
+//       );
+
+//       // ==================================================
+//       // CHECK ORDER BELONGS TO CUSTOMER
+//       // ==================================================
+
+//       const orderResult =
+//         await client.query(
+//           `
+//           SELECT
+//             id,
+//             customer_id
+//           FROM orders
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // GET REPLACEMENT
+//       // ==================================================
+
+//       const replacementResult =
+//         await client.query(
+//           `
+//           SELECT
+//             id,
+//             order_id,
+//             original_item_id,
+//             shopper_id,
+//             option_number,
+//             photo_url,
+//             status,
+//             created_at,
+//             updated_at
+//           FROM replacement_items
+//           WHERE
+//             id = $1
+//             AND order_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             replacementId,
+//             orderId,
+//           ]
+//         );
+
+//       if (
+//         replacementResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Replacement item not found',
+
+//         });
+
+//       }
+
+//       const replacement =
+//         replacementResult.rows[0];
+
+//       // ==================================================
+//       // CHECK CURRENT STATUS
+//       // ==================================================
+
+//       if (
+//         replacement.status !==
+//         'waiting_customer'
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'This replacement has already been processed',
+
+//           status:
+//             replacement.status,
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // ACCEPT / REJECT STATUS
+//       // ==================================================
+
+//       const databaseStatus =
+//         finalStatus === 'accepted'
+//           ? 'customer_accepted'
+//           : 'customer_rejected';
+
+//       // ==================================================
+//       // UPDATE REPLACEMENT ITEM
+//       // ==================================================
+
+//       const updateReplacementResult =
+//         await client.query(
+//           `
+//           UPDATE replacement_items
+
+//           SET
+//             status = $1,
+//             updated_at = CURRENT_TIMESTAMP
+
+//           WHERE
+//             id = $2
+//             AND order_id = $3
+
+//           RETURNING
+//             id,
+//             order_id,
+//             original_item_id,
+//             shopper_id,
+//             option_number,
+//             photo_url,
+//             status,
+//             created_at,
+//             updated_at
+//           `,
+//           [
+//             databaseStatus,
+//             replacementId,
+//             orderId,
+//           ]
+//         );
+
+//       if (
+//         updateReplacementResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Replacement item could not be updated',
+
+//         });
+
+//       }
+
+//       const updatedReplacement =
+//         updateReplacementResult.rows[0];
+
+//       // ==================================================
+//       // IMPORTANT
+//       // UPDATE ORIGINAL ORDER ITEM
+//       // ==================================================
+
+//       let updatedOriginalItem =
+//         null;
+
+//       if (
+//         finalStatus === 'accepted'
+//       ) {
+
+//         const originalItemResult =
+//           await client.query(
+//             `
+//             UPDATE order_items
+
+//             SET
+//               image =
+//                 COALESCE(
+//                   $1,
+//                   image
+//                 ),
+
+//               shopping_status =
+//                 'replacement_accepted',
+
+//               updated_at =
+//                 CURRENT_TIMESTAMP
+
+//             WHERE
+//               id = $2
+//               AND order_id = $3
+
+//             RETURNING
+//               id,
+//               order_id,
+//               product_id,
+//               item_name,
+//               quantity,
+//               amount,
+//               unit,
+//               price,
+//               custom,
+//               details,
+//               image,
+//               voice_url,
+//               shopper_photo_url,
+//               shopping_status,
+//               found_quantity,
+//               found_weight,
+//               found_weight_unit,
+//               barcode_scanned,
+//               completed_at,
+//               created_at,
+//               updated_at
+//             `,
+//             [
+//               updatedReplacement.photo_url ||
+//               null,
+
+//               updatedReplacement.original_item_id,
+
+//               orderId,
+//             ]
+//           );
+
+//         if (
+//           originalItemResult.rows.length === 0
+//         ) {
+
+//           await client.query(
+//             'ROLLBACK'
+//           );
+
+//           return res.status(404).json({
+
+//             success: false,
+
+//             message:
+//               'Original order item not found',
+
+//           });
+
+//         }
+
+//         updatedOriginalItem =
+//           originalItemResult.rows[0];
+
+//       }
+
+//       // ==================================================
+//       // COMMIT
+//       // ==================================================
+
+//       await client.query(
+//         'COMMIT'
+//       );
+
+//       // ==================================================
+//       // DEBUG
+//       // ==================================================
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       console.log(
+//         '🔄 REPLACEMENT STATUS UPDATED'
+//       );
+
+//       console.log(
+//         'CUSTOMER ID:',
+//         customerId
+//       );
+
+//       console.log(
+//         'ORDER ID:',
+//         orderId
+//       );
+
+//       console.log(
+//         'REPLACEMENT ID:',
+//         replacementId
+//       );
+
+//       console.log(
+//         'ORIGINAL ITEM ID:',
+//         replacement.original_item_id
+//       );
+
+//       console.log(
+//         'OLD REPLACEMENT STATUS:',
+//         replacement.status
+//       );
+
+//       console.log(
+//         'NEW REPLACEMENT STATUS:',
+//         updatedReplacement.status
+//       );
+
+//       console.log(
+//         'DECISION:',
+//         finalStatus
+//       );
+
+//       console.log(
+//         'ORIGINAL ORDER ITEM UPDATED:',
+//         updatedOriginalItem
+//           ? true
+//           : false
+//       );
+
+//       if (
+//         updatedOriginalItem
+//       ) {
+
+//         console.log(
+//           'ORIGINAL ITEM NEW IMAGE:',
+//           updatedOriginalItem.image
+//         );
+
+//         console.log(
+//           'ORIGINAL ITEM NEW SHOPPING STATUS:',
+//           updatedOriginalItem.shopping_status
+//         );
+
+//       }
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       // ==================================================
+//       // RESPONSE
+//       // ==================================================
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         message:
+//           finalStatus === 'accepted'
+//             ? 'Replacement accepted and order item updated successfully'
+//             : 'Replacement rejected successfully',
+
+//         replacement: {
+
+//           id:
+//             updatedReplacement.id,
+
+//           orderId:
+//             updatedReplacement.order_id,
+
+//           originalItemId:
+//             updatedReplacement.original_item_id,
+
+//           shopperId:
+//             updatedReplacement.shopper_id,
+
+//           optionNumber:
+//             updatedReplacement.option_number,
+
+//           photoUrl:
+//             updatedReplacement.photo_url,
+
+//           photo_url:
+//             updatedReplacement.photo_url,
+
+//           replacementPhotoUrl:
+//             updatedReplacement.photo_url,
+
+//           replacement_photo_url:
+//             updatedReplacement.photo_url,
+
+//           status:
+//             updatedReplacement.status,
+
+//           createdAt:
+//             updatedReplacement.created_at,
+
+//           updatedAt:
+//             updatedReplacement.updated_at,
+
+//         },
+
+//         originalItem:
+//           updatedOriginalItem,
+
+//       });
+
+//     } catch (error) {
+
+//       try {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//       } catch (
+//         rollbackError
+//       ) {
+
+//         console.error(
+//           '❌ Rollback error:',
+//           rollbackError.message
+//         );
+
+//       }
+
+//       console.error(
+//         '❌ UPDATE REPLACEMENT STATUS ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to update replacement status',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     } finally {
+
+//       client.release();
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // EXPORT
+// // ==================================================
+
+// module.exports = {
+
+//   createOrder,
+
+//   getCustomerOrders,
+
+//   getCustomerOrderById,
+
+//   getNearbyShoppersForOrder,
+
+//   cancelCustomerOrder,
+
+//   updateReplacementStatus,
+
+//   uploadCustomItemMedia,
+
+// };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// const pool = require('../config/db');
+
+// // ==================================================
+// // UPLOAD CUSTOM ITEM MEDIA
+// // ==================================================
+
+// const uploadCustomItemMedia = async (
+//   req,
+//   res
+// ) => {
+//   try {
+
+//     if (
+//       !req.files ||
+//       req.files.length === 0
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'No files uploaded',
+
+//       });
+
+//     }
+
+//     const baseUrl =
+//       `${req.protocol}://${req.get('host')}`;
+
+//     const files =
+//       req.files.map(
+//         (file) => {
+
+//           const url =
+//             `${baseUrl}/uploads/items/${file.filename}`;
+
+//           return {
+
+//             fieldName:
+//               file.fieldname,
+
+//             originalName:
+//               file.originalname,
+
+//             fileName:
+//               file.filename,
+
+//             mimeType:
+//               file.mimetype,
+
+//             size:
+//               file.size,
+
+//             url:
+//               url,
+
+//           };
+
+//         }
+//       );
+
+//     const imageExtensions = [
+//       '.jpg',
+//       '.jpeg',
+//       '.png',
+//       '.webp',
+//     ];
+
+//     const audioExtensions = [
+//       '.mp3',
+//       '.m4a',
+//       '.wav',
+//       '.aac',
+//       '.ogg',
+//       '.webm',
+//     ];
+
+//     const imageMimeTypes = [
+//       'image/jpeg',
+//       'image/jpg',
+//       'image/png',
+//       'image/webp',
+//     ];
+
+//     const audioMimeTypes = [
+//       'audio/mpeg',
+//       'audio/mp3',
+//       'audio/mp4',
+//       'audio/m4a',
+//       'audio/x-m4a',
+//       'audio/wav',
+//       'audio/x-wav',
+//       'audio/aac',
+//       'audio/ogg',
+//       'audio/webm',
+//     ];
+
+//     const imageFile =
+//       files.find(
+//         (file) => {
+
+//           const mime =
+//             (
+//               file.mimeType ||
+//               ''
+//             ).toLowerCase();
+
+//           const ext =
+//             require('path')
+//               .extname(
+//                 file.originalName ||
+//                 file.fileName ||
+//                 ''
+//               )
+//               .toLowerCase();
+
+//           return (
+//             imageMimeTypes.includes(
+//               mime
+//             ) ||
+//             imageExtensions.includes(
+//               ext
+//             )
+//           );
+
+//         }
+//       );
+
+//     const audioFile =
+//       files.find(
+//         (file) => {
+
+//           const mime =
+//             (
+//               file.mimeType ||
+//               ''
+//             ).toLowerCase();
+
+//           const ext =
+//             require('path')
+//               .extname(
+//                 file.originalName ||
+//                 file.fileName ||
+//                 ''
+//               )
+//               .toLowerCase();
+
+//           return (
+//             audioMimeTypes.includes(
+//               mime
+//             ) ||
+//             audioExtensions.includes(
+//               ext
+//             )
+//           );
+
+//         }
+//       );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📤 CUSTOM ITEM MEDIA UPLOAD'
+//     );
+
+//     console.log(
+//       'CUSTOMER ID:',
+//       req.customer?.customerId
+//     );
+
+//     console.log(
+//       'FILES:',
+//       files
+//     );
+
+//     console.log(
+//       'IMAGE:',
+//       imageFile?.url ||
+//       null
+//     );
+
+//     console.log(
+//       'VOICE:',
+//       audioFile?.url ||
+//       null
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     return res.status(200).json({
+
+//       success: true,
+
+//       message:
+//         'Files uploaded successfully',
+
+//       imageUrl:
+//         imageFile?.url ||
+//         null,
+
+//       voiceUrl:
+//         audioFile?.url ||
+//         null,
+
+//       files,
+
+//     });
+
+//   } catch (error) {
+
+//     console.error(
+//       '❌ CUSTOM ITEM MEDIA UPLOAD ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to upload custom item media',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   }
+// };
+
+
+// // ==================================================
+// // CREATE ORDER
+// // ==================================================
+
+// const createOrder = async (
+//   req,
+//   res
+// ) => {
+
+//   const client =
+//     await pool.connect();
+
+//   try {
+
+//     const customerId =
+//       req.customer.customerId;
+
+//     const {
+//       shopId,
+//       deliveryAddress,
+//       deliveryLatitude,
+//       deliveryLongitude,
+//       deliveryOption = 'fast',
+//       paymentMethod = 'cash',
+//       items = [],
+//       deliveryFee = 0,
+//       serviceFee = 0,
+//       itemsTotal = 0,
+//       totalAmount = 0,
+//     } = req.body;
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📥 CREATE ORDER REQUEST'
+//     );
+
+//     console.log(
+//       'CUSTOMER ID:',
+//       customerId
+//     );
+
+//     console.log(
+//       'SHOP ID:',
+//       shopId
+//     );
+
+//     console.log(
+//       'ITEM COUNT:',
+//       Array.isArray(items)
+//         ? items.length
+//         : 0
+//     );
+
+//     console.log(
+//       'RAW ITEMS:',
+//       JSON.stringify(
+//         items,
+//         null,
+//         2
+//       )
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     if (!shopId) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Shop ID is required',
+
+//       });
+
+//     }
+
+//     if (!deliveryAddress) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Delivery address is required',
+
+//       });
+
+//     }
+
+//     if (
+//       deliveryLatitude === undefined ||
+//       deliveryLongitude === undefined
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Delivery latitude and longitude are required',
+
+//       });
+
+//     }
+
+//     const latitude =
+//       Number(
+//         deliveryLatitude
+//       );
+
+//     const longitude =
+//       Number(
+//         deliveryLongitude
+//       );
+
+//     if (
+//       !Number.isFinite(latitude) ||
+//       !Number.isFinite(longitude)
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Valid latitude and longitude are required',
+
+//       });
+
+//     }
+
+//     if (
+//       latitude < -90 ||
+//       latitude > 90 ||
+//       longitude < -180 ||
+//       longitude > 180
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Latitude or longitude is out of range',
+
+//       });
+
+//     }
+
+//     if (
+//       !Array.isArray(items) ||
+//       items.length === 0
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'At least one order item is required',
+
+//       });
+
+//     }
+
+//     const shopResult =
+//       await client.query(
+//         `
+//         SELECT
+//           id,
+//           shop_name,
+//           image_url,
+//           status,
+//           latitude,
+//           longitude
+//         FROM shops
+//         WHERE id = $1
+//         `,
+//         [
+//           shopId,
+//         ]
+//       );
+
+//     if (
+//       shopResult.rows.length === 0
+//     ) {
+
+//       return res.status(404).json({
+
+//         success: false,
+
+//         message:
+//           'Shop not found',
+
+//       });
+
+//     }
+
+//     const shop =
+//       shopResult.rows[0];
+
+//     if (
+//       shop.status !==
+//       'approved'
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'This shop is not available',
+
+//       });
+
+//     }
+
+//     const safeItemsTotal =
+//       Number(itemsTotal) || 0;
+
+//     const safeDeliveryFee =
+//       Number(deliveryFee) || 0;
+
+//     const safeServiceFee =
+//       Number(serviceFee) || 0;
+
+//     const safeTotalAmount =
+//       Number(totalAmount) ||
+//       (
+//         safeItemsTotal +
+//         safeDeliveryFee +
+//         safeServiceFee
+//       );
+
+//     await client.query(
+//       'BEGIN'
+//     );
+
+//     const orderResult =
+//       await client.query(
+//         `
+//         INSERT INTO orders (
+//           customer_id,
+//           shop_id,
+//           delivery_address,
+//           delivery_latitude,
+//           delivery_longitude,
+//           delivery_option,
+//           payment_method,
+//           items_total,
+//           delivery_fee,
+//           service_fee,
+//           total_amount,
+//           status
+//         )
+//         VALUES (
+//           $1,
+//           $2,
+//           $3,
+//           $4,
+//           $5,
+//           $6,
+//           $7,
+//           $8,
+//           $9,
+//           $10,
+//           $11,
+//           $12
+//         )
+//         RETURNING *
+//         `,
+//         [
+//           customerId,
+//           shopId,
+//           deliveryAddress,
+//           latitude,
+//           longitude,
+//           deliveryOption,
+//           paymentMethod,
+//           safeItemsTotal,
+//           safeDeliveryFee,
+//           safeServiceFee,
+//           safeTotalAmount,
+//           'waiting_for_shopper',
+//         ]
+//       );
+
+//     const order =
+//       orderResult.rows[0];
+
+//     for (
+//       const item of items
+//     ) {
+
+//       const productId =
+//         item.productId ||
+//         item.product_id ||
+//         null;
+
+//       const itemName =
+//         item.itemName ||
+//         item.item_name ||
+//         item.name ||
+//         item.productName ||
+//         'Item';
+
+//       const quantity =
+//         Number(
+//           item.quantity
+//         ) || 1;
+
+//       const amount =
+//         Number(
+//           item.amount
+//         ) || 1;
+
+//       const unit =
+//         item.unit ||
+//         item.selectedUnit ||
+//         null;
+
+//       const price =
+//         Number(
+//           item.price
+//         ) || 0;
+
+//       const custom =
+//         item.custom === true;
+
+//       const details =
+//         item.details ||
+//         null;
+
+//       const image =
+//         item.image ||
+//         item.imageUrl ||
+//         item.image_url ||
+//         item.photo ||
+//         item.photoUrl ||
+//         item.photo_url ||
+//         null;
+
+//       const voiceUrl =
+//         item.voice_url ||
+//         item.voiceUrl ||
+//         item.voice ||
+//         null;
+
+//       await client.query(
+//         `
+//         INSERT INTO order_items (
+//           order_id,
+//           product_id,
+//           item_name,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voice_url
+//         )
+//         VALUES (
+//           $1,
+//           $2,
+//           $3,
+//           $4,
+//           $5,
+//           $6,
+//           $7,
+//           $8,
+//           $9,
+//           $10,
+//           $11
+//         )
+//         `,
+//         [
+//           order.id,
+//           productId,
+//           itemName,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voiceUrl,
+//         ]
+//       );
+
+//     }
+
+//     await client.query(
+//       'COMMIT'
+//     );
+
+//     const createdItemsResult =
+//       await pool.query(
+//         `
+//         SELECT
+//           id,
+//           order_id,
+//           product_id,
+//           item_name,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voice_url,
+
+//           shopper_photo_url,
+//           shopping_status,
+//           found_quantity,
+//           found_weight,
+//           found_weight_unit,
+//           barcode_scanned,
+//           completed_at,
+
+//           created_at
+//         FROM order_items
+//         WHERE order_id = $1
+//         ORDER BY id ASC
+//         `,
+//         [
+//           order.id,
+//         ]
+//       );
+
+//     const createdItems =
+//       createdItemsResult.rows.map(
+//         (item) => ({
+
+//           ...item,
+
+//           voice_url:
+//             item.voice_url ||
+//             null,
+
+//           voiceUrl:
+//             item.voice_url ||
+//             null,
+
+//           shoppingStatus:
+//             item.shopping_status ||
+//             'pending',
+
+//           foundQuantity:
+//             item.found_quantity !== null
+//               ? Number(
+//                   item.found_quantity
+//                 )
+//               : null,
+
+//           foundWeight:
+//             item.found_weight !== null
+//               ? Number(
+//                   item.found_weight
+//                 )
+//               : null,
+
+//           foundWeightUnit:
+//             item.found_weight_unit ||
+//             null,
+
+//           barcodeScanned:
+//             item.barcode_scanned === true,
+
+//           shopperPhotoUrl:
+//             item.shopper_photo_url ||
+//             null,
+
+//           completedAt:
+//             item.completed_at ||
+//             null,
+
+//         })
+//       );
+
+//     return res.status(201).json({
+
+//       success: true,
+
+//       message:
+//         'Order created successfully',
+
+//       order: {
+
+//         ...order,
+
+//         total:
+//           Number(
+//             order.total_amount
+//           ),
+
+//         totalAmount:
+//           Number(
+//             order.total_amount
+//           ),
+
+//         itemsTotal:
+//           Number(
+//             order.items_total
+//           ),
+
+//         deliveryFee:
+//           Number(
+//             order.delivery_fee
+//           ),
+
+//         serviceFee:
+//           Number(
+//             order.service_fee
+//           ),
+
+//         shop: {
+
+//           id:
+//             shop.id,
+
+//           name:
+//             shop.shop_name,
+
+//           image:
+//             shop.image_url,
+
+//           latitude:
+//             Number(
+//               shop.latitude
+//             ),
+
+//           longitude:
+//             Number(
+//               shop.longitude
+//             ),
+
+//         },
+
+//         items:
+//           createdItems,
+
+//       },
+
+//     });
+
+//   } catch (error) {
+
+//     try {
+
+//       await client.query(
+//         'ROLLBACK'
+//       );
+
+//     } catch (
+//       rollbackError
+//     ) {
+
+//       console.error(
+//         '❌ Rollback error:',
+//         rollbackError.message
+//       );
+
+//     }
+
+//     console.error(
+//       '❌ CREATE ORDER ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to create order',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   } finally {
+
+//     client.release();
+
+//   }
+
+// };
+
+
+// // ==================================================
+// // GET CUSTOMER ORDERS
+// // ==================================================
+
+// const getCustomerOrders = async (
+//   req,
+//   res
+// ) => {
+
+//   try {
+
+//     const customerId =
+//       req.customer.customerId;
+
+//     const ordersResult =
+//       await pool.query(
+//         `
+//         SELECT
+//           o.id,
+//           o.customer_id,
+//           o.shop_id,
+//           o.shopper_id,
+
+//           o.delivery_address,
+//           o.delivery_latitude,
+//           o.delivery_longitude,
+
+//           o.delivery_option,
+//           o.payment_method,
+
+//           o.items_total,
+//           o.delivery_fee,
+//           o.service_fee,
+//           o.total_amount,
+
+//           o.status,
+
+//           o.created_at,
+//           o.updated_at,
+
+//           s.shop_name,
+//           s.image_url AS shop_image,
+
+//           s.latitude AS shop_latitude,
+//           s.longitude AS shop_longitude,
+
+//           sh.id AS shopper_id_joined,
+//           sh.full_name AS shopper_name,
+//           sh.mobile AS shopper_mobile,
+//           sh.status AS shopper_status,
+//           sh.latitude AS shopper_latitude,
+//           sh.longitude AS shopper_longitude
+
+//         FROM orders o
+
+//         LEFT JOIN shops s
+//           ON s.id = o.shop_id
+
+//         LEFT JOIN shoppers sh
+//           ON sh.id = o.shopper_id
+
+//         WHERE o.customer_id = $1
+
+//         ORDER BY
+//           o.created_at DESC
+//         `,
+//         [
+//           customerId,
+//         ]
+//       );
+
+//     const formattedOrders =
+//       await Promise.all(
+//         ordersResult.rows.map(
+//           async (order) => {
+
+//             const itemsResult =
+//               await pool.query(
+//                 `
+//                 SELECT
+//                   oi.id,
+//                   oi.order_id,
+//                   oi.product_id,
+//                   oi.item_name,
+//                   oi.quantity,
+//                   oi.amount,
+//                   oi.unit,
+//                   oi.price,
+//                   oi.custom,
+//                   oi.details,
+//                   oi.image,
+//                   oi.voice_url,
+//                   oi.shopper_photo_url,
+//                   oi.shopping_status,
+//                   oi.found_quantity,
+//                   oi.found_weight,
+//                   oi.found_weight_unit,
+//                   oi.barcode_scanned,
+//                   oi.completed_at,
+//                   oi.created_at,
+
+//                   COALESCE(
+//                     (
+//                       SELECT json_agg(
+//                         json_build_object(
+//                           'id', ri.id,
+//                           'order_id', ri.order_id,
+//                           'original_item_id', ri.original_item_id,
+//                           'shopper_id', ri.shopper_id,
+//                           'option_number', ri.option_number,
+
+//                           'photo_url', ri.photo_url,
+//                           'photoUrl', ri.photo_url,
+
+//                           'replacement_photo_url', ri.photo_url,
+//                           'replacementPhotoUrl', ri.photo_url,
+
+//                           'status', ri.status,
+
+//                           'created_at', ri.created_at,
+//                           'updated_at', ri.updated_at
+//                         )
+//                         ORDER BY
+//                           ri.option_number ASC
+//                       )
+//                       FROM replacement_items ri
+//                       WHERE
+//                         ri.order_id = oi.order_id
+//                         AND ri.original_item_id = oi.id
+//                     ),
+//                     '[]'::json
+//                   ) AS replacement_items
+
+//                 FROM order_items oi
+
+//                 WHERE oi.order_id = $1
+
+//                 ORDER BY
+//                   oi.id ASC
+//                 `,
+//                 [
+//                   order.id,
+//                 ]
+//               );
+
+//             const items =
+//               itemsResult.rows.map(
+//                 (item) => ({
+
+//                   ...item,
+
+//                   image:
+//                     item.image ||
+//                     null,
+
+//                   voice_url:
+//                     item.voice_url ||
+//                     null,
+
+//                   voiceUrl:
+//                     item.voice_url ||
+//                     null,
+
+//                   replacement_items:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   replacementItems:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   replacements:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   shopping_status:
+//                     item.shopping_status ||
+//                     'pending',
+
+//                   shoppingStatus:
+//                     item.shopping_status ||
+//                     'pending',
+
+//                   found_quantity:
+//                     item.found_quantity !== null
+//                       ? Number(
+//                           item.found_quantity
+//                         )
+//                       : null,
+
+//                   foundQuantity:
+//                     item.found_quantity !== null
+//                       ? Number(
+//                           item.found_quantity
+//                         )
+//                       : null,
+
+//                   found_weight:
+//                     item.found_weight !== null
+//                       ? Number(
+//                           item.found_weight
+//                         )
+//                       : null,
+
+//                   foundWeight:
+//                     item.found_weight !== null
+//                       ? Number(
+//                           item.found_weight
+//                         )
+//                       : null,
+
+//                   found_weight_unit:
+//                     item.found_weight_unit ||
+//                     null,
+
+//                   foundWeightUnit:
+//                     item.found_weight_unit ||
+//                     null,
+
+//                   barcode_scanned:
+//                     item.barcode_scanned === true,
+
+//                   barcodeScanned:
+//                     item.barcode_scanned === true,
+
+//                   shopper_photo_url:
+//                     item.shopper_photo_url ||
+//                     null,
+
+//                   shopperPhotoUrl:
+//                     item.shopper_photo_url ||
+//                     null,
+
+//                   completed_at:
+//                     item.completed_at ||
+//                     null,
+
+//                   completedAt:
+//                     item.completed_at ||
+//                     null,
+
+//                 })
+//               );
+
+//             const totalAmount =
+//               Number(
+//                 order.total_amount
+//               ) || 0;
+
+//             const itemsTotal =
+//               Number(
+//                 order.items_total
+//               ) || 0;
+
+//             const deliveryFee =
+//               Number(
+//                 order.delivery_fee
+//               ) || 0;
+
+//             const serviceFee =
+//               Number(
+//                 order.service_fee
+//               ) || 0;
+
+//             const shopper =
+//               order.shopper_id
+//                 ? {
+
+//                     id:
+//                       Number(
+//                         order.shopper_id
+//                       ),
+
+//                     name:
+//                       order.shopper_name ||
+//                       'Shopper',
+
+//                     full_name:
+//                       order.shopper_name ||
+//                       'Shopper',
+
+//                     mobile:
+//                       order.shopper_mobile ||
+//                       null,
+
+//                     status:
+//                       order.shopper_status ||
+//                       null,
+
+//                     latitude:
+//                       Number(
+//                         order.shopper_latitude
+//                       ),
+
+//                     longitude:
+//                       Number(
+//                         order.shopper_longitude
+//                       ),
+
+//                   }
+//                 : null;
+
+//             return {
+
+//               id:
+//                 order.id,
+
+//               customer_id:
+//                 order.customer_id,
+
+//               shop_id:
+//                 order.shop_id,
+
+//               shopper_id:
+//                 order.shopper_id
+//                   ? Number(
+//                       order.shopper_id
+//                     )
+//                   : null,
+
+//               delivery_address:
+//                 order.delivery_address,
+
+//               delivery_latitude:
+//                 Number(
+//                   order.delivery_latitude
+//                 ),
+
+//               delivery_longitude:
+//                 Number(
+//                   order.delivery_longitude
+//                 ),
+
+//               delivery_option:
+//                 order.delivery_option,
+
+//               payment_method:
+//                 order.payment_method,
+
+//               items_total:
+//                 itemsTotal,
+
+//               delivery_fee:
+//                 deliveryFee,
+
+//               service_fee:
+//                 serviceFee,
+
+//               total_amount:
+//                 totalAmount,
+
+//               total:
+//                 totalAmount,
+
+//               totalAmount:
+//                 totalAmount,
+
+//               itemsTotal:
+//                 itemsTotal,
+
+//               deliveryFee:
+//                 deliveryFee,
+
+//               serviceFee:
+//                 serviceFee,
+
+//               status:
+//                 order.status,
+
+//               created_at:
+//                 order.created_at,
+
+//               updated_at:
+//                 order.updated_at,
+
+//               shop: {
+
+//                 id:
+//                   order.shop_id,
+
+//                 name:
+//                   order.shop_name ||
+//                   'Selected Shop',
+
+//                 shop_name:
+//                   order.shop_name ||
+//                   'Selected Shop',
+
+//                 image:
+//                   order.shop_image ||
+//                   null,
+
+//                 image_url:
+//                   order.shop_image ||
+//                   null,
+
+//                 latitude:
+//                   Number(
+//                     order.shop_latitude
+//                   ),
+
+//                 longitude:
+//                   Number(
+//                     order.shop_longitude
+//                   ),
+
+//               },
+
+//               shopper:
+//                 shopper,
+
+//               assignedShopper:
+//                 shopper,
+
+//               assigned_shopper:
+//                 shopper,
+
+//               items:
+//                 items,
+
+//               shoppingList:
+//                 items,
+
+//               orderItems:
+//                 items,
+
+//             };
+
+//           }
+//         )
+//       );
+
+//     return res.status(200).json({
+
+//       success: true,
+
+//       orders:
+//         formattedOrders,
+
+//     });
+
+//   } catch (error) {
+
+//     console.error(
+//       '❌ GET CUSTOMER ORDERS ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to load customer orders',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   }
+
+// };
+
+
+// // ==================================================
+// // GET CUSTOMER ORDER BY ID
+// // ==================================================
+
+// const getCustomerOrderById =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             o.*,
+
+//             s.shop_name,
+//             s.image_url AS shop_image,
+
+//             s.latitude AS shop_latitude,
+//             s.longitude AS shop_longitude,
+
+//             sh.id AS shopper_id_joined,
+//             sh.full_name AS shopper_name,
+//             sh.mobile AS shopper_mobile,
+//             sh.status AS shopper_status,
+//             sh.latitude AS shopper_latitude,
+//             sh.longitude AS shopper_longitude
+
+//           FROM orders o
+
+//           LEFT JOIN shops s
+//             ON s.id = o.shop_id
+
+//           LEFT JOIN shoppers sh
+//             ON sh.id = o.shopper_id
+
+//           WHERE
+//             o.id = $1
+//             AND o.customer_id = $2
+
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       const itemsResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             oi.id,
+//             oi.order_id,
+//             oi.product_id,
+//             oi.item_name,
+//             oi.quantity,
+//             oi.amount,
+//             oi.unit,
+//             oi.price,
+//             oi.custom,
+//             oi.details,
+//             oi.image,
+//             oi.voice_url,
+//             oi.shopper_photo_url,
+//             oi.shopping_status,
+//             oi.found_quantity,
+//             oi.found_weight,
+//             oi.found_weight_unit,
+//             oi.barcode_scanned,
+//             oi.completed_at,
+//             oi.created_at,
+
+//             COALESCE(
+//               (
+//                 SELECT json_agg(
+//                   json_build_object(
+//                     'id', ri.id,
+//                     'order_id', ri.order_id,
+//                     'original_item_id', ri.original_item_id,
+//                     'shopper_id', ri.shopper_id,
+//                     'option_number', ri.option_number,
+
+//                     'photo_url', ri.photo_url,
+//                     'photoUrl', ri.photo_url,
+
+//                     'replacement_photo_url', ri.photo_url,
+//                     'replacementPhotoUrl', ri.photo_url,
+
+//                     'status', ri.status,
+
+//                     'created_at', ri.created_at,
+//                     'updated_at', ri.updated_at
+//                   )
+//                   ORDER BY
+//                     ri.option_number ASC
+//                 )
+//                 FROM replacement_items ri
+//                 WHERE
+//                   ri.order_id = oi.order_id
+//                   AND ri.original_item_id = oi.id
+//               ),
+//               '[]'::json
+//             ) AS replacement_items
+
+//           FROM order_items oi
+
+//           WHERE oi.order_id = $1
+
+//           ORDER BY oi.id ASC
+//           `,
+//           [
+//             orderId,
+//           ]
+//         );
+
+//       const items =
+//         itemsResult.rows.map(
+//           (item) => ({
+
+//             ...item,
+
+//             image:
+//               item.image ||
+//               null,
+
+//             voice_url:
+//               item.voice_url ||
+//               null,
+
+//             voiceUrl:
+//               item.voice_url ||
+//               null,
+
+//             replacement_items:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             replacementItems:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             replacements:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             shopping_status:
+//               item.shopping_status ||
+//               'pending',
+
+//             shoppingStatus:
+//               item.shopping_status ||
+//               'pending',
+
+//             found_quantity:
+//               item.found_quantity !== null
+//                 ? Number(
+//                     item.found_quantity
+//                   )
+//                 : null,
+
+//             foundQuantity:
+//               item.found_quantity !== null
+//                 ? Number(
+//                     item.found_quantity
+//                   )
+//                 : null,
+
+//             found_weight:
+//               item.found_weight !== null
+//                 ? Number(
+//                     item.found_weight
+//                   )
+//                 : null,
+
+//             foundWeight:
+//               item.found_weight !== null
+//                 ? Number(
+//                     item.found_weight
+//                   )
+//                 : null,
+
+//             found_weight_unit:
+//               item.found_weight_unit ||
+//               null,
+
+//             foundWeightUnit:
+//               item.found_weight_unit ||
+//               null,
+
+//             barcode_scanned:
+//               item.barcode_scanned === true,
+
+//             barcodeScanned:
+//               item.barcode_scanned === true,
+
+//             shopper_photo_url:
+//               item.shopper_photo_url ||
+//               null,
+
+//             shopperPhotoUrl:
+//               item.shopper_photo_url ||
+//               null,
+
+//             completed_at:
+//               item.completed_at ||
+//               null,
+
+//             completedAt:
+//               item.completed_at ||
+//               null,
+
+//           })
+//         );
+
+//       const totalAmount =
+//         Number(
+//           order.total_amount
+//         ) || 0;
+
+//       const itemsTotal =
+//         Number(
+//           order.items_total
+//         ) || 0;
+
+//       const deliveryFee =
+//         Number(
+//           order.delivery_fee
+//         ) || 0;
+
+//       const serviceFee =
+//         Number(
+//           order.service_fee
+//         ) || 0;
+
+//       const shopper =
+//         order.shopper_id
+//           ? {
+
+//               id:
+//                 Number(
+//                   order.shopper_id
+//                 ),
+
+//               name:
+//                 order.shopper_name ||
+//                 'Shopper',
+
+//               full_name:
+//                 order.shopper_name ||
+//                 'Shopper',
+
+//               mobile:
+//                 order.shopper_mobile ||
+//                 null,
+
+//               status:
+//                 order.shopper_status ||
+//                 null,
+
+//               latitude:
+//                 Number(
+//                   order.shopper_latitude
+//                 ),
+
+//               longitude:
+//                 Number(
+//                   order.shopper_longitude
+//                 ),
+
+//             }
+//           : null;
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         order: {
+
+//           ...order,
+
+//           delivery_latitude:
+//             Number(
+//               order.delivery_latitude
+//             ),
+
+//           delivery_longitude:
+//             Number(
+//               order.delivery_longitude
+//             ),
+
+//           items_total:
+//             itemsTotal,
+
+//           delivery_fee:
+//             deliveryFee,
+
+//           service_fee:
+//             serviceFee,
+
+//           total_amount:
+//             totalAmount,
+
+//           total:
+//             totalAmount,
+
+//           totalAmount:
+//             totalAmount,
+
+//           itemsTotal:
+//             itemsTotal,
+
+//           deliveryFee:
+//             deliveryFee,
+
+//           serviceFee:
+//             serviceFee,
+
+//           shop: {
+
+//             id:
+//               order.shop_id,
+
+//             name:
+//               order.shop_name ||
+//               'Selected Shop',
+
+//             shop_name:
+//               order.shop_name ||
+//               'Selected Shop',
+
+//             image:
+//               order.shop_image ||
+//               null,
+
+//             image_url:
+//               order.shop_image ||
+//               null,
+
+//             latitude:
+//               Number(
+//                 order.shop_latitude
+//               ),
+
+//             longitude:
+//               Number(
+//                 order.shop_longitude
+//               ),
+
+//           },
+
+//           shopper:
+//             shopper,
+
+//           assignedShopper:
+//             shopper,
+
+//           assigned_shopper:
+//             shopper,
+
+//           items:
+//             items,
+
+//           shoppingList:
+//             items,
+
+//           orderItems:
+//             items,
+
+//         },
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ GET CUSTOMER ORDER ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to load order',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // GET NEARBY ONLINE SHOPPERS FOR ORDER
+// // ==================================================
+
+// const getNearbyShoppersForOrder =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+
+//             o.id,
+//             o.customer_id,
+//             o.shop_id,
+//             o.status,
+//             o.shopper_id,
+
+//             s.shop_name,
+
+//             s.latitude AS shop_latitude,
+//             s.longitude AS shop_longitude
+
+//           FROM orders o
+
+//           LEFT JOIN shops s
+//             ON s.id = o.shop_id
+
+//           WHERE
+//             o.id = $1
+//             AND o.customer_id = $2
+
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       let acceptedShopper =
+//         null;
+
+//       if (
+//         order.shopper_id
+//       ) {
+
+//         const acceptedShopperResult =
+//           await pool.query(
+//             `
+//             SELECT
+//               id,
+//               full_name,
+//               mobile,
+//               status,
+//               latitude,
+//               longitude
+//             FROM shoppers
+//             WHERE id = $1
+//             LIMIT 1
+//             `,
+//             [
+//               order.shopper_id,
+//             ]
+//           );
+
+//         if (
+//           acceptedShopperResult.rows.length > 0
+//         ) {
+
+//           const shopper =
+//             acceptedShopperResult.rows[0];
+
+//           acceptedShopper = {
+
+//             id:
+//               Number(
+//                 shopper.id
+//               ),
+
+//             name:
+//               shopper.full_name ||
+//               'Shopper',
+
+//             full_name:
+//               shopper.full_name ||
+//               'Shopper',
+
+//             mobile:
+//               shopper.mobile ||
+//               null,
+
+//             status:
+//               shopper.status ||
+//               null,
+
+//             latitude:
+//               Number(
+//                 shopper.latitude
+//               ),
+
+//             longitude:
+//               Number(
+//                 shopper.longitude
+//               ),
+
+//           };
+
+//         }
+
+//       }
+
+//       const shopLatitude =
+//         Number(
+//           order.shop_latitude
+//         );
+
+//       const shopLongitude =
+//         Number(
+//           order.shop_longitude
+//         );
+
+//       if (
+//         !Number.isFinite(
+//           shopLatitude
+//         ) ||
+//         !Number.isFinite(
+//           shopLongitude
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Shop location is not available',
+
+//         });
+
+//       }
+
+//       const shoppersResult =
+//         await pool.query(
+//           `
+//           SELECT
+
+//             sh.id,
+//             sh.full_name,
+//             sh.mobile,
+//             sh.status,
+//             sh.latitude,
+//             sh.longitude,
+
+//             (
+//               6371 *
+//               acos(
+//                 LEAST(
+//                   1,
+//                   GREATEST(
+//                     -1,
+//                     cos(
+//                       radians($1)
+//                     ) *
+//                     cos(
+//                       radians(sh.latitude)
+//                     ) *
+//                     cos(
+//                       radians(sh.longitude) -
+//                       radians($2)
+//                     ) +
+//                     sin(
+//                       radians($1)
+//                     ) *
+//                     sin(
+//                       radians(sh.latitude)
+//                     )
+//                   )
+//                 )
+//               )
+//             ) AS distance_km
+
+//           FROM shoppers sh
+
+//           WHERE
+//             sh.status = 'online'
+
+//             AND sh.latitude IS NOT NULL
+
+//             AND sh.longitude IS NOT NULL
+
+//             AND sh.latitude BETWEEN -90 AND 90
+
+//             AND sh.longitude BETWEEN -180 AND 180
+
+//           ORDER BY
+//             distance_km ASC
+//           `,
+//           [
+//             shopLatitude,
+//             shopLongitude,
+//           ]
+//         );
+
+//       const shoppers =
+//         shoppersResult.rows
+
+//           .filter(
+//             (shopper) => {
+
+//               const distance =
+//                 Number(
+//                   shopper.distance_km
+//                 );
+
+//               return (
+//                 Number.isFinite(
+//                   distance
+//                 ) &&
+//                 distance <= 10
+//               );
+
+//             }
+//           )
+
+//           .map(
+//             (shopper) => ({
+
+//               id:
+//                 shopper.id,
+
+//               name:
+//                 shopper.full_name,
+
+//               full_name:
+//                 shopper.full_name,
+
+//               mobile:
+//                 shopper.mobile,
+
+//               status:
+//                 shopper.status,
+
+//               latitude:
+//                 Number(
+//                   shopper.latitude
+//                 ),
+
+//               longitude:
+//                 Number(
+//                   shopper.longitude
+//                 ),
+
+//               distance_km:
+//                 Number(
+//                   shopper.distance_km
+//                 ),
+
+//             })
+//           );
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         orderId:
+//           order.id,
+
+//         orderStatus:
+//           order.status,
+
+//         shop: {
+
+//           id:
+//             order.shop_id,
+
+//           name:
+//             order.shop_name ||
+//             'Selected Shop',
+
+//           latitude:
+//             shopLatitude,
+
+//           longitude:
+//             shopLongitude,
+
+//         },
+
+//         shopper:
+//           acceptedShopper,
+
+//         acceptedShopper:
+//           acceptedShopper,
+
+//         assignedShopper:
+//           acceptedShopper,
+
+//         assigned_shopper:
+//           acceptedShopper,
+
+//         shoppers:
+//           shoppers,
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ GET NEARBY SHOPPERS ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to load nearby shoppers',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // CANCEL CUSTOMER ORDER
+// // ==================================================
+
+// const cancelCustomerOrder =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             id,
+//             status
+//           FROM orders
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       if (
+//         order.status !==
+//         'waiting_for_shopper'
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'This order cannot be cancelled now',
+
+//         });
+
+//       }
+
+//       const updateResult =
+//         await pool.query(
+//           `
+//           UPDATE orders
+
+//           SET
+//             status = 'cancelled',
+//             updated_at = CURRENT_TIMESTAMP
+
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+
+//           RETURNING *
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         message:
+//           'Order cancelled successfully',
+
+//         order:
+//           updateResult.rows[0],
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ CANCEL ORDER ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to cancel order',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // UPDATE REPLACEMENT STATUS
+// // ==================================================
+
+// const updateReplacementStatus =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     const client =
+//       await pool.connect();
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       const replacementId =
+//         Number(
+//           req.params.replacementId
+//         );
+
+//       const {
+//         status,
+//         decision
+//       } = req.body;
+
+//       // ==================================================
+//       // VALIDATION
+//       // ==================================================
+
+//       if (
+//         !Number.isInteger(orderId) ||
+//         !Number.isInteger(replacementId)
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order or replacement ID',
+
+//         });
+
+//       }
+
+//       const finalStatus =
+//         decision === 'accepted'
+//           ? 'accepted'
+//           : decision === 'rejected'
+//             ? 'rejected'
+//             : status === 'accepted'
+//               ? 'accepted'
+//               : status === 'rejected'
+//                 ? 'rejected'
+//                 : null;
+
+//       if (!finalStatus) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Decision must be accepted or rejected',
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // START TRANSACTION
+//       // ==================================================
+
+//       await client.query(
+//         'BEGIN'
+//       );
+
+//       // ==================================================
+//       // CHECK ORDER BELONGS TO CUSTOMER
+//       // ==================================================
+
+//       const orderResult =
+//         await client.query(
+//           `
+//           SELECT
+//             id,
+//             customer_id
+//           FROM orders
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // GET REPLACEMENT
+//       // ==================================================
+
+//       const replacementResult =
+//         await client.query(
+//           `
+//           SELECT
+//             id,
+//             order_id,
+//             original_item_id,
+//             shopper_id,
+//             option_number,
+//             photo_url,
+//             status,
+//             created_at,
+//             updated_at
+//           FROM replacement_items
+//           WHERE
+//             id = $1
+//             AND order_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             replacementId,
+//             orderId,
+//           ]
+//         );
+
+//       if (
+//         replacementResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Replacement item not found',
+
+//         });
+
+//       }
+
+//       const replacement =
+//         replacementResult.rows[0];
+
+//       // ==================================================
+//       // CHECK CURRENT STATUS
+//       // ==================================================
+
+//       if (
+//         replacement.status !==
+//         'waiting_customer'
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'This replacement has already been processed',
+
+//           status:
+//             replacement.status,
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // ACCEPT / REJECT STATUS
+//       // ==================================================
+
+//       const databaseStatus =
+//         finalStatus === 'accepted'
+//           ? 'customer_accepted'
+//           : 'customer_rejected';
+
+//       // ==================================================
+//       // UPDATE REPLACEMENT ITEM
+//       // ==================================================
+
+//       const updateReplacementResult =
+//         await client.query(
+//           `
+//           UPDATE replacement_items
+
+//           SET
+//             status = $1,
+//             updated_at = CURRENT_TIMESTAMP
+
+//           WHERE
+//             id = $2
+//             AND order_id = $3
+
+//           RETURNING
+//             id,
+//             order_id,
+//             original_item_id,
+//             shopper_id,
+//             option_number,
+//             photo_url,
+//             status,
+//             created_at,
+//             updated_at
+//           `,
+//           [
+//             databaseStatus,
+//             replacementId,
+//             orderId,
+//           ]
+//         );
+
+//       if (
+//         updateReplacementResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Replacement item could not be updated',
+
+//         });
+
+//       }
+
+//       const updatedReplacement =
+//         updateReplacementResult.rows[0];
+
+//       // ==================================================
+//       // ACCEPTED REPLACEMENT
+//       // ORIGINAL ITEM -> DONE
+//       // ==================================================
+
+//       let updatedOriginalItem =
+//         null;
+
+//       if (
+//         finalStatus === 'accepted'
+//       ) {
+
+//         const originalItemResult =
+//           await client.query(
+//             `
+//             UPDATE order_items
+
+//             SET
+//               image =
+//                 COALESCE(
+//                   $1,
+//                   image
+//                 ),
+
+//               shopping_status =
+//                 'done',
+
+//               completed_at =
+//                 CURRENT_TIMESTAMP
+
+//             WHERE
+//               id = $2
+//               AND order_id = $3
+
+//             RETURNING
+//               id,
+//               order_id,
+//               product_id,
+//               item_name,
+//               quantity,
+//               amount,
+//               unit,
+//               price,
+//               custom,
+//               details,
+//               image,
+//               voice_url,
+//               shopper_photo_url,
+//               shopping_status,
+//               found_quantity,
+//               found_weight,
+//               found_weight_unit,
+//               barcode_scanned,
+//               completed_at,
+//               created_at
+//             `,
+//             [
+//               updatedReplacement.photo_url ||
+//               null,
+
+//               updatedReplacement.original_item_id,
+
+//               orderId,
+//             ]
+//           );
+
+//         if (
+//           originalItemResult.rows.length === 0
+//         ) {
+
+//           await client.query(
+//             'ROLLBACK'
+//           );
+
+//           return res.status(404).json({
+
+//             success: false,
+
+//             message:
+//               'Original order item not found',
+
+//           });
+
+//         }
+
+//         updatedOriginalItem =
+//           originalItemResult.rows[0];
+
+//       }
+
+//       // ==================================================
+//       // COMMIT
+//       // ==================================================
+
+//       await client.query(
+//         'COMMIT'
+//       );
+
+//       // ==================================================
+//       // DEBUG
+//       // ==================================================
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       console.log(
+//         '🔄 REPLACEMENT STATUS UPDATED'
+//       );
+
+//       console.log(
+//         'CUSTOMER ID:',
+//         customerId
+//       );
+
+//       console.log(
+//         'ORDER ID:',
+//         orderId
+//       );
+
+//       console.log(
+//         'REPLACEMENT ID:',
+//         replacementId
+//       );
+
+//       console.log(
+//         'ORIGINAL ITEM ID:',
+//         replacement.original_item_id
+//       );
+
+//       console.log(
+//         'OLD REPLACEMENT STATUS:',
+//         replacement.status
+//       );
+
+//       console.log(
+//         'NEW REPLACEMENT STATUS:',
+//         updatedReplacement.status
+//       );
+
+//       console.log(
+//         'DECISION:',
+//         finalStatus
+//       );
+
+//       console.log(
+//         'ORIGINAL ORDER ITEM UPDATED:',
+//         updatedOriginalItem
+//           ? true
+//           : false
+//       );
+
+//       if (
+//         updatedOriginalItem
+//       ) {
+
+//         console.log(
+//           'ORIGINAL ITEM NEW IMAGE:',
+//           updatedOriginalItem.image
+//         );
+
+//         console.log(
+//           'ORIGINAL ITEM NEW SHOPPING STATUS:',
+//           updatedOriginalItem.shopping_status
+//         );
+
+//         console.log(
+//           'ORIGINAL ITEM COMPLETED AT:',
+//           updatedOriginalItem.completed_at
+//         );
+
+//       }
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       // ==================================================
+//       // RESPONSE
+//       // ==================================================
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         message:
+//           finalStatus === 'accepted'
+//             ? 'Replacement accepted and order item moved to DONE successfully'
+//             : 'Replacement rejected successfully',
+
+//         replacement: {
+
+//           id:
+//             updatedReplacement.id,
+
+//           orderId:
+//             updatedReplacement.order_id,
+
+//           originalItemId:
+//             updatedReplacement.original_item_id,
+
+//           shopperId:
+//             updatedReplacement.shopper_id,
+
+//           optionNumber:
+//             updatedReplacement.option_number,
+
+//           photoUrl:
+//             updatedReplacement.photo_url,
+
+//           photo_url:
+//             updatedReplacement.photo_url,
+
+//           replacementPhotoUrl:
+//             updatedReplacement.photo_url,
+
+//           replacement_photo_url:
+//             updatedReplacement.photo_url,
+
+//           status:
+//             updatedReplacement.status,
+
+//           createdAt:
+//             updatedReplacement.created_at,
+
+//           updatedAt:
+//             updatedReplacement.updated_at,
+
+//         },
+
+//         originalItem:
+//           updatedOriginalItem,
+
+//       });
+
+//     } catch (error) {
+
+//       try {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//       } catch (
+//         rollbackError
+//       ) {
+
+//         console.error(
+//           '❌ Rollback error:',
+//           rollbackError.message
+//         );
+
+//       }
+
+//       console.error(
+//         '❌ UPDATE REPLACEMENT STATUS ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to update replacement status',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     } finally {
+
+//       client.release();
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // EXPORT
+// // ==================================================
+
+// module.exports = {
+
+//   createOrder,
+
+//   getCustomerOrders,
+
+//   getCustomerOrderById,
+
+//   getNearbyShoppersForOrder,
+
+//   cancelCustomerOrder,
+
+//   updateReplacementStatus,
+
+//   uploadCustomItemMedia,
+
+// };
+
+
+
+
+
+
+
+
+
+
+// const pool = require('../config/db');
+
+// // ==================================================
+// // UPLOAD CUSTOM ITEM MEDIA
+// // ==================================================
+
+// const uploadCustomItemMedia = async (
+//   req,
+//   res
+// ) => {
+//   try {
+
+//     if (
+//       !req.files ||
+//       req.files.length === 0
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'No files uploaded',
+
+//       });
+
+//     }
+
+//     const baseUrl =
+//       `${req.protocol}://${req.get('host')}`;
+
+//     const files =
+//       req.files.map(
+//         (file) => {
+
+//           const url =
+//             `${baseUrl}/uploads/items/${file.filename}`;
+
+//           return {
+
+//             fieldName:
+//               file.fieldname,
+
+//             originalName:
+//               file.originalname,
+
+//             fileName:
+//               file.filename,
+
+//             mimeType:
+//               file.mimetype,
+
+//             size:
+//               file.size,
+
+//             url:
+//               url,
+
+//           };
+
+//         }
+//       );
+
+//     const imageExtensions = [
+//       '.jpg',
+//       '.jpeg',
+//       '.png',
+//       '.webp',
+//     ];
+
+//     const audioExtensions = [
+//       '.mp3',
+//       '.m4a',
+//       '.wav',
+//       '.aac',
+//       '.ogg',
+//       '.webm',
+//     ];
+
+//     const imageMimeTypes = [
+//       'image/jpeg',
+//       'image/jpg',
+//       'image/png',
+//       'image/webp',
+//     ];
+
+//     const audioMimeTypes = [
+//       'audio/mpeg',
+//       'audio/mp3',
+//       'audio/mp4',
+//       'audio/m4a',
+//       'audio/x-m4a',
+//       'audio/wav',
+//       'audio/x-wav',
+//       'audio/aac',
+//       'audio/ogg',
+//       'audio/webm',
+//     ];
+
+//     const imageFile =
+//       files.find(
+//         (file) => {
+
+//           const mime =
+//             (
+//               file.mimeType ||
+//               ''
+//             ).toLowerCase();
+
+//           const ext =
+//             require('path')
+//               .extname(
+//                 file.originalName ||
+//                 file.fileName ||
+//                 ''
+//               )
+//               .toLowerCase();
+
+//           return (
+//             imageMimeTypes.includes(
+//               mime
+//             ) ||
+//             imageExtensions.includes(
+//               ext
+//             )
+//           );
+
+//         }
+//       );
+
+//     const audioFile =
+//       files.find(
+//         (file) => {
+
+//           const mime =
+//             (
+//               file.mimeType ||
+//               ''
+//             ).toLowerCase();
+
+//           const ext =
+//             require('path')
+//               .extname(
+//                 file.originalName ||
+//                 file.fileName ||
+//                 ''
+//               )
+//               .toLowerCase();
+
+//           return (
+//             audioMimeTypes.includes(
+//               mime
+//             ) ||
+//             audioExtensions.includes(
+//               ext
+//             )
+//           );
+
+//         }
+//       );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📤 CUSTOM ITEM MEDIA UPLOAD'
+//     );
+
+//     console.log(
+//       'CUSTOMER ID:',
+//       req.customer?.customerId
+//     );
+
+//     console.log(
+//       'FILES:',
+//       files
+//     );
+
+//     console.log(
+//       'IMAGE:',
+//       imageFile?.url ||
+//       null
+//     );
+
+//     console.log(
+//       'VOICE:',
+//       audioFile?.url ||
+//       null
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     return res.status(200).json({
+
+//       success: true,
+
+//       message:
+//         'Files uploaded successfully',
+
+//       imageUrl:
+//         imageFile?.url ||
+//         null,
+
+//       voiceUrl:
+//         audioFile?.url ||
+//         null,
+
+//       files,
+
+//     });
+
+//   } catch (error) {
+
+//     console.error(
+//       '❌ CUSTOM ITEM MEDIA UPLOAD ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to upload custom item media',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   }
+// };
+
+
+// // ==================================================
+// // CREATE ORDER
+// // ==================================================
+
+// const createOrder = async (
+//   req,
+//   res
+// ) => {
+
+//   const client =
+//     await pool.connect();
+
+//   try {
+
+//     const customerId =
+//       req.customer.customerId;
+
+//     const {
+//       shopId,
+//       deliveryAddress,
+//       deliveryLatitude,
+//       deliveryLongitude,
+//       deliveryOption = 'fast',
+//       paymentMethod = 'cash',
+//       items = [],
+//       deliveryFee = 0,
+//       serviceFee = 0,
+//       itemsTotal = 0,
+//       totalAmount = 0,
+//       distanceKm,
+//     } = req.body;
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📥 CREATE ORDER REQUEST'
+//     );
+
+//     console.log(
+//       'CUSTOMER ID:',
+//       customerId
+//     );
+
+//     console.log(
+//       'SHOP ID:',
+//       shopId
+//     );
+
+//     console.log(
+//       'DISTANCE KM:',
+//       distanceKm
+//     );
+
+//     console.log(
+//       'ITEM COUNT:',
+//       Array.isArray(items)
+//         ? items.length
+//         : 0
+//     );
+
+//     console.log(
+//       'RAW ITEMS:',
+//       JSON.stringify(
+//         items,
+//         null,
+//         2
+//       )
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     if (!shopId) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Shop ID is required',
+
+//       });
+
+//     }
+
+//     if (!deliveryAddress) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Delivery address is required',
+
+//       });
+
+//     }
+
+//     if (
+//       deliveryLatitude === undefined ||
+//       deliveryLongitude === undefined
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Delivery latitude and longitude are required',
+
+//       });
+
+//     }
+
+//     const latitude =
+//       Number(
+//         deliveryLatitude
+//       );
+
+//     const longitude =
+//       Number(
+//         deliveryLongitude
+//       );
+
+//     if (
+//       !Number.isFinite(latitude) ||
+//       !Number.isFinite(longitude)
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Valid latitude and longitude are required',
+
+//       });
+
+//     }
+
+//     if (
+//       latitude < -90 ||
+//       latitude > 90 ||
+//       longitude < -180 ||
+//       longitude > 180
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Latitude or longitude is out of range',
+
+//       });
+
+//     }
+
+//     if (
+//       !Array.isArray(items) ||
+//       items.length === 0
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'At least one order item is required',
+
+//       });
+
+//     }
+
+//     const shopResult =
+//       await client.query(
+//         `
+//         SELECT
+//           id,
+//           shop_name,
+//           image_url,
+//           status,
+//           latitude,
+//           longitude
+//         FROM shops
+//         WHERE id = $1
+//         `,
+//         [
+//           shopId,
+//         ]
+//       );
+
+//     if (
+//       shopResult.rows.length === 0
+//     ) {
+
+//       return res.status(404).json({
+
+//         success: false,
+
+//         message:
+//           'Shop not found',
+
+//       });
+
+//     }
+
+//     const shop =
+//       shopResult.rows[0];
+
+//     if (
+//       shop.status !==
+//       'approved'
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'This shop is not available',
+
+//       });
+
+//     }
+
+//     const safeItemsTotal =
+//       Number(itemsTotal) || 0;
+
+//     const safeDeliveryFee =
+//       Number(deliveryFee) || 0;
+
+//     const safeServiceFee =
+//       Number(serviceFee) || 0;
+
+//     const safeTotalAmount =
+//       Number(totalAmount) ||
+//       (
+//         safeItemsTotal +
+//         safeDeliveryFee +
+//         safeServiceFee
+//       );
+
+//     // ==================================================
+//     // DISTANCE KM
+//     // ==================================================
+
+//     const parsedDistanceKm =
+//       distanceKm === null ||
+//       distanceKm === undefined ||
+//       distanceKm === ''
+//         ? null
+//         : Number(distanceKm);
+
+//     const safeDistanceKm =
+//       Number.isFinite(
+//         parsedDistanceKm
+//       )
+//         ? parsedDistanceKm
+//         : null;
+
+//     console.log(
+//       'DISTANCE KM TO SAVE:',
+//       safeDistanceKm
+//     );
+
+//     await client.query(
+//       'BEGIN'
+//     );
+
+//     const orderResult =
+//       await client.query(
+//         `
+//         INSERT INTO orders (
+//           customer_id,
+//           shop_id,
+//           delivery_address,
+//           delivery_latitude,
+//           delivery_longitude,
+//           delivery_option,
+//           payment_method,
+//           items_total,
+//           delivery_fee,
+//           service_fee,
+//           distance_km,
+//           total_amount,
+//           status
+//         )
+//         VALUES (
+//           $1,
+//           $2,
+//           $3,
+//           $4,
+//           $5,
+//           $6,
+//           $7,
+//           $8,
+//           $9,
+//           $10,
+//           $11,
+//           $12,
+//           $13
+//         )
+//         RETURNING *
+//         `,
+//         [
+//           customerId,
+//           shopId,
+//           deliveryAddress,
+//           latitude,
+//           longitude,
+//           deliveryOption,
+//           paymentMethod,
+//           safeItemsTotal,
+//           safeDeliveryFee,
+//           safeServiceFee,
+//           safeDistanceKm,
+//           safeTotalAmount,
+//           'waiting_for_shopper',
+//         ]
+//       );
+
+//     const order =
+//       orderResult.rows[0];
+
+//     for (
+//       const item of items
+//     ) {
+
+//       const productId =
+//         item.productId ||
+//         item.product_id ||
+//         null;
+
+//       const itemName =
+//         item.itemName ||
+//         item.item_name ||
+//         item.name ||
+//         item.productName ||
+//         'Item';
+
+//       const quantity =
+//         Number(
+//           item.quantity
+//         ) || 1;
+
+//       const amount =
+//         Number(
+//           item.amount
+//         ) || 1;
+
+//       const unit =
+//         item.unit ||
+//         item.selectedUnit ||
+//         null;
+
+//       const price =
+//         Number(
+//           item.price
+//         ) || 0;
+
+//       const custom =
+//         item.custom === true;
+
+//       const details =
+//         item.details ||
+//         null;
+
+//       const image =
+//         item.image ||
+//         item.imageUrl ||
+//         item.image_url ||
+//         item.photo ||
+//         item.photoUrl ||
+//         item.photo_url ||
+//         null;
+
+//       const voiceUrl =
+//         item.voice_url ||
+//         item.voiceUrl ||
+//         item.voice ||
+//         null;
+
+//       await client.query(
+//         `
+//         INSERT INTO order_items (
+//           order_id,
+//           product_id,
+//           item_name,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voice_url
+//         )
+//         VALUES (
+//           $1,
+//           $2,
+//           $3,
+//           $4,
+//           $5,
+//           $6,
+//           $7,
+//           $8,
+//           $9,
+//           $10,
+//           $11
+//         )
+//         `,
+//         [
+//           order.id,
+//           productId,
+//           itemName,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voiceUrl,
+//         ]
+//       );
+
+//     }
+
+//     await client.query(
+//       'COMMIT'
+//     );
+
+//     const createdItemsResult =
+//       await pool.query(
+//         `
+//         SELECT
+//           id,
+//           order_id,
+//           product_id,
+//           item_name,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voice_url,
+
+//           shopper_photo_url,
+//           shopping_status,
+//           found_quantity,
+//           found_weight,
+//           found_weight_unit,
+//           barcode_scanned,
+//           completed_at,
+
+//           created_at
+//         FROM order_items
+//         WHERE order_id = $1
+//         ORDER BY id ASC
+//         `,
+//         [
+//           order.id,
+//         ]
+//       );
+
+//     const createdItems =
+//       createdItemsResult.rows.map(
+//         (item) => ({
+
+//           ...item,
+
+//           voice_url:
+//             item.voice_url ||
+//             null,
+
+//           voiceUrl:
+//             item.voice_url ||
+//             null,
+
+//           shoppingStatus:
+//             item.shopping_status ||
+//             'pending',
+
+//           foundQuantity:
+//             item.found_quantity !== null
+//               ? Number(
+//                   item.found_quantity
+//                 )
+//               : null,
+
+//           foundWeight:
+//             item.found_weight !== null
+//               ? Number(
+//                   item.found_weight
+//                 )
+//               : null,
+
+//           foundWeightUnit:
+//             item.found_weight_unit ||
+//             null,
+
+//           barcodeScanned:
+//             item.barcode_scanned === true,
+
+//           shopperPhotoUrl:
+//             item.shopper_photo_url ||
+//             null,
+
+//           completedAt:
+//             item.completed_at ||
+//             null,
+
+//         })
+//       );
+
+//     return res.status(201).json({
+
+//       success: true,
+
+//       message:
+//         'Order created successfully',
+
+//       order: {
+
+//         ...order,
+
+//         total:
+//           Number(
+//             order.total_amount
+//           ),
+
+//         totalAmount:
+//           Number(
+//             order.total_amount
+//           ),
+
+//         itemsTotal:
+//           Number(
+//             order.items_total
+//           ),
+
+//         deliveryFee:
+//           Number(
+//             order.delivery_fee
+//           ),
+
+//         serviceFee:
+//           Number(
+//             order.service_fee
+//           ),
+
+//         distance_km:
+//           order.distance_km !== null
+//             ? Number(
+//                 order.distance_km
+//               )
+//             : null,
+
+//         distanceKm:
+//           order.distance_km !== null
+//             ? Number(
+//                 order.distance_km
+//               )
+//             : null,
+
+//         shop: {
+
+//           id:
+//             shop.id,
+
+//           name:
+//             shop.shop_name,
+
+//           image:
+//             shop.image_url,
+
+//           latitude:
+//             Number(
+//               shop.latitude
+//             ),
+
+//           longitude:
+//             Number(
+//               shop.longitude
+//             ),
+
+//         },
+
+//         items:
+//           createdItems,
+
+//       },
+
+//     });
+
+//   } catch (error) {
+
+//     try {
+
+//       await client.query(
+//         'ROLLBACK'
+//       );
+
+//     } catch (
+//       rollbackError
+//     ) {
+
+//       console.error(
+//         '❌ Rollback error:',
+//         rollbackError.message
+//       );
+
+//     }
+
+//     console.error(
+//       '❌ CREATE ORDER ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to create order',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   } finally {
+
+//     client.release();
+
+//   }
+
+// };
+
+
+// // ==================================================
+// // GET CUSTOMER ORDERS
+// // ==================================================
+
+// const getCustomerOrders = async (
+//   req,
+//   res
+// ) => {
+
+//   try {
+
+//     const customerId =
+//       req.customer.customerId;
+
+//     const ordersResult =
+//       await pool.query(
+//         `
+//         SELECT
+//           o.id,
+//           o.customer_id,
+//           o.shop_id,
+//           o.shopper_id,
+
+//           o.delivery_address,
+//           o.delivery_latitude,
+//           o.delivery_longitude,
+
+//           o.delivery_option,
+//           o.payment_method,
+
+//           o.items_total,
+//           o.delivery_fee,
+//           o.service_fee,
+//           o.distance_km,
+//           o.total_amount,
+
+//           o.status,
+
+//           o.created_at,
+//           o.updated_at,
+
+//           s.shop_name,
+//           s.image_url AS shop_image,
+
+//           s.latitude AS shop_latitude,
+//           s.longitude AS shop_longitude,
+
+//           sh.id AS shopper_id_joined,
+//           sh.full_name AS shopper_name,
+//           sh.mobile AS shopper_mobile,
+//           sh.status AS shopper_status,
+//           sh.latitude AS shopper_latitude,
+//           sh.longitude AS shopper_longitude
+
+//         FROM orders o
+
+//         LEFT JOIN shops s
+//           ON s.id = o.shop_id
+
+//         LEFT JOIN shoppers sh
+//           ON sh.id = o.shopper_id
+
+//         WHERE o.customer_id = $1
+
+//         ORDER BY
+//           o.created_at DESC
+//         `,
+//         [
+//           customerId,
+//         ]
+//       );
+
+//     const formattedOrders =
+//       await Promise.all(
+//         ordersResult.rows.map(
+//           async (order) => {
+
+//             const itemsResult =
+//               await pool.query(
+//                 `
+//                 SELECT
+//                   oi.id,
+//                   oi.order_id,
+//                   oi.product_id,
+//                   oi.item_name,
+//                   oi.quantity,
+//                   oi.amount,
+//                   oi.unit,
+//                   oi.price,
+//                   oi.custom,
+//                   oi.details,
+//                   oi.image,
+//                   oi.voice_url,
+//                   oi.shopper_photo_url,
+//                   oi.shopping_status,
+//                   oi.found_quantity,
+//                   oi.found_weight,
+//                   oi.found_weight_unit,
+//                   oi.barcode_scanned,
+//                   oi.completed_at,
+//                   oi.created_at,
+
+//                   COALESCE(
+//                     (
+//                       SELECT json_agg(
+//                         json_build_object(
+//                           'id', ri.id,
+//                           'order_id', ri.order_id,
+//                           'original_item_id', ri.original_item_id,
+//                           'shopper_id', ri.shopper_id,
+//                           'option_number', ri.option_number,
+
+//                           'photo_url', ri.photo_url,
+//                           'photoUrl', ri.photo_url,
+
+//                           'replacement_photo_url', ri.photo_url,
+//                           'replacementPhotoUrl', ri.photo_url,
+
+//                           'status', ri.status,
+
+//                           'created_at', ri.created_at,
+//                           'updated_at', ri.updated_at
+//                         )
+//                         ORDER BY
+//                           ri.option_number ASC
+//                       )
+//                       FROM replacement_items ri
+//                       WHERE
+//                         ri.order_id = oi.order_id
+//                         AND ri.original_item_id = oi.id
+//                     ),
+//                     '[]'::json
+//                   ) AS replacement_items
+
+//                 FROM order_items oi
+
+//                 WHERE oi.order_id = $1
+
+//                 ORDER BY
+//                   oi.id ASC
+//                 `,
+//                 [
+//                   order.id,
+//                 ]
+//               );
+
+//             const items =
+//               itemsResult.rows.map(
+//                 (item) => ({
+
+//                   ...item,
+
+//                   image:
+//                     item.image ||
+//                     null,
+
+//                   voice_url:
+//                     item.voice_url ||
+//                     null,
+
+//                   voiceUrl:
+//                     item.voice_url ||
+//                     null,
+
+//                   replacement_items:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   replacementItems:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   replacements:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   shopping_status:
+//                     item.shopping_status ||
+//                     'pending',
+
+//                   shoppingStatus:
+//                     item.shopping_status ||
+//                     'pending',
+
+//                   found_quantity:
+//                     item.found_quantity !== null
+//                       ? Number(
+//                           item.found_quantity
+//                         )
+//                       : null,
+
+//                   foundQuantity:
+//                     item.found_quantity !== null
+//                       ? Number(
+//                           item.found_quantity
+//                         )
+//                       : null,
+
+//                   found_weight:
+//                     item.found_weight !== null
+//                       ? Number(
+//                           item.found_weight
+//                         )
+//                       : null,
+
+//                   foundWeight:
+//                     item.found_weight !== null
+//                       ? Number(
+//                           item.found_weight
+//                         )
+//                       : null,
+
+//                   found_weight_unit:
+//                     item.found_weight_unit ||
+//                     null,
+
+//                   foundWeightUnit:
+//                     item.found_weight_unit ||
+//                     null,
+
+//                   barcode_scanned:
+//                     item.barcode_scanned === true,
+
+//                   barcodeScanned:
+//                     item.barcode_scanned === true,
+
+//                   shopper_photo_url:
+//                     item.shopper_photo_url ||
+//                     null,
+
+//                   shopperPhotoUrl:
+//                     item.shopper_photo_url ||
+//                     null,
+
+//                   completed_at:
+//                     item.completed_at ||
+//                     null,
+
+//                   completedAt:
+//                     item.completed_at ||
+//                     null,
+
+//                 })
+//               );
+
+//             const totalAmount =
+//               Number(
+//                 order.total_amount
+//               ) || 0;
+
+//             const itemsTotal =
+//               Number(
+//                 order.items_total
+//               ) || 0;
+
+//             const deliveryFee =
+//               Number(
+//                 order.delivery_fee
+//               ) || 0;
+
+//             const serviceFee =
+//               Number(
+//                 order.service_fee
+//               ) || 0;
+
+//             const distanceKm =
+//               order.distance_km !== null
+//                 ? Number(
+//                     order.distance_km
+//                   )
+//                 : null;
+
+//             const shopper =
+//               order.shopper_id
+//                 ? {
+
+//                     id:
+//                       Number(
+//                         order.shopper_id
+//                       ),
+
+//                     name:
+//                       order.shopper_name ||
+//                       'Shopper',
+
+//                     full_name:
+//                       order.shopper_name ||
+//                       'Shopper',
+
+//                     mobile:
+//                       order.shopper_mobile ||
+//                       null,
+
+//                     status:
+//                       order.shopper_status ||
+//                       null,
+
+//                     latitude:
+//                       Number(
+//                         order.shopper_latitude
+//                       ),
+
+//                     longitude:
+//                       Number(
+//                         order.shopper_longitude
+//                       ),
+
+//                   }
+//                 : null;
+
+//             return {
+
+//               id:
+//                 order.id,
+
+//               customer_id:
+//                 order.customer_id,
+
+//               shop_id:
+//                 order.shop_id,
+
+//               shopper_id:
+//                 order.shopper_id
+//                   ? Number(
+//                       order.shopper_id
+//                     )
+//                   : null,
+
+//               delivery_address:
+//                 order.delivery_address,
+
+//               delivery_latitude:
+//                 Number(
+//                   order.delivery_latitude
+//                 ),
+
+//               delivery_longitude:
+//                 Number(
+//                   order.delivery_longitude
+//                 ),
+
+//               delivery_option:
+//                 order.delivery_option,
+
+//               payment_method:
+//                 order.payment_method,
+
+//               items_total:
+//                 itemsTotal,
+
+//               delivery_fee:
+//                 deliveryFee,
+
+//               service_fee:
+//                 serviceFee,
+
+//               distance_km:
+//                 distanceKm,
+
+//               distanceKm:
+//                 distanceKm,
+
+//               total_amount:
+//                 totalAmount,
+
+//               total:
+//                 totalAmount,
+
+//               totalAmount:
+//                 totalAmount,
+
+//               itemsTotal:
+//                 itemsTotal,
+
+//               deliveryFee:
+//                 deliveryFee,
+
+//               serviceFee:
+//                 serviceFee,
+
+//               status:
+//                 order.status,
+
+//               created_at:
+//                 order.created_at,
+
+//               updated_at:
+//                 order.updated_at,
+
+//               shop: {
+
+//                 id:
+//                   order.shop_id,
+
+//                 name:
+//                   order.shop_name ||
+//                   'Selected Shop',
+
+//                 shop_name:
+//                   order.shop_name ||
+//                   'Selected Shop',
+
+//                 image:
+//                   order.shop_image ||
+//                   null,
+
+//                 image_url:
+//                   order.shop_image ||
+//                   null,
+
+//                 latitude:
+//                   Number(
+//                     order.shop_latitude
+//                   ),
+
+//                 longitude:
+//                   Number(
+//                     order.shop_longitude
+//                   ),
+
+//               },
+
+//               shopper:
+//                 shopper,
+
+//               assignedShopper:
+//                 shopper,
+
+//               assigned_shopper:
+//                 shopper,
+
+//               items:
+//                 items,
+
+//               shoppingList:
+//                 items,
+
+//               orderItems:
+//                 items,
+
+//             };
+
+//           }
+//         )
+//       );
+
+//     return res.status(200).json({
+
+//       success: true,
+
+//       orders:
+//         formattedOrders,
+
+//     });
+
+//   } catch (error) {
+
+//     console.error(
+//       '❌ GET CUSTOMER ORDERS ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to load customer orders',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   }
+
+// };
+
+
+// // ==================================================
+// // GET CUSTOMER ORDER BY ID
+// // ==================================================
+
+// const getCustomerOrderById =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             o.*,
+
+//             s.shop_name,
+//             s.image_url AS shop_image,
+
+//             s.latitude AS shop_latitude,
+//             s.longitude AS shop_longitude,
+
+//             sh.id AS shopper_id_joined,
+//             sh.full_name AS shopper_name,
+//             sh.mobile AS shopper_mobile,
+//             sh.status AS shopper_status,
+//             sh.latitude AS shopper_latitude,
+//             sh.longitude AS shopper_longitude
+
+//           FROM orders o
+
+//           LEFT JOIN shops s
+//             ON s.id = o.shop_id
+
+//           LEFT JOIN shoppers sh
+//             ON sh.id = o.shopper_id
+
+//           WHERE
+//             o.id = $1
+//             AND o.customer_id = $2
+
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       const itemsResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             oi.id,
+//             oi.order_id,
+//             oi.product_id,
+//             oi.item_name,
+//             oi.quantity,
+//             oi.amount,
+//             oi.unit,
+//             oi.price,
+//             oi.custom,
+//             oi.details,
+//             oi.image,
+//             oi.voice_url,
+//             oi.shopper_photo_url,
+//             oi.shopping_status,
+//             oi.found_quantity,
+//             oi.found_weight,
+//             oi.found_weight_unit,
+//             oi.barcode_scanned,
+//             oi.completed_at,
+//             oi.created_at,
+
+//             COALESCE(
+//               (
+//                 SELECT json_agg(
+//                   json_build_object(
+//                     'id', ri.id,
+//                     'order_id', ri.order_id,
+//                     'original_item_id', ri.original_item_id,
+//                     'shopper_id', ri.shopper_id,
+//                     'option_number', ri.option_number,
+
+//                     'photo_url', ri.photo_url,
+//                     'photoUrl', ri.photo_url,
+
+//                     'replacement_photo_url', ri.photo_url,
+//                     'replacementPhotoUrl', ri.photo_url,
+
+//                     'status', ri.status,
+
+//                     'created_at', ri.created_at,
+//                     'updated_at', ri.updated_at
+//                   )
+//                   ORDER BY
+//                     ri.option_number ASC
+//                 )
+//                 FROM replacement_items ri
+//                 WHERE
+//                   ri.order_id = oi.order_id
+//                   AND ri.original_item_id = oi.id
+//               ),
+//               '[]'::json
+//             ) AS replacement_items
+
+//           FROM order_items oi
+
+//           WHERE oi.order_id = $1
+
+//           ORDER BY oi.id ASC
+//           `,
+//           [
+//             orderId,
+//           ]
+//         );
+
+//       const items =
+//         itemsResult.rows.map(
+//           (item) => ({
+
+//             ...item,
+
+//             image:
+//               item.image ||
+//               null,
+
+//             voice_url:
+//               item.voice_url ||
+//               null,
+
+//             voiceUrl:
+//               item.voice_url ||
+//               null,
+
+//             replacement_items:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             replacementItems:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             replacements:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             shopping_status:
+//               item.shopping_status ||
+//               'pending',
+
+//             shoppingStatus:
+//               item.shopping_status ||
+//               'pending',
+
+//             found_quantity:
+//               item.found_quantity !== null
+//                 ? Number(
+//                     item.found_quantity
+//                   )
+//                 : null,
+
+//             foundQuantity:
+//               item.found_quantity !== null
+//                 ? Number(
+//                     item.found_quantity
+//                   )
+//                 : null,
+
+//             found_weight:
+//               item.found_weight !== null
+//                 ? Number(
+//                     item.found_weight
+//                   )
+//                 : null,
+
+//             foundWeight:
+//               item.found_weight !== null
+//                 ? Number(
+//                     item.found_weight
+//                   )
+//                 : null,
+
+//             found_weight_unit:
+//               item.found_weight_unit ||
+//               null,
+
+//             foundWeightUnit:
+//               item.found_weight_unit ||
+//               null,
+
+//             barcode_scanned:
+//               item.barcode_scanned === true,
+
+//             barcodeScanned:
+//               item.barcode_scanned === true,
+
+//             shopper_photo_url:
+//               item.shopper_photo_url ||
+//               null,
+
+//             shopperPhotoUrl:
+//               item.shopper_photo_url ||
+//               null,
+
+//             completed_at:
+//               item.completed_at ||
+//               null,
+
+//             completedAt:
+//               item.completed_at ||
+//               null,
+
+//           })
+//         );
+
+//       const totalAmount =
+//         Number(
+//           order.total_amount
+//         ) || 0;
+
+//       const itemsTotal =
+//         Number(
+//           order.items_total
+//         ) || 0;
+
+//       const deliveryFee =
+//         Number(
+//           order.delivery_fee
+//         ) || 0;
+
+//       const serviceFee =
+//         Number(
+//           order.service_fee
+//         ) || 0;
+
+//       const distanceKm =
+//         order.distance_km !== null
+//           ? Number(
+//               order.distance_km
+//             )
+//           : null;
+
+//       const shopper =
+//         order.shopper_id
+//           ? {
+
+//               id:
+//                 Number(
+//                   order.shopper_id
+//                 ),
+
+//               name:
+//                 order.shopper_name ||
+//                 'Shopper',
+
+//               full_name:
+//                 order.shopper_name ||
+//                 'Shopper',
+
+//               mobile:
+//                 order.shopper_mobile ||
+//                 null,
+
+//               status:
+//                 order.shopper_status ||
+//                 null,
+
+//               latitude:
+//                 Number(
+//                   order.shopper_latitude
+//                 ),
+
+//               longitude:
+//                 Number(
+//                   order.shopper_longitude
+//                 ),
+
+//             }
+//           : null;
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         order: {
+
+//           ...order,
+
+//           delivery_latitude:
+//             Number(
+//               order.delivery_latitude
+//             ),
+
+//           delivery_longitude:
+//             Number(
+//               order.delivery_longitude
+//             ),
+
+//           items_total:
+//             itemsTotal,
+
+//           delivery_fee:
+//             deliveryFee,
+
+//           service_fee:
+//             serviceFee,
+
+//           distance_km:
+//             distanceKm,
+
+//           distanceKm:
+//             distanceKm,
+
+//           total_amount:
+//             totalAmount,
+
+//           total:
+//             totalAmount,
+
+//           totalAmount:
+//             totalAmount,
+
+//           itemsTotal:
+//             itemsTotal,
+
+//           deliveryFee:
+//             deliveryFee,
+
+//           serviceFee:
+//             serviceFee,
+
+//           shop: {
+
+//             id:
+//               order.shop_id,
+
+//             name:
+//               order.shop_name ||
+//               'Selected Shop',
+
+//             shop_name:
+//               order.shop_name ||
+//               'Selected Shop',
+
+//             image:
+//               order.shop_image ||
+//               null,
+
+//             image_url:
+//               order.shop_image ||
+//               null,
+
+//             latitude:
+//               Number(
+//                 order.shop_latitude
+//               ),
+
+//             longitude:
+//               Number(
+//                 order.shop_longitude
+//               ),
+
+//           },
+
+//           shopper:
+//             shopper,
+
+//           assignedShopper:
+//             shopper,
+
+//           assigned_shopper:
+//             shopper,
+
+//           items:
+//             items,
+
+//           shoppingList:
+//             items,
+
+//           orderItems:
+//             items,
+
+//         },
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ GET CUSTOMER ORDER ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to load order',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // GET NEARBY ONLINE SHOPPERS FOR ORDER
+// // ==================================================
+
+// const getNearbyShoppersForOrder =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+
+//             o.id,
+//             o.customer_id,
+//             o.shop_id,
+//             o.status,
+//             o.shopper_id,
+
+//             s.shop_name,
+
+//             s.latitude AS shop_latitude,
+//             s.longitude AS shop_longitude
+
+//           FROM orders o
+
+//           LEFT JOIN shops s
+//             ON s.id = o.shop_id
+
+//           WHERE
+//             o.id = $1
+//             AND o.customer_id = $2
+
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       let acceptedShopper =
+//         null;
+
+//       if (
+//         order.shopper_id
+//       ) {
+
+//         const acceptedShopperResult =
+//           await pool.query(
+//             `
+//             SELECT
+//               id,
+//               full_name,
+//               mobile,
+//               status,
+//               latitude,
+//               longitude
+//             FROM shoppers
+//             WHERE id = $1
+//             LIMIT 1
+//             `,
+//             [
+//               order.shopper_id,
+//             ]
+//           );
+
+//         if (
+//           acceptedShopperResult.rows.length > 0
+//         ) {
+
+//           const shopper =
+//             acceptedShopperResult.rows[0];
+
+//           acceptedShopper = {
+
+//             id:
+//               Number(
+//                 shopper.id
+//               ),
+
+//             name:
+//               shopper.full_name ||
+//               'Shopper',
+
+//             full_name:
+//               shopper.full_name ||
+//               'Shopper',
+
+//             mobile:
+//               shopper.mobile ||
+//               null,
+
+//             status:
+//               shopper.status ||
+//               null,
+
+//             latitude:
+//               Number(
+//                 shopper.latitude
+//               ),
+
+//             longitude:
+//               Number(
+//                 shopper.longitude
+//               ),
+
+//           };
+
+//         }
+
+//       }
+
+//       const shopLatitude =
+//         Number(
+//           order.shop_latitude
+//         );
+
+//       const shopLongitude =
+//         Number(
+//           order.shop_longitude
+//         );
+
+//       if (
+//         !Number.isFinite(
+//           shopLatitude
+//         ) ||
+//         !Number.isFinite(
+//           shopLongitude
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Shop location is not available',
+
+//         });
+
+//       }
+
+//       const shoppersResult =
+//         await pool.query(
+//           `
+//           SELECT
+
+//             sh.id,
+//             sh.full_name,
+//             sh.mobile,
+//             sh.status,
+//             sh.latitude,
+//             sh.longitude,
+
+//             (
+//               6371 *
+//               acos(
+//                 LEAST(
+//                   1,
+//                   GREATEST(
+//                     -1,
+//                     cos(
+//                       radians($1)
+//                     ) *
+//                     cos(
+//                       radians(sh.latitude)
+//                     ) *
+//                     cos(
+//                       radians(sh.longitude) -
+//                       radians($2)
+//                     ) +
+//                     sin(
+//                       radians($1)
+//                     ) *
+//                     sin(
+//                       radians(sh.latitude)
+//                     )
+//                   )
+//                 )
+//               )
+//             ) AS distance_km
+
+//           FROM shoppers sh
+
+//           WHERE
+//             sh.status = 'online'
+
+//             AND sh.latitude IS NOT NULL
+
+//             AND sh.longitude IS NOT NULL
+
+//             AND sh.latitude BETWEEN -90 AND 90
+
+//             AND sh.longitude BETWEEN -180 AND 180
+
+//           ORDER BY
+//             distance_km ASC
+//           `,
+//           [
+//             shopLatitude,
+//             shopLongitude,
+//           ]
+//         );
+
+//       const shoppers =
+//         shoppersResult.rows
+
+//           .filter(
+//             (shopper) => {
+
+//               const distance =
+//                 Number(
+//                   shopper.distance_km
+//                 );
+
+//               return (
+//                 Number.isFinite(
+//                   distance
+//                 ) &&
+//                 distance <= 10
+//               );
+
+//             }
+//           )
+
+//           .map(
+//             (shopper) => ({
+
+//               id:
+//                 shopper.id,
+
+//               name:
+//                 shopper.full_name,
+
+//               full_name:
+//                 shopper.full_name,
+
+//               mobile:
+//                 shopper.mobile,
+
+//               status:
+//                 shopper.status,
+
+//               latitude:
+//                 Number(
+//                   shopper.latitude
+//                 ),
+
+//               longitude:
+//                 Number(
+//                   shopper.longitude
+//                 ),
+
+//               distance_km:
+//                 Number(
+//                   shopper.distance_km
+//                 ),
+
+//             })
+//           );
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         orderId:
+//           order.id,
+
+//         orderStatus:
+//           order.status,
+
+//         shop: {
+
+//           id:
+//             order.shop_id,
+
+//           name:
+//             order.shop_name ||
+//             'Selected Shop',
+
+//           latitude:
+//             shopLatitude,
+
+//           longitude:
+//             shopLongitude,
+
+//         },
+
+//         shopper:
+//           acceptedShopper,
+
+//         acceptedShopper:
+//           acceptedShopper,
+
+//         assignedShopper:
+//           acceptedShopper,
+
+//         assigned_shopper:
+//           acceptedShopper,
+
+//         shoppers:
+//           shoppers,
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ GET NEARBY SHOPPERS ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to load nearby shoppers',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // CANCEL CUSTOMER ORDER
+// // ==================================================
+
+// const cancelCustomerOrder =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             id,
+//             status
+//           FROM orders
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       if (
+//         order.status !==
+//         'waiting_for_shopper'
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'This order cannot be cancelled now',
+
+//         });
+
+//       }
+
+//       const updateResult =
+//         await pool.query(
+//           `
+//           UPDATE orders
+
+//           SET
+//             status = 'cancelled',
+//             updated_at = CURRENT_TIMESTAMP
+
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+
+//           RETURNING *
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         message:
+//           'Order cancelled successfully',
+
+//         order:
+//           updateResult.rows[0],
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ CANCEL ORDER ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to cancel order',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // UPDATE REPLACEMENT STATUS
+// // ==================================================
+
+// const updateReplacementStatus =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     const client =
+//       await pool.connect();
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       const replacementId =
+//         Number(
+//           req.params.replacementId
+//         );
+
+//       const {
+//         status,
+//         decision
+//       } = req.body;
+
+//       // ==================================================
+//       // VALIDATION
+//       // ==================================================
+
+//       if (
+//         !Number.isInteger(orderId) ||
+//         !Number.isInteger(replacementId)
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order or replacement ID',
+
+//         });
+
+//       }
+
+//       const finalStatus =
+//         decision === 'accepted'
+//           ? 'accepted'
+//           : decision === 'rejected'
+//             ? 'rejected'
+//             : status === 'accepted'
+//               ? 'accepted'
+//               : status === 'rejected'
+//                 ? 'rejected'
+//                 : null;
+
+//       if (!finalStatus) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Decision must be accepted or rejected',
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // START TRANSACTION
+//       // ==================================================
+
+//       await client.query(
+//         'BEGIN'
+//       );
+
+//       // ==================================================
+//       // CHECK ORDER BELONGS TO CUSTOMER
+//       // ==================================================
+
+//       const orderResult =
+//         await client.query(
+//           `
+//           SELECT
+//             id,
+//             customer_id
+//           FROM orders
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // GET REPLACEMENT
+//       // ==================================================
+
+//       const replacementResult =
+//         await client.query(
+//           `
+//           SELECT
+//             id,
+//             order_id,
+//             original_item_id,
+//             shopper_id,
+//             option_number,
+//             photo_url,
+//             status,
+//             created_at,
+//             updated_at
+//           FROM replacement_items
+//           WHERE
+//             id = $1
+//             AND order_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             replacementId,
+//             orderId,
+//           ]
+//         );
+
+//       if (
+//         replacementResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Replacement item not found',
+
+//         });
+
+//       }
+
+//       const replacement =
+//         replacementResult.rows[0];
+
+//       // ==================================================
+//       // CHECK CURRENT STATUS
+//       // ==================================================
+
+//       if (
+//         replacement.status !==
+//         'waiting_customer'
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'This replacement has already been processed',
+
+//           status:
+//             replacement.status,
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // ACCEPT / REJECT STATUS
+//       // ==================================================
+
+//       const databaseStatus =
+//         finalStatus === 'accepted'
+//           ? 'customer_accepted'
+//           : 'customer_rejected';
+
+//       // ==================================================
+//       // UPDATE REPLACEMENT ITEM
+//       // ==================================================
+
+//       const updateReplacementResult =
+//         await client.query(
+//           `
+//           UPDATE replacement_items
+
+//           SET
+//             status = $1,
+//             updated_at = CURRENT_TIMESTAMP
+
+//           WHERE
+//             id = $2
+//             AND order_id = $3
+
+//           RETURNING
+//             id,
+//             order_id,
+//             original_item_id,
+//             shopper_id,
+//             option_number,
+//             photo_url,
+//             status,
+//             created_at,
+//             updated_at
+//           `,
+//           [
+//             databaseStatus,
+//             replacementId,
+//             orderId,
+//           ]
+//         );
+
+//       if (
+//         updateReplacementResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Replacement item could not be updated',
+
+//         });
+
+//       }
+
+//       const updatedReplacement =
+//         updateReplacementResult.rows[0];
+
+//       // ==================================================
+//       // ACCEPTED REPLACEMENT
+//       // ORIGINAL ITEM -> DONE
+//       // ==================================================
+
+//       let updatedOriginalItem =
+//         null;
+
+//       if (
+//         finalStatus === 'accepted'
+//       ) {
+
+//         const originalItemResult =
+//           await client.query(
+//             `
+//             UPDATE order_items
+
+//             SET
+//               image =
+//                 COALESCE(
+//                   $1,
+//                   image
+//                 ),
+
+//               shopping_status =
+//                 'done',
+
+//               completed_at =
+//                 CURRENT_TIMESTAMP
+
+//             WHERE
+//               id = $2
+//               AND order_id = $3
+
+//             RETURNING
+//               id,
+//               order_id,
+//               product_id,
+//               item_name,
+//               quantity,
+//               amount,
+//               unit,
+//               price,
+//               custom,
+//               details,
+//               image,
+//               voice_url,
+//               shopper_photo_url,
+//               shopping_status,
+//               found_quantity,
+//               found_weight,
+//               found_weight_unit,
+//               barcode_scanned,
+//               completed_at,
+//               created_at
+//             `,
+//             [
+//               updatedReplacement.photo_url ||
+//               null,
+
+//               updatedReplacement.original_item_id,
+
+//               orderId,
+//             ]
+//           );
+
+//         if (
+//           originalItemResult.rows.length === 0
+//         ) {
+
+//           await client.query(
+//             'ROLLBACK'
+//           );
+
+//           return res.status(404).json({
+
+//             success: false,
+
+//             message:
+//               'Original order item not found',
+
+//           });
+
+//         }
+
+//         updatedOriginalItem =
+//           originalItemResult.rows[0];
+
+//       }
+
+//       // ==================================================
+//       // COMMIT
+//       // ==================================================
+
+//       await client.query(
+//         'COMMIT'
+//       );
+
+//       // ==================================================
+//       // DEBUG
+//       // ==================================================
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       console.log(
+//         '🔄 REPLACEMENT STATUS UPDATED'
+//       );
+
+//       console.log(
+//         'CUSTOMER ID:',
+//         customerId
+//       );
+
+//       console.log(
+//         'ORDER ID:',
+//         orderId
+//       );
+
+//       console.log(
+//         'REPLACEMENT ID:',
+//         replacementId
+//       );
+
+//       console.log(
+//         'ORIGINAL ITEM ID:',
+//         replacement.original_item_id
+//       );
+
+//       console.log(
+//         'OLD REPLACEMENT STATUS:',
+//         replacement.status
+//       );
+
+//       console.log(
+//         'NEW REPLACEMENT STATUS:',
+//         updatedReplacement.status
+//       );
+
+//       console.log(
+//         'DECISION:',
+//         finalStatus
+//       );
+
+//       console.log(
+//         'ORIGINAL ORDER ITEM UPDATED:',
+//         updatedOriginalItem
+//           ? true
+//           : false
+//       );
+
+//       if (
+//         updatedOriginalItem
+//       ) {
+
+//         console.log(
+//           'ORIGINAL ITEM NEW IMAGE:',
+//           updatedOriginalItem.image
+//         );
+
+//         console.log(
+//           'ORIGINAL ITEM NEW SHOPPING STATUS:',
+//           updatedOriginalItem.shopping_status
+//         );
+
+//         console.log(
+//           'ORIGINAL ITEM COMPLETED AT:',
+//           updatedOriginalItem.completed_at
+//         );
+
+//       }
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       // ==================================================
+//       // RESPONSE
+//       // ==================================================
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         message:
+//           finalStatus === 'accepted'
+//             ? 'Replacement accepted and order item moved to DONE successfully'
+//             : 'Replacement rejected successfully',
+
+//         replacement: {
+
+//           id:
+//             updatedReplacement.id,
+
+//           orderId:
+//             updatedReplacement.order_id,
+
+//           originalItemId:
+//             updatedReplacement.original_item_id,
+
+//           shopperId:
+//             updatedReplacement.shopper_id,
+
+//           optionNumber:
+//             updatedReplacement.option_number,
+
+//           photoUrl:
+//             updatedReplacement.photo_url,
+
+//           photo_url:
+//             updatedReplacement.photo_url,
+
+//           replacementPhotoUrl:
+//             updatedReplacement.photo_url,
+
+//           replacement_photo_url:
+//             updatedReplacement.photo_url,
+
+//           status:
+//             updatedReplacement.status,
+
+//           createdAt:
+//             updatedReplacement.created_at,
+
+//           updatedAt:
+//             updatedReplacement.updated_at,
+
+//         },
+
+//         originalItem:
+//           updatedOriginalItem,
+
+//       });
+
+//     } catch (error) {
+
+//       try {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//       } catch (
+//         rollbackError
+//       ) {
+
+//         console.error(
+//           '❌ Rollback error:',
+//           rollbackError.message
+//         );
+
+//       }
+
+//       console.error(
+//         '❌ UPDATE REPLACEMENT STATUS ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to update replacement status',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     } finally {
+
+//       client.release();
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // EXPORT
+// // ==================================================
+
+// module.exports = {
+
+//   createOrder,
+
+//   getCustomerOrders,
+
+//   getCustomerOrderById,
+
+//   getNearbyShoppersForOrder,
+
+//   cancelCustomerOrder,
+
+//   updateReplacementStatus,
+
+//   uploadCustomItemMedia,
+
+// };
+
+
+
+
+
+
+
+
+
+
+
+
+// const pool = require('../config/db');
+
+// // ==================================================
+// // UPLOAD CUSTOM ITEM MEDIA
+// // ==================================================
+
+// const uploadCustomItemMedia = async (
+//   req,
+//   res
+// ) => {
+//   try {
+
+//     if (
+//       !req.files ||
+//       req.files.length === 0
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'No files uploaded',
+
+//       });
+
+//     }
+
+//     const baseUrl =
+//       `${req.protocol}://${req.get('host')}`;
+
+//     const files =
+//       req.files.map(
+//         (file) => {
+
+//           const url =
+//             `${baseUrl}/uploads/items/${file.filename}`;
+
+//           return {
+
+//             fieldName:
+//               file.fieldname,
+
+//             originalName:
+//               file.originalname,
+
+//             fileName:
+//               file.filename,
+
+//             mimeType:
+//               file.mimetype,
+
+//             size:
+//               file.size,
+
+//             url:
+//               url,
+
+//           };
+
+//         }
+//       );
+
+//     const imageExtensions = [
+//       '.jpg',
+//       '.jpeg',
+//       '.png',
+//       '.webp',
+//     ];
+
+//     const audioExtensions = [
+//       '.mp3',
+//       '.m4a',
+//       '.wav',
+//       '.aac',
+//       '.ogg',
+//       '.webm',
+//     ];
+
+//     const imageMimeTypes = [
+//       'image/jpeg',
+//       'image/jpg',
+//       'image/png',
+//       'image/webp',
+//     ];
+
+//     const audioMimeTypes = [
+//       'audio/mpeg',
+//       'audio/mp3',
+//       'audio/mp4',
+//       'audio/m4a',
+//       'audio/x-m4a',
+//       'audio/wav',
+//       'audio/x-wav',
+//       'audio/aac',
+//       'audio/ogg',
+//       'audio/webm',
+//     ];
+
+//     const imageFile =
+//       files.find(
+//         (file) => {
+
+//           const mime =
+//             (
+//               file.mimeType ||
+//               ''
+//             ).toLowerCase();
+
+//           const ext =
+//             require('path')
+//               .extname(
+//                 file.originalName ||
+//                 file.fileName ||
+//                 ''
+//               )
+//               .toLowerCase();
+
+//           return (
+//             imageMimeTypes.includes(
+//               mime
+//             ) ||
+//             imageExtensions.includes(
+//               ext
+//             )
+//           );
+
+//         }
+//       );
+
+//     const audioFile =
+//       files.find(
+//         (file) => {
+
+//           const mime =
+//             (
+//               file.mimeType ||
+//               ''
+//             ).toLowerCase();
+
+//           const ext =
+//             require('path')
+//               .extname(
+//                 file.originalName ||
+//                 file.fileName ||
+//                 ''
+//               )
+//               .toLowerCase();
+
+//           return (
+//             audioMimeTypes.includes(
+//               mime
+//             ) ||
+//             audioExtensions.includes(
+//               ext
+//             )
+//           );
+
+//         }
+//       );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📤 CUSTOM ITEM MEDIA UPLOAD'
+//     );
+
+//     console.log(
+//       'CUSTOMER ID:',
+//       req.customer?.customerId
+//     );
+
+//     console.log(
+//       'FILES:',
+//       files
+//     );
+
+//     console.log(
+//       'IMAGE:',
+//       imageFile?.url ||
+//       null
+//     );
+
+//     console.log(
+//       'VOICE:',
+//       audioFile?.url ||
+//       null
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     return res.status(200).json({
+
+//       success: true,
+
+//       message:
+//         'Files uploaded successfully',
+
+//       imageUrl:
+//         imageFile?.url ||
+//         null,
+
+//       voiceUrl:
+//         audioFile?.url ||
+//         null,
+
+//       files,
+
+//     });
+
+//   } catch (error) {
+
+//     console.error(
+//       '❌ CUSTOM ITEM MEDIA UPLOAD ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to upload custom item media',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   }
+// };
+
+
+// // ==================================================
+// // CREATE ORDER
+// // ==================================================
+
+// const createOrder = async (
+//   req,
+//   res
+// ) => {
+
+//   const client =
+//     await pool.connect();
+
+//   try {
+
+//     const customerId =
+//       req.customer.customerId;
+
+//     const {
+//       shopId,
+//       deliveryAddress,
+//       deliveryLatitude,
+//       deliveryLongitude,
+//       deliveryOption = 'fast',
+//       paymentMethod = 'cash',
+//       items = [],
+//       deliveryFee = 0,
+//       serviceFee = 0,
+//       itemsTotal = 0,
+//       totalAmount = 0,
+//     } = req.body;
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📥 CREATE ORDER REQUEST'
+//     );
+
+//     console.log(
+//       'CUSTOMER ID:',
+//       customerId
+//     );
+
+//     console.log(
+//       'SHOP ID:',
+//       shopId
+//     );
+
+//     console.log(
+//       'ITEM COUNT:',
+//       Array.isArray(items)
+//         ? items.length
+//         : 0
+//     );
+
+//     console.log(
+//       'RAW ITEMS:',
+//       JSON.stringify(
+//         items,
+//         null,
+//         2
+//       )
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     if (!shopId) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Shop ID is required',
+
+//       });
+
+//     }
+
+//     if (!deliveryAddress) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Delivery address is required',
+
+//       });
+
+//     }
+
+//     if (
+//       deliveryLatitude === undefined ||
+//       deliveryLongitude === undefined
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Delivery latitude and longitude are required',
+
+//       });
+
+//     }
+
+//     const latitude =
+//       Number(
+//         deliveryLatitude
+//       );
+
+//     const longitude =
+//       Number(
+//         deliveryLongitude
+//       );
+
+//     if (
+//       !Number.isFinite(latitude) ||
+//       !Number.isFinite(longitude)
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Valid latitude and longitude are required',
+
+//       });
+
+//     }
+
+//     if (
+//       latitude < -90 ||
+//       latitude > 90 ||
+//       longitude < -180 ||
+//       longitude > 180
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Latitude or longitude is out of range',
+
+//       });
+
+//     }
+
+//     if (
+//       !Array.isArray(items) ||
+//       items.length === 0
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'At least one order item is required',
+
+//       });
+
+//     }
+
+//     // ==================================================
+//     // GET SHOP
+//     // ==================================================
+
+//     const shopResult =
+//       await client.query(
+//         `
+//         SELECT
+//           id,
+//           shop_name,
+//           image_url,
+//           status,
+//           latitude,
+//           longitude
+//         FROM shops
+//         WHERE id = $1
+//         `,
+//         [
+//           shopId,
+//         ]
+//       );
+
+//     if (
+//       shopResult.rows.length === 0
+//     ) {
+
+//       return res.status(404).json({
+
+//         success: false,
+
+//         message:
+//           'Shop not found',
+
+//       });
+
+//     }
+
+//     const shop =
+//       shopResult.rows[0];
+
+//     if (
+//       shop.status !==
+//       'approved'
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'This shop is not available',
+
+//       });
+
+//     }
+
+//     const safeItemsTotal =
+//       Number(itemsTotal) || 0;
+
+//     const safeDeliveryFee =
+//       Number(deliveryFee) || 0;
+
+//     const safeServiceFee =
+//       Number(serviceFee) || 0;
+
+//     const safeTotalAmount =
+//       Number(totalAmount) ||
+//       (
+//         safeItemsTotal +
+//         safeDeliveryFee +
+//         safeServiceFee
+//       );
+
+//     // ==================================================
+//     // CALCULATE DISTANCE
+//     // SHOP -> CUSTOMER
+//     // ==================================================
+
+//     const shopLatitude =
+//       Number(
+//         shop.latitude
+//       );
+
+//     const shopLongitude =
+//       Number(
+//         shop.longitude
+//       );
+
+//     let safeDistanceKm =
+//       null;
+
+//     if (
+//       Number.isFinite(shopLatitude) &&
+//       Number.isFinite(shopLongitude)
+//     ) {
+
+//       const earthRadiusKm =
+//         6371;
+
+//       const dLat =
+//         (
+//           (
+//             latitude -
+//             shopLatitude
+//           ) *
+//           Math.PI
+//         ) / 180;
+
+//       const dLon =
+//         (
+//           (
+//             longitude -
+//             shopLongitude
+//           ) *
+//           Math.PI
+//         ) / 180;
+
+//       const customerLatRad =
+//         (
+//           latitude *
+//           Math.PI
+//         ) / 180;
+
+//       const shopLatRad =
+//         (
+//           shopLatitude *
+//           Math.PI
+//         ) / 180;
+
+//       const a =
+//         Math.sin(
+//           dLat / 2
+//         ) *
+//           Math.sin(
+//             dLat / 2
+//           ) +
+
+//         Math.cos(
+//           shopLatRad
+//         ) *
+//           Math.cos(
+//             customerLatRad
+//           ) *
+//           Math.sin(
+//             dLon / 2
+//           ) *
+//           Math.sin(
+//             dLon / 2
+//           );
+
+//       const c =
+//         2 *
+//         Math.atan2(
+//           Math.sqrt(a),
+//           Math.sqrt(
+//             1 - a
+//           )
+//         );
+
+//       safeDistanceKm =
+//         Number(
+//           (
+//             earthRadiusKm *
+//             c
+//           ).toFixed(2)
+//         );
+
+//     }
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📍 SHOP LATITUDE:',
+//       shopLatitude
+//     );
+
+//     console.log(
+//       '📍 SHOP LONGITUDE:',
+//       shopLongitude
+//     );
+
+//     console.log(
+//       '📍 CUSTOMER LATITUDE:',
+//       latitude
+//     );
+
+//     console.log(
+//       '📍 CUSTOMER LONGITUDE:',
+//       longitude
+//     );
+
+//     console.log(
+//       '📏 CALCULATED DISTANCE:',
+//       safeDistanceKm,
+//       'KM'
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     await client.query(
+//       'BEGIN'
+//     );
+
+//     // ==================================================
+//     // INSERT ORDER
+//     // ==================================================
+
+//     const orderResult =
+//       await client.query(
+//         `
+//         INSERT INTO orders (
+//           customer_id,
+//           shop_id,
+//           delivery_address,
+//           delivery_latitude,
+//           delivery_longitude,
+//           delivery_option,
+//           payment_method,
+//           items_total,
+//           delivery_fee,
+//           service_fee,
+//           distance_km,
+//           total_amount,
+//           status
+//         )
+//         VALUES (
+//           $1,
+//           $2,
+//           $3,
+//           $4,
+//           $5,
+//           $6,
+//           $7,
+//           $8,
+//           $9,
+//           $10,
+//           $11,
+//           $12,
+//           $13
+//         )
+//         RETURNING *
+//         `,
+//         [
+//           customerId,
+//           shopId,
+//           deliveryAddress,
+//           latitude,
+//           longitude,
+//           deliveryOption,
+//           paymentMethod,
+//           safeItemsTotal,
+//           safeDeliveryFee,
+//           safeServiceFee,
+//           safeDistanceKm,
+//           safeTotalAmount,
+//           'waiting_for_shopper',
+//         ]
+//       );
+
+//     const order =
+//       orderResult.rows[0];
+
+//     // ==================================================
+//     // INSERT ORDER ITEMS
+//     // ==================================================
+
+//     for (
+//       const item of items
+//     ) {
+
+//       const productId =
+//         item.productId ||
+//         item.product_id ||
+//         null;
+
+//       const itemName =
+//         item.itemName ||
+//         item.item_name ||
+//         item.name ||
+//         item.productName ||
+//         'Item';
+
+//       const quantity =
+//         Number(
+//           item.quantity
+//         ) || 1;
+
+//       const amount =
+//         Number(
+//           item.amount
+//         ) || 1;
+
+//       const unit =
+//         item.unit ||
+//         item.selectedUnit ||
+//         null;
+
+//       const price =
+//         Number(
+//           item.price
+//         ) || 0;
+
+//       const custom =
+//         item.custom === true;
+
+//       const details =
+//         item.details ||
+//         null;
+
+//       const image =
+//         item.image ||
+//         item.imageUrl ||
+//         item.image_url ||
+//         item.photo ||
+//         item.photoUrl ||
+//         item.photo_url ||
+//         null;
+
+//       const voiceUrl =
+//         item.voice_url ||
+//         item.voiceUrl ||
+//         item.voice ||
+//         null;
+
+//       await client.query(
+//         `
+//         INSERT INTO order_items (
+//           order_id,
+//           product_id,
+//           item_name,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voice_url
+//         )
+//         VALUES (
+//           $1,
+//           $2,
+//           $3,
+//           $4,
+//           $5,
+//           $6,
+//           $7,
+//           $8,
+//           $9,
+//           $10,
+//           $11
+//         )
+//         `,
+//         [
+//           order.id,
+//           productId,
+//           itemName,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voiceUrl,
+//         ]
+//       );
+
+//     }
+
+//     await client.query(
+//       'COMMIT'
+//     );
+
+//     // ==================================================
+//     // GET CREATED ITEMS
+//     // ==================================================
+
+//     const createdItemsResult =
+//       await pool.query(
+//         `
+//         SELECT
+//           id,
+//           order_id,
+//           product_id,
+//           item_name,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voice_url,
+
+//           shopper_photo_url,
+//           shopping_status,
+//           found_quantity,
+//           found_weight,
+//           found_weight_unit,
+//           barcode_scanned,
+//           completed_at,
+
+//           created_at
+//         FROM order_items
+//         WHERE order_id = $1
+//         ORDER BY id ASC
+//         `,
+//         [
+//           order.id,
+//         ]
+//       );
+
+//     const createdItems =
+//       createdItemsResult.rows.map(
+//         (item) => ({
+
+//           ...item,
+
+//           voice_url:
+//             item.voice_url ||
+//             null,
+
+//           voiceUrl:
+//             item.voice_url ||
+//             null,
+
+//           shoppingStatus:
+//             item.shopping_status ||
+//             'pending',
+
+//           foundQuantity:
+//             item.found_quantity !== null
+//               ? Number(
+//                   item.found_quantity
+//                 )
+//               : null,
+
+//           foundWeight:
+//             item.found_weight !== null
+//               ? Number(
+//                   item.found_weight
+//                 )
+//               : null,
+
+//           foundWeightUnit:
+//             item.found_weight_unit ||
+//             null,
+
+//           barcodeScanned:
+//             item.barcode_scanned === true,
+
+//           shopperPhotoUrl:
+//             item.shopper_photo_url ||
+//             null,
+
+//           completedAt:
+//             item.completed_at ||
+//             null,
+
+//         })
+//       );
+
+//     // ==================================================
+//     // RESPONSE
+//     // ==================================================
+
+//     return res.status(201).json({
+
+//       success: true,
+
+//       message:
+//         'Order created successfully',
+
+//       order: {
+
+//         ...order,
+
+//         total:
+//           Number(
+//             order.total_amount
+//           ),
+
+//         totalAmount:
+//           Number(
+//             order.total_amount
+//           ),
+
+//         itemsTotal:
+//           Number(
+//             order.items_total
+//           ),
+
+//         deliveryFee:
+//           Number(
+//             order.delivery_fee
+//           ),
+
+//         serviceFee:
+//           Number(
+//             order.service_fee
+//           ),
+
+//         distance_km:
+//           order.distance_km !== null
+//             ? Number(
+//                 order.distance_km
+//               )
+//             : null,
+
+//         distanceKm:
+//           order.distance_km !== null
+//             ? Number(
+//                 order.distance_km
+//               )
+//             : null,
+
+//         shop: {
+
+//           id:
+//             shop.id,
+
+//           name:
+//             shop.shop_name,
+
+//           image:
+//             shop.image_url,
+
+//           latitude:
+//             Number(
+//               shop.latitude
+//             ),
+
+//           longitude:
+//             Number(
+//               shop.longitude
+//             ),
+
+//         },
+
+//         items:
+//           createdItems,
+
+//       },
+
+//     });
+
+//   } catch (error) {
+
+//     try {
+
+//       await client.query(
+//         'ROLLBACK'
+//       );
+
+//     } catch (
+//       rollbackError
+//     ) {
+
+//       console.error(
+//         '❌ Rollback error:',
+//         rollbackError.message
+//       );
+
+//     }
+
+//     console.error(
+//       '❌ CREATE ORDER ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to create order',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   } finally {
+
+//     client.release();
+
+//   }
+
+// };
+
+
+// // ==================================================
+// // GET CUSTOMER ORDERS
+// // ==================================================
+
+// const getCustomerOrders = async (
+//   req,
+//   res
+// ) => {
+
+//   try {
+
+//     const customerId =
+//       req.customer.customerId;
+
+//     const ordersResult =
+//       await pool.query(
+//         `
+//         SELECT
+//           o.id,
+//           o.customer_id,
+//           o.shop_id,
+//           o.shopper_id,
+
+//           o.delivery_address,
+//           o.delivery_latitude,
+//           o.delivery_longitude,
+
+//           o.delivery_option,
+//           o.payment_method,
+
+//           o.items_total,
+//           o.delivery_fee,
+//           o.service_fee,
+//           o.distance_km,
+//           o.total_amount,
+
+//           o.status,
+
+//           o.created_at,
+//           o.updated_at,
+
+//           s.shop_name,
+//           s.image_url AS shop_image,
+
+//           s.latitude AS shop_latitude,
+//           s.longitude AS shop_longitude,
+
+//           sh.id AS shopper_id_joined,
+//           sh.full_name AS shopper_name,
+//           sh.mobile AS shopper_mobile,
+//           sh.status AS shopper_status,
+//           sh.latitude AS shopper_latitude,
+//           sh.longitude AS shopper_longitude
+
+//         FROM orders o
+
+//         LEFT JOIN shops s
+//           ON s.id = o.shop_id
+
+//         LEFT JOIN shoppers sh
+//           ON sh.id = o.shopper_id
+
+//         WHERE o.customer_id = $1
+
+//         ORDER BY
+//           o.created_at DESC
+//         `,
+//         [
+//           customerId,
+//         ]
+//       );
+
+//     const formattedOrders =
+//       await Promise.all(
+//         ordersResult.rows.map(
+//           async (order) => {
+
+//             const itemsResult =
+//               await pool.query(
+//                 `
+//                 SELECT
+//                   oi.id,
+//                   oi.order_id,
+//                   oi.product_id,
+//                   oi.item_name,
+//                   oi.quantity,
+//                   oi.amount,
+//                   oi.unit,
+//                   oi.price,
+//                   oi.custom,
+//                   oi.details,
+//                   oi.image,
+//                   oi.voice_url,
+//                   oi.shopper_photo_url,
+//                   oi.shopping_status,
+//                   oi.found_quantity,
+//                   oi.found_weight,
+//                   oi.found_weight_unit,
+//                   oi.barcode_scanned,
+//                   oi.completed_at,
+//                   oi.created_at,
+
+//                   COALESCE(
+//                     (
+//                       SELECT json_agg(
+//                         json_build_object(
+//                           'id', ri.id,
+//                           'order_id', ri.order_id,
+//                           'original_item_id', ri.original_item_id,
+//                           'shopper_id', ri.shopper_id,
+//                           'option_number', ri.option_number,
+
+//                           'photo_url', ri.photo_url,
+//                           'photoUrl', ri.photo_url,
+
+//                           'replacement_photo_url', ri.photo_url,
+//                           'replacementPhotoUrl', ri.photo_url,
+
+//                           'status', ri.status,
+
+//                           'created_at', ri.created_at,
+//                           'updated_at', ri.updated_at
+//                         )
+//                         ORDER BY
+//                           ri.option_number ASC
+//                       )
+//                       FROM replacement_items ri
+//                       WHERE
+//                         ri.order_id = oi.order_id
+//                         AND ri.original_item_id = oi.id
+//                     ),
+//                     '[]'::json
+//                   ) AS replacement_items
+
+//                 FROM order_items oi
+
+//                 WHERE oi.order_id = $1
+
+//                 ORDER BY
+//                   oi.id ASC
+//                 `,
+//                 [
+//                   order.id,
+//                 ]
+//               );
+
+//             const items =
+//               itemsResult.rows.map(
+//                 (item) => ({
+
+//                   ...item,
+
+//                   image:
+//                     item.image ||
+//                     null,
+
+//                   voice_url:
+//                     item.voice_url ||
+//                     null,
+
+//                   voiceUrl:
+//                     item.voice_url ||
+//                     null,
+
+//                   replacement_items:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   replacementItems:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   replacements:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   shopping_status:
+//                     item.shopping_status ||
+//                     'pending',
+
+//                   shoppingStatus:
+//                     item.shopping_status ||
+//                     'pending',
+
+//                   found_quantity:
+//                     item.found_quantity !== null
+//                       ? Number(
+//                           item.found_quantity
+//                         )
+//                       : null,
+
+//                   foundQuantity:
+//                     item.found_quantity !== null
+//                       ? Number(
+//                           item.found_quantity
+//                         )
+//                       : null,
+
+//                   found_weight:
+//                     item.found_weight !== null
+//                       ? Number(
+//                           item.found_weight
+//                         )
+//                       : null,
+
+//                   foundWeight:
+//                     item.found_weight !== null
+//                       ? Number(
+//                           item.found_weight
+//                         )
+//                       : null,
+
+//                   found_weight_unit:
+//                     item.found_weight_unit ||
+//                     null,
+
+//                   foundWeightUnit:
+//                     item.found_weight_unit ||
+//                     null,
+
+//                   barcode_scanned:
+//                     item.barcode_scanned === true,
+
+//                   barcodeScanned:
+//                     item.barcode_scanned === true,
+
+//                   shopper_photo_url:
+//                     item.shopper_photo_url ||
+//                     null,
+
+//                   shopperPhotoUrl:
+//                     item.shopper_photo_url ||
+//                     null,
+
+//                   completed_at:
+//                     item.completed_at ||
+//                     null,
+
+//                   completedAt:
+//                     item.completed_at ||
+//                     null,
+
+//                 })
+//               );
+
+//             const totalAmount =
+//               Number(
+//                 order.total_amount
+//               ) || 0;
+
+//             const itemsTotal =
+//               Number(
+//                 order.items_total
+//               ) || 0;
+
+//             const deliveryFee =
+//               Number(
+//                 order.delivery_fee
+//               ) || 0;
+
+//             const serviceFee =
+//               Number(
+//                 order.service_fee
+//               ) || 0;
+
+//             const distanceKm =
+//               order.distance_km !== null
+//                 ? Number(
+//                     order.distance_km
+//                   )
+//                 : null;
+
+//             const shopper =
+//               order.shopper_id
+//                 ? {
+
+//                     id:
+//                       Number(
+//                         order.shopper_id
+//                       ),
+
+//                     name:
+//                       order.shopper_name ||
+//                       'Shopper',
+
+//                     full_name:
+//                       order.shopper_name ||
+//                       'Shopper',
+
+//                     mobile:
+//                       order.shopper_mobile ||
+//                       null,
+
+//                     status:
+//                       order.shopper_status ||
+//                       null,
+
+//                     latitude:
+//                       Number(
+//                         order.shopper_latitude
+//                       ),
+
+//                     longitude:
+//                       Number(
+//                         order.shopper_longitude
+//                       ),
+
+//                   }
+//                 : null;
+
+//             return {
+
+//               id:
+//                 order.id,
+
+//               customer_id:
+//                 order.customer_id,
+
+//               shop_id:
+//                 order.shop_id,
+
+//               shopper_id:
+//                 order.shopper_id
+//                   ? Number(
+//                       order.shopper_id
+//                     )
+//                   : null,
+
+//               delivery_address:
+//                 order.delivery_address,
+
+//               delivery_latitude:
+//                 Number(
+//                   order.delivery_latitude
+//                 ),
+
+//               delivery_longitude:
+//                 Number(
+//                   order.delivery_longitude
+//                 ),
+
+//               delivery_option:
+//                 order.delivery_option,
+
+//               payment_method:
+//                 order.payment_method,
+
+//               items_total:
+//                 itemsTotal,
+
+//               delivery_fee:
+//                 deliveryFee,
+
+//               service_fee:
+//                 serviceFee,
+
+//               distance_km:
+//                 distanceKm,
+
+//               distanceKm:
+//                 distanceKm,
+
+//               total_amount:
+//                 totalAmount,
+
+//               total:
+//                 totalAmount,
+
+//               totalAmount:
+//                 totalAmount,
+
+//               itemsTotal:
+//                 itemsTotal,
+
+//               deliveryFee:
+//                 deliveryFee,
+
+//               serviceFee:
+//                 serviceFee,
+
+//               status:
+//                 order.status,
+
+//               created_at:
+//                 order.created_at,
+
+//               updated_at:
+//                 order.updated_at,
+
+//               shop: {
+
+//                 id:
+//                   order.shop_id,
+
+//                 name:
+//                   order.shop_name ||
+//                   'Selected Shop',
+
+//                 shop_name:
+//                   order.shop_name ||
+//                   'Selected Shop',
+
+//                 image:
+//                   order.shop_image ||
+//                   null,
+
+//                 image_url:
+//                   order.shop_image ||
+//                   null,
+
+//                 latitude:
+//                   Number(
+//                     order.shop_latitude
+//                   ),
+
+//                 longitude:
+//                   Number(
+//                     order.shop_longitude
+//                   ),
+
+//               },
+
+//               shopper:
+//                 shopper,
+
+//               assignedShopper:
+//                 shopper,
+
+//               assigned_shopper:
+//                 shopper,
+
+//               items:
+//                 items,
+
+//               shoppingList:
+//                 items,
+
+//               orderItems:
+//                 items,
+
+//             };
+
+//           }
+//         )
+//       );
+
+//     return res.status(200).json({
+
+//       success: true,
+
+//       orders:
+//         formattedOrders,
+
+//     });
+
+//   } catch (error) {
+
+//     console.error(
+//       '❌ GET CUSTOMER ORDERS ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to load customer orders',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   }
+
+// };
+
+
+// // ==================================================
+// // GET CUSTOMER ORDER BY ID
+// // ==================================================
+
+// const getCustomerOrderById =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             o.*,
+
+//             s.shop_name,
+//             s.image_url AS shop_image,
+
+//             s.latitude AS shop_latitude,
+//             s.longitude AS shop_longitude,
+
+//             sh.id AS shopper_id_joined,
+//             sh.full_name AS shopper_name,
+//             sh.mobile AS shopper_mobile,
+//             sh.status AS shopper_status,
+//             sh.latitude AS shopper_latitude,
+//             sh.longitude AS shopper_longitude
+
+//           FROM orders o
+
+//           LEFT JOIN shops s
+//             ON s.id = o.shop_id
+
+//           LEFT JOIN shoppers sh
+//             ON sh.id = o.shopper_id
+
+//           WHERE
+//             o.id = $1
+//             AND o.customer_id = $2
+
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       const itemsResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             oi.id,
+//             oi.order_id,
+//             oi.product_id,
+//             oi.item_name,
+//             oi.quantity,
+//             oi.amount,
+//             oi.unit,
+//             oi.price,
+//             oi.custom,
+//             oi.details,
+//             oi.image,
+//             oi.voice_url,
+//             oi.shopper_photo_url,
+//             oi.shopping_status,
+//             oi.found_quantity,
+//             oi.found_weight,
+//             oi.found_weight_unit,
+//             oi.barcode_scanned,
+//             oi.completed_at,
+//             oi.created_at,
+
+//             COALESCE(
+//               (
+//                 SELECT json_agg(
+//                   json_build_object(
+//                     'id', ri.id,
+//                     'order_id', ri.order_id,
+//                     'original_item_id', ri.original_item_id,
+//                     'shopper_id', ri.shopper_id,
+//                     'option_number', ri.option_number,
+
+//                     'photo_url', ri.photo_url,
+//                     'photoUrl', ri.photo_url,
+
+//                     'replacement_photo_url', ri.photo_url,
+//                     'replacementPhotoUrl', ri.photo_url,
+
+//                     'status', ri.status,
+
+//                     'created_at', ri.created_at,
+//                     'updated_at', ri.updated_at
+//                   )
+//                   ORDER BY
+//                     ri.option_number ASC
+//                 )
+//                 FROM replacement_items ri
+//                 WHERE
+//                   ri.order_id = oi.order_id
+//                   AND ri.original_item_id = oi.id
+//               ),
+//               '[]'::json
+//             ) AS replacement_items
+
+//           FROM order_items oi
+
+//           WHERE oi.order_id = $1
+
+//           ORDER BY oi.id ASC
+//           `,
+//           [
+//             orderId,
+//           ]
+//         );
+
+//       const items =
+//         itemsResult.rows.map(
+//           (item) => ({
+
+//             ...item,
+
+//             image:
+//               item.image ||
+//               null,
+
+//             voice_url:
+//               item.voice_url ||
+//               null,
+
+//             voiceUrl:
+//               item.voice_url ||
+//               null,
+
+//             replacement_items:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             replacementItems:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             replacements:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             shopping_status:
+//               item.shopping_status ||
+//               'pending',
+
+//             shoppingStatus:
+//               item.shopping_status ||
+//               'pending',
+
+//             found_quantity:
+//               item.found_quantity !== null
+//                 ? Number(
+//                     item.found_quantity
+//                   )
+//                 : null,
+
+//             foundQuantity:
+//               item.found_quantity !== null
+//                 ? Number(
+//                     item.found_quantity
+//                   )
+//                 : null,
+
+//             found_weight:
+//               item.found_weight !== null
+//                 ? Number(
+//                     item.found_weight
+//                   )
+//                 : null,
+
+//             foundWeight:
+//               item.found_weight !== null
+//                 ? Number(
+//                     item.found_weight
+//                   )
+//                 : null,
+
+//             found_weight_unit:
+//               item.found_weight_unit ||
+//               null,
+
+//             foundWeightUnit:
+//               item.found_weight_unit ||
+//               null,
+
+//             barcode_scanned:
+//               item.barcode_scanned === true,
+
+//             barcodeScanned:
+//               item.barcode_scanned === true,
+
+//             shopper_photo_url:
+//               item.shopper_photo_url ||
+//               null,
+
+//             shopperPhotoUrl:
+//               item.shopper_photo_url ||
+//               null,
+
+//             completed_at:
+//               item.completed_at ||
+//               null,
+
+//             completedAt:
+//               item.completed_at ||
+//               null,
+
+//           })
+//         );
+
+//       const totalAmount =
+//         Number(
+//           order.total_amount
+//         ) || 0;
+
+//       const itemsTotal =
+//         Number(
+//           order.items_total
+//         ) || 0;
+
+//       const deliveryFee =
+//         Number(
+//           order.delivery_fee
+//         ) || 0;
+
+//       const serviceFee =
+//         Number(
+//           order.service_fee
+//         ) || 0;
+
+//       const distanceKm =
+//         order.distance_km !== null
+//           ? Number(
+//               order.distance_km
+//             )
+//           : null;
+
+//       const shopper =
+//         order.shopper_id
+//           ? {
+
+//               id:
+//                 Number(
+//                   order.shopper_id
+//                 ),
+
+//               name:
+//                 order.shopper_name ||
+//                 'Shopper',
+
+//               full_name:
+//                 order.shopper_name ||
+//                 'Shopper',
+
+//               mobile:
+//                 order.shopper_mobile ||
+//                 null,
+
+//               status:
+//                 order.shopper_status ||
+//                 null,
+
+//               latitude:
+//                 Number(
+//                   order.shopper_latitude
+//                 ),
+
+//               longitude:
+//                 Number(
+//                   order.shopper_longitude
+//                 ),
+
+//             }
+//           : null;
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         order: {
+
+//           ...order,
+
+//           delivery_latitude:
+//             Number(
+//               order.delivery_latitude
+//             ),
+
+//           delivery_longitude:
+//             Number(
+//               order.delivery_longitude
+//             ),
+
+//           items_total:
+//             itemsTotal,
+
+//           delivery_fee:
+//             deliveryFee,
+
+//           service_fee:
+//             serviceFee,
+
+//           distance_km:
+//             distanceKm,
+
+//           distanceKm:
+//             distanceKm,
+
+//           total_amount:
+//             totalAmount,
+
+//           total:
+//             totalAmount,
+
+//           totalAmount:
+//             totalAmount,
+
+//           itemsTotal:
+//             itemsTotal,
+
+//           deliveryFee:
+//             deliveryFee,
+
+//           serviceFee:
+//             serviceFee,
+
+//           shop: {
+
+//             id:
+//               order.shop_id,
+
+//             name:
+//               order.shop_name ||
+//               'Selected Shop',
+
+//             shop_name:
+//               order.shop_name ||
+//               'Selected Shop',
+
+//             image:
+//               order.shop_image ||
+//               null,
+
+//             image_url:
+//               order.shop_image ||
+//               null,
+
+//             latitude:
+//               Number(
+//                 order.shop_latitude
+//               ),
+
+//             longitude:
+//               Number(
+//                 order.shop_longitude
+//               ),
+
+//           },
+
+//           shopper:
+//             shopper,
+
+//           assignedShopper:
+//             shopper,
+
+//           assigned_shopper:
+//             shopper,
+
+//           items:
+//             items,
+
+//           shoppingList:
+//             items,
+
+//           orderItems:
+//             items,
+
+//         },
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ GET CUSTOMER ORDER ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to load order',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // GET NEARBY ONLINE SHOPPERS FOR ORDER
+// // ==================================================
+
+// const getNearbyShoppersForOrder =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+
+//             o.id,
+//             o.customer_id,
+//             o.shop_id,
+//             o.status,
+//             o.shopper_id,
+
+//             s.shop_name,
+
+//             s.latitude AS shop_latitude,
+//             s.longitude AS shop_longitude
+
+//           FROM orders o
+
+//           LEFT JOIN shops s
+//             ON s.id = o.shop_id
+
+//           WHERE
+//             o.id = $1
+//             AND o.customer_id = $2
+
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       let acceptedShopper =
+//         null;
+
+//       if (
+//         order.shopper_id
+//       ) {
+
+//         const acceptedShopperResult =
+//           await pool.query(
+//             `
+//             SELECT
+//               id,
+//               full_name,
+//               mobile,
+//               status,
+//               latitude,
+//               longitude
+//             FROM shoppers
+//             WHERE id = $1
+//             LIMIT 1
+//             `,
+//             [
+//               order.shopper_id,
+//             ]
+//           );
+
+//         if (
+//           acceptedShopperResult.rows.length > 0
+//         ) {
+
+//           const shopper =
+//             acceptedShopperResult.rows[0];
+
+//           acceptedShopper = {
+
+//             id:
+//               Number(
+//                 shopper.id
+//               ),
+
+//             name:
+//               shopper.full_name ||
+//               'Shopper',
+
+//             full_name:
+//               shopper.full_name ||
+//               'Shopper',
+
+//             mobile:
+//               shopper.mobile ||
+//               null,
+
+//             status:
+//               shopper.status ||
+//               null,
+
+//             latitude:
+//               Number(
+//                 shopper.latitude
+//               ),
+
+//             longitude:
+//               Number(
+//                 shopper.longitude
+//               ),
+
+//           };
+
+//         }
+
+//       }
+
+//       const shopLatitude =
+//         Number(
+//           order.shop_latitude
+//         );
+
+//       const shopLongitude =
+//         Number(
+//           order.shop_longitude
+//         );
+
+//       if (
+//         !Number.isFinite(
+//           shopLatitude
+//         ) ||
+//         !Number.isFinite(
+//           shopLongitude
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Shop location is not available',
+
+//         });
+
+//       }
+
+//       const shoppersResult =
+//         await pool.query(
+//           `
+//           SELECT
+
+//             sh.id,
+//             sh.full_name,
+//             sh.mobile,
+//             sh.status,
+//             sh.latitude,
+//             sh.longitude,
+
+//             (
+//               6371 *
+//               acos(
+//                 LEAST(
+//                   1,
+//                   GREATEST(
+//                     -1,
+//                     cos(
+//                       radians($1)
+//                     ) *
+//                     cos(
+//                       radians(sh.latitude)
+//                     ) *
+//                     cos(
+//                       radians(sh.longitude) -
+//                       radians($2)
+//                     ) +
+//                     sin(
+//                       radians($1)
+//                     ) *
+//                     sin(
+//                       radians(sh.latitude)
+//                     )
+//                   )
+//                 )
+//               )
+//             ) AS distance_km
+
+//           FROM shoppers sh
+
+//           WHERE
+//             sh.status = 'online'
+
+//             AND sh.latitude IS NOT NULL
+
+//             AND sh.longitude IS NOT NULL
+
+//             AND sh.latitude BETWEEN -90 AND 90
+
+//             AND sh.longitude BETWEEN -180 AND 180
+
+//           ORDER BY
+//             distance_km ASC
+//           `,
+//           [
+//             shopLatitude,
+//             shopLongitude,
+//           ]
+//         );
+
+//       const shoppers =
+//         shoppersResult.rows
+
+//           .filter(
+//             (shopper) => {
+
+//               const distance =
+//                 Number(
+//                   shopper.distance_km
+//                 );
+
+//               return (
+//                 Number.isFinite(
+//                   distance
+//                 ) &&
+//                 distance <= 10
+//               );
+
+//             }
+//           )
+
+//           .map(
+//             (shopper) => ({
+
+//               id:
+//                 shopper.id,
+
+//               name:
+//                 shopper.full_name,
+
+//               full_name:
+//                 shopper.full_name,
+
+//               mobile:
+//                 shopper.mobile,
+
+//               status:
+//                 shopper.status,
+
+//               latitude:
+//                 Number(
+//                   shopper.latitude
+//                 ),
+
+//               longitude:
+//                 Number(
+//                   shopper.longitude
+//                 ),
+
+//               distance_km:
+//                 Number(
+//                   shopper.distance_km
+//                 ),
+
+//             })
+//           );
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         orderId:
+//           order.id,
+
+//         orderStatus:
+//           order.status,
+
+//         shop: {
+
+//           id:
+//             order.shop_id,
+
+//           name:
+//             order.shop_name ||
+//             'Selected Shop',
+
+//           latitude:
+//             shopLatitude,
+
+//           longitude:
+//             shopLongitude,
+
+//         },
+
+//         shopper:
+//           acceptedShopper,
+
+//         acceptedShopper:
+//           acceptedShopper,
+
+//         assignedShopper:
+//           acceptedShopper,
+
+//         assigned_shopper:
+//           acceptedShopper,
+
+//         shoppers:
+//           shoppers,
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ GET NEARBY SHOPPERS ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to load nearby shoppers',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // CANCEL CUSTOMER ORDER
+// // ==================================================
+
+// const cancelCustomerOrder =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             id,
+//             status
+//           FROM orders
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       if (
+//         order.status !==
+//         'waiting_for_shopper'
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'This order cannot be cancelled now',
+
+//         });
+
+//       }
+
+//       const updateResult =
+//         await pool.query(
+//           `
+//           UPDATE orders
+
+//           SET
+//             status = 'cancelled',
+//             updated_at = CURRENT_TIMESTAMP
+
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+
+//           RETURNING *
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         message:
+//           'Order cancelled successfully',
+
+//         order:
+//           updateResult.rows[0],
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ CANCEL ORDER ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to cancel order',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // UPDATE REPLACEMENT STATUS
+// // ==================================================
+
+// const updateReplacementStatus =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     const client =
+//       await pool.connect();
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       const replacementId =
+//         Number(
+//           req.params.replacementId
+//         );
+
+//       const {
+//         status,
+//         decision
+//       } = req.body;
+
+//       // ==================================================
+//       // VALIDATION
+//       // ==================================================
+
+//       if (
+//         !Number.isInteger(orderId) ||
+//         !Number.isInteger(replacementId)
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order or replacement ID',
+
+//         });
+
+//       }
+
+//       const finalStatus =
+//         decision === 'accepted'
+//           ? 'accepted'
+//           : decision === 'rejected'
+//             ? 'rejected'
+//             : status === 'accepted'
+//               ? 'accepted'
+//               : status === 'rejected'
+//                 ? 'rejected'
+//                 : null;
+
+//       if (!finalStatus) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Decision must be accepted or rejected',
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // START TRANSACTION
+//       // ==================================================
+
+//       await client.query(
+//         'BEGIN'
+//       );
+
+//       // ==================================================
+//       // CHECK ORDER BELONGS TO CUSTOMER
+//       // ==================================================
+
+//       const orderResult =
+//         await client.query(
+//           `
+//           SELECT
+//             id,
+//             customer_id
+//           FROM orders
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // GET REPLACEMENT
+//       // ==================================================
+
+//       const replacementResult =
+//         await client.query(
+//           `
+//           SELECT
+//             id,
+//             order_id,
+//             original_item_id,
+//             shopper_id,
+//             option_number,
+//             photo_url,
+//             status,
+//             created_at,
+//             updated_at
+//           FROM replacement_items
+//           WHERE
+//             id = $1
+//             AND order_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             replacementId,
+//             orderId,
+//           ]
+//         );
+
+//       if (
+//         replacementResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Replacement item not found',
+
+//         });
+
+//       }
+
+//       const replacement =
+//         replacementResult.rows[0];
+
+//       // ==================================================
+//       // CHECK CURRENT STATUS
+//       // ==================================================
+
+//       if (
+//         replacement.status !==
+//         'waiting_customer'
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'This replacement has already been processed',
+
+//           status:
+//             replacement.status,
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // ACCEPT / REJECT STATUS
+//       // ==================================================
+
+//       const databaseStatus =
+//         finalStatus === 'accepted'
+//           ? 'customer_accepted'
+//           : 'customer_rejected';
+
+//       // ==================================================
+//       // UPDATE REPLACEMENT ITEM
+//       // ==================================================
+
+//       const updateReplacementResult =
+//         await client.query(
+//           `
+//           UPDATE replacement_items
+
+//           SET
+//             status = $1,
+//             updated_at = CURRENT_TIMESTAMP
+
+//           WHERE
+//             id = $2
+//             AND order_id = $3
+
+//           RETURNING
+//             id,
+//             order_id,
+//             original_item_id,
+//             shopper_id,
+//             option_number,
+//             photo_url,
+//             status,
+//             created_at,
+//             updated_at
+//           `,
+//           [
+//             databaseStatus,
+//             replacementId,
+//             orderId,
+//           ]
+//         );
+
+//       if (
+//         updateReplacementResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Replacement item could not be updated',
+
+//         });
+
+//       }
+
+//       const updatedReplacement =
+//         updateReplacementResult.rows[0];
+
+//       // ==================================================
+//       // ACCEPTED REPLACEMENT
+//       // ORIGINAL ITEM -> DONE
+//       // ==================================================
+
+//       let updatedOriginalItem =
+//         null;
+
+//       if (
+//         finalStatus === 'accepted'
+//       ) {
+
+//         const originalItemResult =
+//           await client.query(
+//             `
+//             UPDATE order_items
+
+//             SET
+//               image =
+//                 COALESCE(
+//                   $1,
+//                   image
+//                 ),
+
+//               shopping_status =
+//                 'done',
+
+//               completed_at =
+//                 CURRENT_TIMESTAMP
+
+//             WHERE
+//               id = $2
+//               AND order_id = $3
+
+//             RETURNING
+//               id,
+//               order_id,
+//               product_id,
+//               item_name,
+//               quantity,
+//               amount,
+//               unit,
+//               price,
+//               custom,
+//               details,
+//               image,
+//               voice_url,
+//               shopper_photo_url,
+//               shopping_status,
+//               found_quantity,
+//               found_weight,
+//               found_weight_unit,
+//               barcode_scanned,
+//               completed_at,
+//               created_at
+//             `,
+//             [
+//               updatedReplacement.photo_url ||
+//               null,
+
+//               updatedReplacement.original_item_id,
+
+//               orderId,
+//             ]
+//           );
+
+//         if (
+//           originalItemResult.rows.length === 0
+//         ) {
+
+//           await client.query(
+//             'ROLLBACK'
+//           );
+
+//           return res.status(404).json({
+
+//             success: false,
+
+//             message:
+//               'Original order item not found',
+
+//           });
+
+//         }
+
+//         updatedOriginalItem =
+//           originalItemResult.rows[0];
+
+//       }
+
+//       // ==================================================
+//       // COMMIT
+//       // ==================================================
+
+//       await client.query(
+//         'COMMIT'
+//       );
+
+//       // ==================================================
+//       // DEBUG
+//       // ==================================================
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       console.log(
+//         '🔄 REPLACEMENT STATUS UPDATED'
+//       );
+
+//       console.log(
+//         'CUSTOMER ID:',
+//         customerId
+//       );
+
+//       console.log(
+//         'ORDER ID:',
+//         orderId
+//       );
+
+//       console.log(
+//         'REPLACEMENT ID:',
+//         replacementId
+//       );
+
+//       console.log(
+//         'ORIGINAL ITEM ID:',
+//         replacement.original_item_id
+//       );
+
+//       console.log(
+//         'OLD REPLACEMENT STATUS:',
+//         replacement.status
+//       );
+
+//       console.log(
+//         'NEW REPLACEMENT STATUS:',
+//         updatedReplacement.status
+//       );
+
+//       console.log(
+//         'DECISION:',
+//         finalStatus
+//       );
+
+//       console.log(
+//         'ORIGINAL ORDER ITEM UPDATED:',
+//         updatedOriginalItem
+//           ? true
+//           : false
+//       );
+
+//       if (
+//         updatedOriginalItem
+//       ) {
+
+//         console.log(
+//           'ORIGINAL ITEM NEW IMAGE:',
+//           updatedOriginalItem.image
+//         );
+
+//         console.log(
+//           'ORIGINAL ITEM NEW SHOPPING STATUS:',
+//           updatedOriginalItem.shopping_status
+//         );
+
+//         console.log(
+//           'ORIGINAL ITEM COMPLETED AT:',
+//           updatedOriginalItem.completed_at
+//         );
+
+//       }
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       // ==================================================
+//       // RESPONSE
+//       // ==================================================
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         message:
+//           finalStatus === 'accepted'
+//             ? 'Replacement accepted and order item moved to DONE successfully'
+//             : 'Replacement rejected successfully',
+
+//         replacement: {
+
+//           id:
+//             updatedReplacement.id,
+
+//           orderId:
+//             updatedReplacement.order_id,
+
+//           originalItemId:
+//             updatedReplacement.original_item_id,
+
+//           shopperId:
+//             updatedReplacement.shopper_id,
+
+//           optionNumber:
+//             updatedReplacement.option_number,
+
+//           photoUrl:
+//             updatedReplacement.photo_url,
+
+//           photo_url:
+//             updatedReplacement.photo_url,
+
+//           replacementPhotoUrl:
+//             updatedReplacement.photo_url,
+
+//           replacement_photo_url:
+//             updatedReplacement.photo_url,
+
+//           status:
+//             updatedReplacement.status,
+
+//           createdAt:
+//             updatedReplacement.created_at,
+
+//           updatedAt:
+//             updatedReplacement.updated_at,
+
+//         },
+
+//         originalItem:
+//           updatedOriginalItem,
+
+//       });
+
+//     } catch (error) {
+
+//       try {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//       } catch (
+//         rollbackError
+//       ) {
+
+//         console.error(
+//           '❌ Rollback error:',
+//           rollbackError.message
+//         );
+
+//       }
+
+//       console.error(
+//         '❌ UPDATE REPLACEMENT STATUS ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to update replacement status',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     } finally {
+
+//       client.release();
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // EXPORT
+// // ==================================================
+
+// module.exports = {
+
+//   createOrder,
+
+//   getCustomerOrders,
+
+//   getCustomerOrderById,
+
+//   getNearbyShoppersForOrder,
+
+//   cancelCustomerOrder,
+
+//   updateReplacementStatus,
+
+//   uploadCustomItemMedia,
+
+// };
+
+
+
+
+
+
+
+
+
+
+// const pool = require('../config/db');
+
+// // ==================================================
+// // UPLOAD CUSTOM ITEM MEDIA
+// // ==================================================
+
+// const uploadCustomItemMedia = async (
+//   req,
+//   res
+// ) => {
+//   try {
+
+//     if (
+//       !req.files ||
+//       req.files.length === 0
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'No files uploaded',
+
+//       });
+
+//     }
+
+//     const baseUrl =
+//       `${req.protocol}://${req.get('host')}`;
+
+//     const files =
+//       req.files.map(
+//         (file) => {
+
+//           const url =
+//             `${baseUrl}/uploads/items/${file.filename}`;
+
+//           return {
+
+//             fieldName:
+//               file.fieldname,
+
+//             originalName:
+//               file.originalname,
+
+//             fileName:
+//               file.filename,
+
+//             mimeType:
+//               file.mimetype,
+
+//             size:
+//               file.size,
+
+//             url:
+//               url,
+
+//           };
+
+//         }
+//       );
+
+//     const imageExtensions = [
+//       '.jpg',
+//       '.jpeg',
+//       '.png',
+//       '.webp',
+//     ];
+
+//     const audioExtensions = [
+//       '.mp3',
+//       '.m4a',
+//       '.wav',
+//       '.aac',
+//       '.ogg',
+//       '.webm',
+//     ];
+
+//     const imageMimeTypes = [
+//       'image/jpeg',
+//       'image/jpg',
+//       'image/png',
+//       'image/webp',
+//     ];
+
+//     const audioMimeTypes = [
+//       'audio/mpeg',
+//       'audio/mp3',
+//       'audio/mp4',
+//       'audio/m4a',
+//       'audio/x-m4a',
+//       'audio/wav',
+//       'audio/x-wav',
+//       'audio/aac',
+//       'audio/ogg',
+//       'audio/webm',
+//     ];
+
+//     const imageFile =
+//       files.find(
+//         (file) => {
+
+//           const mime =
+//             (
+//               file.mimeType ||
+//               ''
+//             ).toLowerCase();
+
+//           const ext =
+//             require('path')
+//               .extname(
+//                 file.originalName ||
+//                 file.fileName ||
+//                 ''
+//               )
+//               .toLowerCase();
+
+//           return (
+//             imageMimeTypes.includes(
+//               mime
+//             ) ||
+//             imageExtensions.includes(
+//               ext
+//             )
+//           );
+
+//         }
+//       );
+
+//     const audioFile =
+//       files.find(
+//         (file) => {
+
+//           const mime =
+//             (
+//               file.mimeType ||
+//               ''
+//             ).toLowerCase();
+
+//           const ext =
+//             require('path')
+//               .extname(
+//                 file.originalName ||
+//                 file.fileName ||
+//                 ''
+//               )
+//               .toLowerCase();
+
+//           return (
+//             audioMimeTypes.includes(
+//               mime
+//             ) ||
+//             audioExtensions.includes(
+//               ext
+//             )
+//           );
+
+//         }
+//       );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📤 CUSTOM ITEM MEDIA UPLOAD'
+//     );
+
+//     console.log(
+//       'CUSTOMER ID:',
+//       req.customer?.customerId
+//     );
+
+//     console.log(
+//       'FILES:',
+//       files
+//     );
+
+//     console.log(
+//       'IMAGE:',
+//       imageFile?.url ||
+//       null
+//     );
+
+//     console.log(
+//       'VOICE:',
+//       audioFile?.url ||
+//       null
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     return res.status(200).json({
+
+//       success: true,
+
+//       message:
+//         'Files uploaded successfully',
+
+//       imageUrl:
+//         imageFile?.url ||
+//         null,
+
+//       voiceUrl:
+//         audioFile?.url ||
+//         null,
+
+//       files,
+
+//     });
+
+//   } catch (error) {
+
+//     console.error(
+//       '❌ CUSTOM ITEM MEDIA UPLOAD ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to upload custom item media',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   }
+// };
+
+
+// // ==================================================
+// // CREATE ORDER
+// // ==================================================
+
+// const createOrder = async (
+//   req,
+//   res
+// ) => {
+
+//   const client =
+//     await pool.connect();
+
+//   try {
+
+//     const customerId =
+//       req.customer.customerId;
+
+//     const {
+//       shopId,
+//       deliveryAddress,
+//       deliveryLatitude,
+//       deliveryLongitude,
+//       deliveryOption = 'fast',
+//       paymentMethod = 'cash',
+//       items = [],
+//       deliveryFee = 0,
+//       serviceFee = 0,
+//       itemsTotal = 0,
+//       totalAmount = 0,
+//     } = req.body;
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📥 CREATE ORDER REQUEST'
+//     );
+
+//     console.log(
+//       'CUSTOMER ID:',
+//       customerId
+//     );
+
+//     console.log(
+//       'SHOP ID:',
+//       shopId
+//     );
+
+//     console.log(
+//       'ITEM COUNT:',
+//       Array.isArray(items)
+//         ? items.length
+//         : 0
+//     );
+
+//     console.log(
+//       'RAW ITEMS:',
+//       JSON.stringify(
+//         items,
+//         null,
+//         2
+//       )
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     if (!shopId) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Shop ID is required',
+
+//       });
+
+//     }
+
+//     if (!deliveryAddress) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Delivery address is required',
+
+//       });
+
+//     }
+
+//     if (
+//       deliveryLatitude === undefined ||
+//       deliveryLongitude === undefined
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Delivery latitude and longitude are required',
+
+//       });
+
+//     }
+
+//     const latitude =
+//       Number(
+//         deliveryLatitude
+//       );
+
+//     const longitude =
+//       Number(
+//         deliveryLongitude
+//       );
+
+//     if (
+//       !Number.isFinite(latitude) ||
+//       !Number.isFinite(longitude)
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Valid latitude and longitude are required',
+
+//       });
+
+//     }
+
+//     if (
+//       latitude < -90 ||
+//       latitude > 90 ||
+//       longitude < -180 ||
+//       longitude > 180
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'Latitude or longitude is out of range',
+
+//       });
+
+//     }
+
+//     if (
+//       !Array.isArray(items) ||
+//       items.length === 0
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'At least one order item is required',
+
+//       });
+
+//     }
+
+//     // ==================================================
+//     // GET SHOP
+//     // ==================================================
+
+//     const shopResult =
+//       await client.query(
+//         `
+//         SELECT
+//           id,
+//           shop_name,
+//           image_url,
+//           status,
+//           latitude,
+//           longitude
+//         FROM shops
+//         WHERE id = $1
+//         `,
+//         [
+//           shopId,
+//         ]
+//       );
+
+//     if (
+//       shopResult.rows.length === 0
+//     ) {
+
+//       return res.status(404).json({
+
+//         success: false,
+
+//         message:
+//           'Shop not found',
+
+//       });
+
+//     }
+
+//     const shop =
+//       shopResult.rows[0];
+
+//     if (
+//       shop.status !==
+//       'approved'
+//     ) {
+
+//       return res.status(400).json({
+
+//         success: false,
+
+//         message:
+//           'This shop is not available',
+
+//       });
+
+//     }
+
+//     const safeItemsTotal =
+//       Number(itemsTotal) || 0;
+
+//     const safeDeliveryFee =
+//       Number(deliveryFee) || 0;
+
+//     const safeServiceFee =
+//       Number(serviceFee) || 0;
+
+//     const safeTotalAmount =
+//       Number(totalAmount) ||
+//       (
+//         safeItemsTotal +
+//         safeDeliveryFee +
+//         safeServiceFee
+//       );
+
+//     // ==================================================
+//     // CALCULATE DISTANCE
+//     // SHOP -> CUSTOMER
+//     // ==================================================
+
+//     const shopLatitude =
+//       Number(
+//         shop.latitude
+//       );
+
+//     const shopLongitude =
+//       Number(
+//         shop.longitude
+//       );
+
+//     let safeDistanceKm =
+//       null;
+
+//     if (
+//       Number.isFinite(shopLatitude) &&
+//       Number.isFinite(shopLongitude)
+//     ) {
+
+//       const earthRadiusKm =
+//         6371;
+
+//       const dLat =
+//         (
+//           (
+//             latitude -
+//             shopLatitude
+//           ) *
+//           Math.PI
+//         ) / 180;
+
+//       const dLon =
+//         (
+//           (
+//             longitude -
+//             shopLongitude
+//           ) *
+//           Math.PI
+//         ) / 180;
+
+//       const customerLatRad =
+//         (
+//           latitude *
+//           Math.PI
+//         ) / 180;
+
+//       const shopLatRad =
+//         (
+//           shopLatitude *
+//           Math.PI
+//         ) / 180;
+
+//       const a =
+//         Math.sin(
+//           dLat / 2
+//         ) *
+//           Math.sin(
+//             dLat / 2
+//           ) +
+
+//         Math.cos(
+//           shopLatRad
+//         ) *
+//           Math.cos(
+//             customerLatRad
+//           ) *
+//           Math.sin(
+//             dLon / 2
+//           ) *
+//           Math.sin(
+//             dLon / 2
+//           );
+
+//       const c =
+//         2 *
+//         Math.atan2(
+//           Math.sqrt(a),
+//           Math.sqrt(
+//             1 - a
+//           )
+//         );
+
+//       safeDistanceKm =
+//         Number(
+//           (
+//             earthRadiusKm *
+//             c
+//           ).toFixed(2)
+//         );
+
+//     }
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     console.log(
+//       '📍 SHOP LATITUDE:',
+//       shopLatitude
+//     );
+
+//     console.log(
+//       '📍 SHOP LONGITUDE:',
+//       shopLongitude
+//     );
+
+//     console.log(
+//       '📍 CUSTOMER LATITUDE:',
+//       latitude
+//     );
+
+//     console.log(
+//       '📍 CUSTOMER LONGITUDE:',
+//       longitude
+//     );
+
+//     console.log(
+//       '📏 CALCULATED DISTANCE:',
+//       safeDistanceKm,
+//       'KM'
+//     );
+
+//     console.log(
+//       '===================================='
+//     );
+
+//     await client.query(
+//       'BEGIN'
+//     );
+
+//     // ==================================================
+//     // INSERT ORDER
+//     // ==================================================
+
+//     const orderResult =
+//       await client.query(
+//         `
+//         INSERT INTO orders (
+//           customer_id,
+//           shop_id,
+//           delivery_address,
+//           delivery_latitude,
+//           delivery_longitude,
+//           delivery_option,
+//           payment_method,
+//           items_total,
+//           delivery_fee,
+//           service_fee,
+//           distance_km,
+//           total_amount,
+//           status
+//         )
+//         VALUES (
+//           $1,
+//           $2,
+//           $3,
+//           $4,
+//           $5,
+//           $6,
+//           $7,
+//           $8,
+//           $9,
+//           $10,
+//           $11,
+//           $12,
+//           $13
+//         )
+//         RETURNING *
+//         `,
+//         [
+//           customerId,
+//           shopId,
+//           deliveryAddress,
+//           latitude,
+//           longitude,
+//           deliveryOption,
+//           paymentMethod,
+//           safeItemsTotal,
+//           safeDeliveryFee,
+//           safeServiceFee,
+//           safeDistanceKm,
+//           safeTotalAmount,
+//           'waiting_for_shopper',
+//         ]
+//       );
+
+//     const order =
+//       orderResult.rows[0];
+
+//     // ==================================================
+//     // INSERT ORDER ITEMS
+//     // ==================================================
+
+//     for (
+//       const item of items
+//     ) {
+
+//       const productId =
+//         item.productId ||
+//         item.product_id ||
+//         null;
+
+//       const itemName =
+//         item.itemName ||
+//         item.item_name ||
+//         item.name ||
+//         item.productName ||
+//         'Item';
+
+//       const quantity =
+//         Number(
+//           item.quantity
+//         ) || 1;
+
+//       const amount =
+//         Number(
+//           item.amount
+//         ) || 1;
+
+//       const unit =
+//         item.unit ||
+//         item.selectedUnit ||
+//         null;
+
+//       const price =
+//         Number(
+//           item.price
+//         ) || 0;
+
+//       const custom =
+//         item.custom === true;
+
+//       const details =
+//         item.details ||
+//         null;
+
+//       const image =
+//         item.image ||
+//         item.imageUrl ||
+//         item.image_url ||
+//         item.photo ||
+//         item.photoUrl ||
+//         item.photo_url ||
+//         null;
+
+//       const voiceUrl =
+//         item.voice_url ||
+//         item.voiceUrl ||
+//         item.voice ||
+//         null;
+
+//       await client.query(
+//         `
+//         INSERT INTO order_items (
+//           order_id,
+//           product_id,
+//           item_name,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voice_url
+//         )
+//         VALUES (
+//           $1,
+//           $2,
+//           $3,
+//           $4,
+//           $5,
+//           $6,
+//           $7,
+//           $8,
+//           $9,
+//           $10,
+//           $11
+//         )
+//         `,
+//         [
+//           order.id,
+//           productId,
+//           itemName,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voiceUrl,
+//         ]
+//       );
+
+//     }
+
+//     await client.query(
+//       'COMMIT'
+//     );
+
+//     // ==================================================
+//     // GET CREATED ITEMS
+//     // ==================================================
+
+//     const createdItemsResult =
+//       await pool.query(
+//         `
+//         SELECT
+//           id,
+//           order_id,
+//           product_id,
+//           item_name,
+//           quantity,
+//           amount,
+//           unit,
+//           price,
+//           custom,
+//           details,
+//           image,
+//           voice_url,
+
+//           shopper_photo_url,
+//           shopping_status,
+//           found_quantity,
+//           found_weight,
+//           found_weight_unit,
+//           barcode_scanned,
+//           completed_at,
+
+//           created_at
+//         FROM order_items
+//         WHERE order_id = $1
+//         ORDER BY id ASC
+//         `,
+//         [
+//           order.id,
+//         ]
+//       );
+
+//     const createdItems =
+//       createdItemsResult.rows.map(
+//         (item) => ({
+
+//           ...item,
+
+//           voice_url:
+//             item.voice_url ||
+//             null,
+
+//           voiceUrl:
+//             item.voice_url ||
+//             null,
+
+//           shoppingStatus:
+//             item.shopping_status ||
+//             'pending',
+
+//           foundQuantity:
+//             item.found_quantity !== null
+//               ? Number(
+//                   item.found_quantity
+//                 )
+//               : null,
+
+//           foundWeight:
+//             item.found_weight !== null
+//               ? Number(
+//                   item.found_weight
+//                 )
+//               : null,
+
+//           foundWeightUnit:
+//             item.found_weight_unit ||
+//             null,
+
+//           barcodeScanned:
+//             item.barcode_scanned === true,
+
+//           shopperPhotoUrl:
+//             item.shopper_photo_url ||
+//             null,
+
+//           completedAt:
+//             item.completed_at ||
+//             null,
+
+//         })
+//       );
+
+//     // ==================================================
+//     // RESPONSE
+//     // ==================================================
+
+//     return res.status(201).json({
+
+//       success: true,
+
+//       message:
+//         'Order created successfully',
+
+//       order: {
+
+//         ...order,
+
+//         total:
+//           Number(
+//             order.total_amount
+//           ),
+
+//         totalAmount:
+//           Number(
+//             order.total_amount
+//           ),
+
+//         itemsTotal:
+//           Number(
+//             order.items_total
+//           ),
+
+//         deliveryFee:
+//           Number(
+//             order.delivery_fee
+//           ),
+
+//         serviceFee:
+//           Number(
+//             order.service_fee
+//           ),
+
+//         distance_km:
+//           order.distance_km !== null
+//             ? Number(
+//                 order.distance_km
+//               )
+//             : null,
+
+//         distanceKm:
+//           order.distance_km !== null
+//             ? Number(
+//                 order.distance_km
+//               )
+//             : null,
+
+//         shop: {
+
+//           id:
+//             shop.id,
+
+//           name:
+//             shop.shop_name,
+
+//           image:
+//             shop.image_url,
+
+//           latitude:
+//             Number(
+//               shop.latitude
+//             ),
+
+//           longitude:
+//             Number(
+//               shop.longitude
+//             ),
+
+//         },
+
+//         items:
+//           createdItems,
+
+//       },
+
+//     });
+
+//   } catch (error) {
+
+//     try {
+
+//       await client.query(
+//         'ROLLBACK'
+//       );
+
+//     } catch (
+//       rollbackError
+//     ) {
+
+//       console.error(
+//         '❌ Rollback error:',
+//         rollbackError.message
+//       );
+
+//     }
+
+//     console.error(
+//       '❌ CREATE ORDER ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to create order',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   } finally {
+
+//     client.release();
+
+//   }
+
+// };
+
+
+// // ==================================================
+// // GET CUSTOMER ORDERS
+// // ==================================================
+
+// const getCustomerOrders = async (
+//   req,
+//   res
+// ) => {
+
+//   try {
+
+//     const customerId =
+//       req.customer.customerId;
+
+//     const ordersResult =
+//       await pool.query(
+//         `
+//         SELECT
+//           o.id,
+//           o.customer_id,
+//           o.shop_id,
+//           o.shopper_id,
+
+//           o.delivery_address,
+//           o.delivery_latitude,
+//           o.delivery_longitude,
+
+//           o.delivery_option,
+//           o.payment_method,
+
+//           o.items_total,
+//           o.delivery_fee,
+//           o.service_fee,
+//           o.distance_km,
+//           o.total_amount,
+
+//           o.status,
+
+//           o.created_at,
+//           o.updated_at,
+
+//           s.shop_name,
+//           s.image_url AS shop_image,
+
+//           s.latitude AS shop_latitude,
+//           s.longitude AS shop_longitude,
+
+//           sh.id AS shopper_id_joined,
+//           sh.full_name AS shopper_name,
+//           sh.mobile AS shopper_mobile,
+//           sh.status AS shopper_status,
+//           sh.latitude AS shopper_latitude,
+//           sh.longitude AS shopper_longitude
+
+//         FROM orders o
+
+//         LEFT JOIN shops s
+//           ON s.id = o.shop_id
+
+//         LEFT JOIN shoppers sh
+//           ON sh.id = o.shopper_id
+
+//         WHERE o.customer_id = $1
+
+//         ORDER BY
+//           o.created_at DESC
+//         `,
+//         [
+//           customerId,
+//         ]
+//       );
+
+//     const formattedOrders =
+//       await Promise.all(
+//         ordersResult.rows.map(
+//           async (order) => {
+
+//             const itemsResult =
+//               await pool.query(
+//                 `
+//                 SELECT
+//                   oi.id,
+//                   oi.order_id,
+//                   oi.product_id,
+//                   oi.item_name,
+//                   oi.quantity,
+//                   oi.amount,
+//                   oi.unit,
+//                   oi.price,
+//                   oi.custom,
+//                   oi.details,
+//                   oi.image,
+//                   oi.voice_url,
+//                   oi.shopper_photo_url,
+//                   oi.shopping_status,
+//                   oi.found_quantity,
+//                   oi.found_weight,
+//                   oi.found_weight_unit,
+//                   oi.barcode_scanned,
+//                   oi.completed_at,
+//                   oi.created_at,
+
+//                   COALESCE(
+//                     (
+//                       SELECT json_agg(
+//                         json_build_object(
+//                           'id', ri.id,
+//                           'order_id', ri.order_id,
+//                           'original_item_id', ri.original_item_id,
+//                           'shopper_id', ri.shopper_id,
+//                           'option_number', ri.option_number,
+
+//                           'photo_url', ri.photo_url,
+//                           'photoUrl', ri.photo_url,
+
+//                           'replacement_photo_url', ri.photo_url,
+//                           'replacementPhotoUrl', ri.photo_url,
+
+//                           'status', ri.status,
+
+//                           'created_at', ri.created_at,
+//                           'updated_at', ri.updated_at
+//                         )
+//                         ORDER BY
+//                           ri.option_number ASC
+//                       )
+//                       FROM replacement_items ri
+//                       WHERE
+//                         ri.order_id = oi.order_id
+//                         AND ri.original_item_id = oi.id
+//                     ),
+//                     '[]'::json
+//                   ) AS replacement_items
+
+//                 FROM order_items oi
+
+//                 WHERE oi.order_id = $1
+
+//                 ORDER BY
+//                   oi.id ASC
+//                 `,
+//                 [
+//                   order.id,
+//                 ]
+//               );
+
+//             const items =
+//               itemsResult.rows.map(
+//                 (item) => ({
+
+//                   ...item,
+
+//                   image:
+//                     item.image ||
+//                     null,
+
+//                   voice_url:
+//                     item.voice_url ||
+//                     null,
+
+//                   voiceUrl:
+//                     item.voice_url ||
+//                     null,
+
+//                   replacement_items:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   replacementItems:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   replacements:
+//                     Array.isArray(
+//                       item.replacement_items
+//                     )
+//                       ? item.replacement_items
+//                       : [],
+
+//                   shopping_status:
+//                     item.shopping_status ||
+//                     'pending',
+
+//                   shoppingStatus:
+//                     item.shopping_status ||
+//                     'pending',
+
+//                   found_quantity:
+//                     item.found_quantity !== null
+//                       ? Number(
+//                           item.found_quantity
+//                         )
+//                       : null,
+
+//                   foundQuantity:
+//                     item.found_quantity !== null
+//                       ? Number(
+//                           item.found_quantity
+//                         )
+//                       : null,
+
+//                   found_weight:
+//                     item.found_weight !== null
+//                       ? Number(
+//                           item.found_weight
+//                         )
+//                       : null,
+
+//                   foundWeight:
+//                     item.found_weight !== null
+//                       ? Number(
+//                           item.found_weight
+//                         )
+//                       : null,
+
+//                   found_weight_unit:
+//                     item.found_weight_unit ||
+//                     null,
+
+//                   foundWeightUnit:
+//                     item.found_weight_unit ||
+//                     null,
+
+//                   barcode_scanned:
+//                     item.barcode_scanned === true,
+
+//                   barcodeScanned:
+//                     item.barcode_scanned === true,
+
+//                   shopper_photo_url:
+//                     item.shopper_photo_url ||
+//                     null,
+
+//                   shopperPhotoUrl:
+//                     item.shopper_photo_url ||
+//                     null,
+
+//                   completed_at:
+//                     item.completed_at ||
+//                     null,
+
+//                   completedAt:
+//                     item.completed_at ||
+//                     null,
+
+//                 })
+//               );
+
+//             const totalAmount =
+//               Number(
+//                 order.total_amount
+//               ) || 0;
+
+//             const itemsTotal =
+//               Number(
+//                 order.items_total
+//               ) || 0;
+
+//             const deliveryFee =
+//               Number(
+//                 order.delivery_fee
+//               ) || 0;
+
+//             const serviceFee =
+//               Number(
+//                 order.service_fee
+//               ) || 0;
+
+//             const distanceKm =
+//               order.distance_km !== null
+//                 ? Number(
+//                     order.distance_km
+//                   )
+//                 : null;
+
+//             const shopper =
+//               order.shopper_id
+//                 ? {
+
+//                     id:
+//                       Number(
+//                         order.shopper_id
+//                       ),
+
+//                     name:
+//                       order.shopper_name ||
+//                       'Shopper',
+
+//                     full_name:
+//                       order.shopper_name ||
+//                       'Shopper',
+
+//                     mobile:
+//                       order.shopper_mobile ||
+//                       null,
+
+//                     status:
+//                       order.shopper_status ||
+//                       null,
+
+//                     latitude:
+//                       Number(
+//                         order.shopper_latitude
+//                       ),
+
+//                     longitude:
+//                       Number(
+//                         order.shopper_longitude
+//                       ),
+
+//                   }
+//                 : null;
+
+//             return {
+
+//               id:
+//                 order.id,
+
+//               customer_id:
+//                 order.customer_id,
+
+//               shop_id:
+//                 order.shop_id,
+
+//               shopper_id:
+//                 order.shopper_id
+//                   ? Number(
+//                       order.shopper_id
+//                     )
+//                   : null,
+
+//               delivery_address:
+//                 order.delivery_address,
+
+//               delivery_latitude:
+//                 Number(
+//                   order.delivery_latitude
+//                 ),
+
+//               delivery_longitude:
+//                 Number(
+//                   order.delivery_longitude
+//                 ),
+
+//               delivery_option:
+//                 order.delivery_option,
+
+//               payment_method:
+//                 order.payment_method,
+
+//               items_total:
+//                 itemsTotal,
+
+//               delivery_fee:
+//                 deliveryFee,
+
+//               service_fee:
+//                 serviceFee,
+
+//               distance_km:
+//                 distanceKm,
+
+//               distanceKm:
+//                 distanceKm,
+
+//               total_amount:
+//                 totalAmount,
+
+//               total:
+//                 totalAmount,
+
+//               totalAmount:
+//                 totalAmount,
+
+//               itemsTotal:
+//                 itemsTotal,
+
+//               deliveryFee:
+//                 deliveryFee,
+
+//               serviceFee:
+//                 serviceFee,
+
+//               status:
+//                 order.status,
+
+//               created_at:
+//                 order.created_at,
+
+//               updated_at:
+//                 order.updated_at,
+
+//               shop: {
+
+//                 id:
+//                   order.shop_id,
+
+//                 name:
+//                   order.shop_name ||
+//                   'Selected Shop',
+
+//                 shop_name:
+//                   order.shop_name ||
+//                   'Selected Shop',
+
+//                 image:
+//                   order.shop_image ||
+//                   null,
+
+//                 image_url:
+//                   order.shop_image ||
+//                   null,
+
+//                 latitude:
+//                   Number(
+//                     order.shop_latitude
+//                   ),
+
+//                 longitude:
+//                   Number(
+//                     order.shop_longitude
+//                   ),
+
+//               },
+
+//               shopper:
+//                 shopper,
+
+//               assignedShopper:
+//                 shopper,
+
+//               assigned_shopper:
+//                 shopper,
+
+//               items:
+//                 items,
+
+//               shoppingList:
+//                 items,
+
+//               orderItems:
+//                 items,
+
+//             };
+
+//           }
+//         )
+//       );
+
+//     return res.status(200).json({
+
+//       success: true,
+
+//       orders:
+//         formattedOrders,
+
+//     });
+
+//   } catch (error) {
+
+//     console.error(
+//       '❌ GET CUSTOMER ORDERS ERROR:',
+//       error
+//     );
+
+//     return res.status(500).json({
+
+//       success: false,
+
+//       message:
+//         'Failed to load customer orders',
+
+//       error:
+//         error.message,
+
+//     });
+
+//   }
+
+// };
+
+
+// // ==================================================
+// // GET CUSTOMER ORDER BY ID
+// // ==================================================
+
+// const getCustomerOrderById =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             o.*,
+
+//             s.shop_name,
+//             s.image_url AS shop_image,
+
+//             s.latitude AS shop_latitude,
+//             s.longitude AS shop_longitude,
+
+//             sh.id AS shopper_id_joined,
+//             sh.full_name AS shopper_name,
+//             sh.mobile AS shopper_mobile,
+//             sh.status AS shopper_status,
+//             sh.latitude AS shopper_latitude,
+//             sh.longitude AS shopper_longitude
+
+//           FROM orders o
+
+//           LEFT JOIN shops s
+//             ON s.id = o.shop_id
+
+//           LEFT JOIN shoppers sh
+//             ON sh.id = o.shopper_id
+
+//           WHERE
+//             o.id = $1
+//             AND o.customer_id = $2
+
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       const itemsResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             oi.id,
+//             oi.order_id,
+//             oi.product_id,
+//             oi.item_name,
+//             oi.quantity,
+//             oi.amount,
+//             oi.unit,
+//             oi.price,
+//             oi.custom,
+//             oi.details,
+//             oi.image,
+//             oi.voice_url,
+//             oi.shopper_photo_url,
+//             oi.shopping_status,
+//             oi.found_quantity,
+//             oi.found_weight,
+//             oi.found_weight_unit,
+//             oi.barcode_scanned,
+//             oi.completed_at,
+//             oi.created_at,
+
+//             COALESCE(
+//               (
+//                 SELECT json_agg(
+//                   json_build_object(
+//                     'id', ri.id,
+//                     'order_id', ri.order_id,
+//                     'original_item_id', ri.original_item_id,
+//                     'shopper_id', ri.shopper_id,
+//                     'option_number', ri.option_number,
+
+//                     'photo_url', ri.photo_url,
+//                     'photoUrl', ri.photo_url,
+
+//                     'replacement_photo_url', ri.photo_url,
+//                     'replacementPhotoUrl', ri.photo_url,
+
+//                     'status', ri.status,
+
+//                     'created_at', ri.created_at,
+//                     'updated_at', ri.updated_at
+//                   )
+//                   ORDER BY
+//                     ri.option_number ASC
+//                 )
+//                 FROM replacement_items ri
+//                 WHERE
+//                   ri.order_id = oi.order_id
+//                   AND ri.original_item_id = oi.id
+//               ),
+//               '[]'::json
+//             ) AS replacement_items
+
+//           FROM order_items oi
+
+//           WHERE oi.order_id = $1
+
+//           ORDER BY oi.id ASC
+//           `,
+//           [
+//             orderId,
+//           ]
+//         );
+
+//       const items =
+//         itemsResult.rows.map(
+//           (item) => ({
+
+//             ...item,
+
+//             image:
+//               item.image ||
+//               null,
+
+//             voice_url:
+//               item.voice_url ||
+//               null,
+
+//             voiceUrl:
+//               item.voice_url ||
+//               null,
+
+//             replacement_items:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             replacementItems:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             replacements:
+//               Array.isArray(
+//                 item.replacement_items
+//               )
+//                 ? item.replacement_items
+//                 : [],
+
+//             shopping_status:
+//               item.shopping_status ||
+//               'pending',
+
+//             shoppingStatus:
+//               item.shopping_status ||
+//               'pending',
+
+//             found_quantity:
+//               item.found_quantity !== null
+//                 ? Number(
+//                     item.found_quantity
+//                   )
+//                 : null,
+
+//             foundQuantity:
+//               item.found_quantity !== null
+//                 ? Number(
+//                     item.found_quantity
+//                   )
+//                 : null,
+
+//             found_weight:
+//               item.found_weight !== null
+//                 ? Number(
+//                     item.found_weight
+//                   )
+//                 : null,
+
+//             foundWeight:
+//               item.found_weight !== null
+//                 ? Number(
+//                     item.found_weight
+//                   )
+//                 : null,
+
+//             found_weight_unit:
+//               item.found_weight_unit ||
+//               null,
+
+//             foundWeightUnit:
+//               item.found_weight_unit ||
+//               null,
+
+//             barcode_scanned:
+//               item.barcode_scanned === true,
+
+//             barcodeScanned:
+//               item.barcode_scanned === true,
+
+//             shopper_photo_url:
+//               item.shopper_photo_url ||
+//               null,
+
+//             shopperPhotoUrl:
+//               item.shopper_photo_url ||
+//               null,
+
+//             completed_at:
+//               item.completed_at ||
+//               null,
+
+//             completedAt:
+//               item.completed_at ||
+//               null,
+
+//           })
+//         );
+
+//       const totalAmount =
+//         Number(
+//           order.total_amount
+//         ) || 0;
+
+//       const itemsTotal =
+//         Number(
+//           order.items_total
+//         ) || 0;
+
+//       const deliveryFee =
+//         Number(
+//           order.delivery_fee
+//         ) || 0;
+
+//       const serviceFee =
+//         Number(
+//           order.service_fee
+//         ) || 0;
+
+//       const distanceKm =
+//         order.distance_km !== null
+//           ? Number(
+//               order.distance_km
+//             )
+//           : null;
+
+//       const shopper =
+//         order.shopper_id
+//           ? {
+
+//               id:
+//                 Number(
+//                   order.shopper_id
+//                 ),
+
+//               name:
+//                 order.shopper_name ||
+//                 'Shopper',
+
+//               full_name:
+//                 order.shopper_name ||
+//                 'Shopper',
+
+//               mobile:
+//                 order.shopper_mobile ||
+//                 null,
+
+//               status:
+//                 order.shopper_status ||
+//                 null,
+
+//               latitude:
+//                 Number(
+//                   order.shopper_latitude
+//                 ),
+
+//               longitude:
+//                 Number(
+//                   order.shopper_longitude
+//                 ),
+
+//             }
+//           : null;
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         order: {
+
+//           ...order,
+
+//           delivery_latitude:
+//             Number(
+//               order.delivery_latitude
+//             ),
+
+//           delivery_longitude:
+//             Number(
+//               order.delivery_longitude
+//             ),
+
+//           items_total:
+//             itemsTotal,
+
+//           delivery_fee:
+//             deliveryFee,
+
+//           service_fee:
+//             serviceFee,
+
+//           distance_km:
+//             distanceKm,
+
+//           distanceKm:
+//             distanceKm,
+
+//           total_amount:
+//             totalAmount,
+
+//           total:
+//             totalAmount,
+
+//           totalAmount:
+//             totalAmount,
+
+//           itemsTotal:
+//             itemsTotal,
+
+//           deliveryFee:
+//             deliveryFee,
+
+//           serviceFee:
+//             serviceFee,
+
+//           shop: {
+
+//             id:
+//               order.shop_id,
+
+//             name:
+//               order.shop_name ||
+//               'Selected Shop',
+
+//             shop_name:
+//               order.shop_name ||
+//               'Selected Shop',
+
+//             image:
+//               order.shop_image ||
+//               null,
+
+//             image_url:
+//               order.shop_image ||
+//               null,
+
+//             latitude:
+//               Number(
+//                 order.shop_latitude
+//               ),
+
+//             longitude:
+//               Number(
+//                 order.shop_longitude
+//               ),
+
+//           },
+
+//           shopper:
+//             shopper,
+
+//           assignedShopper:
+//             shopper,
+
+//           assigned_shopper:
+//             shopper,
+
+//           items:
+//             items,
+
+//           shoppingList:
+//             items,
+
+//           orderItems:
+//             items,
+
+//         },
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ GET CUSTOMER ORDER ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to load order',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // GET NEARBY ONLINE SHOPPERS FOR ORDER
+// // ==================================================
+
+// const getNearbyShoppersForOrder =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+
+//             o.id,
+//             o.customer_id,
+//             o.shop_id,
+//             o.status,
+//             o.shopper_id,
+
+//             s.shop_name,
+
+//             s.latitude AS shop_latitude,
+//             s.longitude AS shop_longitude
+
+//           FROM orders o
+
+//           LEFT JOIN shops s
+//             ON s.id = o.shop_id
+
+//           WHERE
+//             o.id = $1
+//             AND o.customer_id = $2
+
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       let acceptedShopper =
+//         null;
+
+//       if (
+//         order.shopper_id
+//       ) {
+
+//         const acceptedShopperResult =
+//           await pool.query(
+//             `
+//             SELECT
+//               id,
+//               full_name,
+//               mobile,
+//               status,
+//               latitude,
+//               longitude
+//             FROM shoppers
+//             WHERE id = $1
+//             LIMIT 1
+//             `,
+//             [
+//               order.shopper_id,
+//             ]
+//           );
+
+//         if (
+//           acceptedShopperResult.rows.length > 0
+//         ) {
+
+//           const shopper =
+//             acceptedShopperResult.rows[0];
+
+//           acceptedShopper = {
+
+//             id:
+//               Number(
+//                 shopper.id
+//               ),
+
+//             name:
+//               shopper.full_name ||
+//               'Shopper',
+
+//             full_name:
+//               shopper.full_name ||
+//               'Shopper',
+
+//             mobile:
+//               shopper.mobile ||
+//               null,
+
+//             status:
+//               shopper.status ||
+//               null,
+
+//             latitude:
+//               Number(
+//                 shopper.latitude
+//               ),
+
+//             longitude:
+//               Number(
+//                 shopper.longitude
+//               ),
+
+//           };
+
+//         }
+
+//       }
+
+//       const shopLatitude =
+//         Number(
+//           order.shop_latitude
+//         );
+
+//       const shopLongitude =
+//         Number(
+//           order.shop_longitude
+//         );
+
+//       if (
+//         !Number.isFinite(
+//           shopLatitude
+//         ) ||
+//         !Number.isFinite(
+//           shopLongitude
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Shop location is not available',
+
+//         });
+
+//       }
+
+//       const shoppersResult =
+//         await pool.query(
+//           `
+//           SELECT
+
+//             sh.id,
+//             sh.full_name,
+//             sh.mobile,
+//             sh.status,
+//             sh.latitude,
+//             sh.longitude,
+
+//             (
+//               6371 *
+//               acos(
+//                 LEAST(
+//                   1,
+//                   GREATEST(
+//                     -1,
+//                     cos(
+//                       radians($1)
+//                     ) *
+//                     cos(
+//                       radians(sh.latitude)
+//                     ) *
+//                     cos(
+//                       radians(sh.longitude) -
+//                       radians($2)
+//                     ) +
+//                     sin(
+//                       radians($1)
+//                     ) *
+//                     sin(
+//                       radians(sh.latitude)
+//                     )
+//                   )
+//                 )
+//               )
+//             ) AS distance_km
+
+//           FROM shoppers sh
+
+//           WHERE
+//             sh.status = 'online'
+
+//             AND sh.latitude IS NOT NULL
+
+//             AND sh.longitude IS NOT NULL
+
+//             AND sh.latitude BETWEEN -90 AND 90
+
+//             AND sh.longitude BETWEEN -180 AND 180
+
+//           ORDER BY
+//             distance_km ASC
+//           `,
+//           [
+//             shopLatitude,
+//             shopLongitude,
+//           ]
+//         );
+
+//       const shoppers =
+//         shoppersResult.rows
+
+//           .filter(
+//             (shopper) => {
+
+//               const distance =
+//                 Number(
+//                   shopper.distance_km
+//                 );
+
+//               return (
+//                 Number.isFinite(
+//                   distance
+//                 ) &&
+//                 distance <= 10
+//               );
+
+//             }
+//           )
+
+//           .map(
+//             (shopper) => ({
+
+//               id:
+//                 shopper.id,
+
+//               name:
+//                 shopper.full_name,
+
+//               full_name:
+//                 shopper.full_name,
+
+//               mobile:
+//                 shopper.mobile,
+
+//               status:
+//                 shopper.status,
+
+//               latitude:
+//                 Number(
+//                   shopper.latitude
+//                 ),
+
+//               longitude:
+//                 Number(
+//                   shopper.longitude
+//                 ),
+
+//               distance_km:
+//                 Number(
+//                   shopper.distance_km
+//                 ),
+
+//             })
+//           );
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         orderId:
+//           order.id,
+
+//         orderStatus:
+//           order.status,
+
+//         shop: {
+
+//           id:
+//             order.shop_id,
+
+//           name:
+//             order.shop_name ||
+//             'Selected Shop',
+
+//           latitude:
+//             shopLatitude,
+
+//           longitude:
+//             shopLongitude,
+
+//         },
+
+//         shopper:
+//           acceptedShopper,
+
+//         acceptedShopper:
+//           acceptedShopper,
+
+//         assignedShopper:
+//           acceptedShopper,
+
+//         assigned_shopper:
+//           acceptedShopper,
+
+//         shoppers:
+//           shoppers,
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ GET NEARBY SHOPPERS ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to load nearby shoppers',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // CANCEL CUSTOMER ORDER
+// // ==================================================
+
+// const cancelCustomerOrder =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       if (
+//         !Number.isInteger(
+//           orderId
+//         )
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order ID',
+
+//         });
+
+//       }
+
+//       const orderResult =
+//         await pool.query(
+//           `
+//           SELECT
+//             id,
+//             status
+//           FROM orders
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       const order =
+//         orderResult.rows[0];
+
+//       if (
+//         order.status !==
+//         'waiting_for_shopper'
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'This order cannot be cancelled now',
+
+//         });
+
+//       }
+
+//       const updateResult =
+//         await pool.query(
+//           `
+//           UPDATE orders
+
+//           SET
+//             status = 'cancelled',
+//             updated_at = CURRENT_TIMESTAMP
+
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+
+//           RETURNING *
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         message:
+//           'Order cancelled successfully',
+
+//         order:
+//           updateResult.rows[0],
+
+//       });
+
+//     } catch (error) {
+
+//       console.error(
+//         '❌ CANCEL ORDER ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to cancel order',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // UPDATE REPLACEMENT STATUS
+// // ==================================================
+
+// const updateReplacementStatus =
+//   async (
+//     req,
+//     res
+//   ) => {
+
+//     const client =
+//       await pool.connect();
+
+//     try {
+
+//       const customerId =
+//         req.customer.customerId;
+
+//       const orderId =
+//         Number(
+//           req.params.orderId
+//         );
+
+//       const replacementId =
+//         Number(
+//           req.params.replacementId
+//         );
+
+//       const {
+//         status,
+//         decision
+//       } = req.body;
+
+//       // ==================================================
+//       // VALIDATION
+//       // ==================================================
+
+//       if (
+//         !Number.isInteger(orderId) ||
+//         !Number.isInteger(replacementId)
+//       ) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Invalid order or replacement ID',
+
+//         });
+
+//       }
+
+//       const finalStatus =
+//         decision === 'accepted'
+//           ? 'accepted'
+//           : decision === 'rejected'
+//             ? 'rejected'
+//             : status === 'accepted'
+//               ? 'accepted'
+//               : status === 'rejected'
+//                 ? 'rejected'
+//                 : null;
+
+//       if (!finalStatus) {
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'Decision must be accepted or rejected',
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // START TRANSACTION
+//       // ==================================================
+
+//       await client.query(
+//         'BEGIN'
+//       );
+
+//       // ==================================================
+//       // CHECK ORDER BELONGS TO CUSTOMER
+//       // ==================================================
+
+//       const orderResult =
+//         await client.query(
+//           `
+//           SELECT
+//             id,
+//             customer_id
+//           FROM orders
+//           WHERE
+//             id = $1
+//             AND customer_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             orderId,
+//             customerId,
+//           ]
+//         );
+
+//       if (
+//         orderResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Order not found',
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // GET REPLACEMENT
+//       // ==================================================
+
+//       const replacementResult =
+//         await client.query(
+//           `
+//           SELECT
+//             id,
+//             order_id,
+//             original_item_id,
+//             shopper_id,
+//             option_number,
+//             photo_url,
+//             status,
+//             created_at,
+//             updated_at
+//           FROM replacement_items
+//           WHERE
+//             id = $1
+//             AND order_id = $2
+//           LIMIT 1
+//           `,
+//           [
+//             replacementId,
+//             orderId,
+//           ]
+//         );
+
+//       if (
+//         replacementResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Replacement item not found',
+
+//         });
+
+//       }
+
+//       const replacement =
+//         replacementResult.rows[0];
+
+//       // ==================================================
+//       // CHECK CURRENT STATUS
+//       // ==================================================
+
+//       if (
+//         replacement.status !==
+//         'waiting_customer'
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(400).json({
+
+//           success: false,
+
+//           message:
+//             'This replacement has already been processed',
+
+//           status:
+//             replacement.status,
+
+//         });
+
+//       }
+
+//       // ==================================================
+//       // ACCEPT / REJECT STATUS
+//       // ==================================================
+
+//       const databaseStatus =
+//         finalStatus === 'accepted'
+//           ? 'customer_accepted'
+//           : 'customer_rejected';
+
+//       // ==================================================
+//       // UPDATE REPLACEMENT ITEM
+//       // ==================================================
+
+//       const updateReplacementResult =
+//         await client.query(
+//           `
+//           UPDATE replacement_items
+
+//           SET
+//             status = $1,
+//             updated_at = CURRENT_TIMESTAMP
+
+//           WHERE
+//             id = $2
+//             AND order_id = $3
+
+//           RETURNING
+//             id,
+//             order_id,
+//             original_item_id,
+//             shopper_id,
+//             option_number,
+//             photo_url,
+//             status,
+//             created_at,
+//             updated_at
+//           `,
+//           [
+//             databaseStatus,
+//             replacementId,
+//             orderId,
+//           ]
+//         );
+
+//       if (
+//         updateReplacementResult.rows.length === 0
+//       ) {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//         return res.status(404).json({
+
+//           success: false,
+
+//           message:
+//             'Replacement item could not be updated',
+
+//         });
+
+//       }
+
+//       const updatedReplacement =
+//         updateReplacementResult.rows[0];
+
+//       // ==================================================
+//       // ACCEPTED REPLACEMENT
+//       // ORIGINAL ITEM -> DONE
+//       //
+//       // IMPORTANT:
+//       // DO NOT CHANGE order_items.image HERE.
+//       //
+//       // order_items.image = ORIGINAL PRODUCT IMAGE
+//       // replacement_items.photo_url = REPLACEMENT PHOTO
+//       // order_items.shopper_photo_url = SHOPPER PHOTO
+//       // ==================================================
+
+//       let updatedOriginalItem =
+//         null;
+
+//       if (
+//         finalStatus === 'accepted'
+//       ) {
+
+//         const originalItemResult =
+//           await client.query(
+//             `
+//             UPDATE order_items
+
+//             SET
+//               shopping_status =
+//                 'done',
+
+//               completed_at =
+//                 CURRENT_TIMESTAMP
+
+//             WHERE
+//               id = $1
+//               AND order_id = $2
+
+//             RETURNING
+//               id,
+//               order_id,
+//               product_id,
+//               item_name,
+//               quantity,
+//               amount,
+//               unit,
+//               price,
+//               custom,
+//               details,
+//               image,
+//               voice_url,
+//               shopper_photo_url,
+//               shopping_status,
+//               found_quantity,
+//               found_weight,
+//               found_weight_unit,
+//               barcode_scanned,
+//               completed_at,
+//               created_at
+//             `,
+//             [
+//               updatedReplacement.original_item_id,
+
+//               orderId,
+//             ]
+//           );
+
+//         if (
+//           originalItemResult.rows.length === 0
+//         ) {
+
+//           await client.query(
+//             'ROLLBACK'
+//           );
+
+//           return res.status(404).json({
+
+//             success: false,
+
+//             message:
+//               'Original order item not found',
+
+//           });
+
+//         }
+
+//         updatedOriginalItem =
+//           originalItemResult.rows[0];
+
+//       }
+
+//       // ==================================================
+//       // COMMIT
+//       // ==================================================
+
+//       await client.query(
+//         'COMMIT'
+//       );
+
+//       // ==================================================
+//       // DEBUG
+//       // ==================================================
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       console.log(
+//         '🔄 REPLACEMENT STATUS UPDATED'
+//       );
+
+//       console.log(
+//         'CUSTOMER ID:',
+//         customerId
+//       );
+
+//       console.log(
+//         'ORDER ID:',
+//         orderId
+//       );
+
+//       console.log(
+//         'REPLACEMENT ID:',
+//         replacementId
+//       );
+
+//       console.log(
+//         'ORIGINAL ITEM ID:',
+//         replacement.original_item_id
+//       );
+
+//       console.log(
+//         'OLD REPLACEMENT STATUS:',
+//         replacement.status
+//       );
+
+//       console.log(
+//         'NEW REPLACEMENT STATUS:',
+//         updatedReplacement.status
+//       );
+
+//       console.log(
+//         'DECISION:',
+//         finalStatus
+//       );
+
+//       console.log(
+//         'ORIGINAL ORDER ITEM UPDATED:',
+//         updatedOriginalItem
+//           ? true
+//           : false
+//       );
+
+//       if (
+//         updatedOriginalItem
+//       ) {
+
+//         console.log(
+//           'ORIGINAL ITEM IMAGE (UNCHANGED):',
+//           updatedOriginalItem.image
+//         );
+
+//         console.log(
+//           'REPLACEMENT PHOTO:',
+//           updatedReplacement.photo_url
+//         );
+
+//         console.log(
+//           'SHOPPER PHOTO:',
+//           updatedOriginalItem.shopper_photo_url
+//         );
+
+//         console.log(
+//           'ORIGINAL ITEM SHOPPING STATUS:',
+//           updatedOriginalItem.shopping_status
+//         );
+
+//         console.log(
+//           'ORIGINAL ITEM COMPLETED AT:',
+//           updatedOriginalItem.completed_at
+//         );
+
+//       }
+
+//       console.log(
+//         '===================================='
+//       );
+
+//       // ==================================================
+//       // RESPONSE
+//       // ==================================================
+
+//       return res.status(200).json({
+
+//         success: true,
+
+//         message:
+//           finalStatus === 'accepted'
+//             ? 'Replacement accepted and order item moved to DONE successfully'
+//             : 'Replacement rejected successfully',
+
+//         replacement: {
+
+//           id:
+//             updatedReplacement.id,
+
+//           orderId:
+//             updatedReplacement.order_id,
+
+//           originalItemId:
+//             updatedReplacement.original_item_id,
+
+//           shopperId:
+//             updatedReplacement.shopper_id,
+
+//           optionNumber:
+//             updatedReplacement.option_number,
+
+//           photoUrl:
+//             updatedReplacement.photo_url,
+
+//           photo_url:
+//             updatedReplacement.photo_url,
+
+//           replacementPhotoUrl:
+//             updatedReplacement.photo_url,
+
+//           replacement_photo_url:
+//             updatedReplacement.photo_url,
+
+//           status:
+//             updatedReplacement.status,
+
+//           createdAt:
+//             updatedReplacement.created_at,
+
+//           updatedAt:
+//             updatedReplacement.updated_at,
+
+//         },
+
+//         originalItem:
+//           updatedOriginalItem,
+
+//       });
+
+//     } catch (error) {
+
+//       try {
+
+//         await client.query(
+//           'ROLLBACK'
+//         );
+
+//       } catch (
+//         rollbackError
+//       ) {
+
+//         console.error(
+//           '❌ Rollback error:',
+//           rollbackError.message
+//         );
+
+//       }
+
+//       console.error(
+//         '❌ UPDATE REPLACEMENT STATUS ERROR:',
+//         error
+//       );
+
+//       return res.status(500).json({
+
+//         success: false,
+
+//         message:
+//           'Failed to update replacement status',
+
+//         error:
+//           error.message,
+
+//       });
+
+//     } finally {
+
+//       client.release();
+
+//     }
+
+//   };
+
+
+// // ==================================================
+// // EXPORT
+// // ==================================================
+
+// module.exports = {
+
+//   createOrder,
+
+//   getCustomerOrders,
+
+//   getCustomerOrderById,
+
+//   getNearbyShoppersForOrder,
+
+//   cancelCustomerOrder,
+
+//   updateReplacementStatus,
+
+//   uploadCustomItemMedia,
+
+// };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 const pool = require('../config/db');
 
 // ==================================================
@@ -22420,10 +40576,6 @@ const uploadCustomItemMedia = async (
 
         }
       );
-
-    // ==================================================
-    // FIND IMAGE
-    // ==================================================
 
     const imageExtensions = [
       '.jpg',
@@ -22492,10 +40644,6 @@ const uploadCustomItemMedia = async (
         }
       );
 
-    // ==================================================
-    // FIND AUDIO
-    // ==================================================
-
     const audioFile =
       files.find(
         (file) => {
@@ -22526,10 +40674,6 @@ const uploadCustomItemMedia = async (
 
         }
       );
-
-    // ==================================================
-    // DEBUG
-    // ==================================================
 
     console.log(
       '===================================='
@@ -22564,10 +40708,6 @@ const uploadCustomItemMedia = async (
     console.log(
       '===================================='
     );
-
-    // ==================================================
-    // RESPONSE
-    // ==================================================
 
     return res.status(200).json({
 
@@ -22642,10 +40782,6 @@ const createOrder = async (
       totalAmount = 0,
     } = req.body;
 
-    // ==================================================
-    // DEBUG - RAW ORDER ITEMS FROM CUSTOMER APP
-    // ==================================================
-
     console.log(
       '===================================='
     );
@@ -22683,10 +40819,6 @@ const createOrder = async (
     console.log(
       '===================================='
     );
-
-    // ==================================================
-    // VALIDATION
-    // ==================================================
 
     if (!shopId) {
 
@@ -22791,7 +40923,7 @@ const createOrder = async (
     }
 
     // ==================================================
-    // CHECK SHOP
+    // GET SHOP
     // ==================================================
 
     const shopResult =
@@ -22846,10 +40978,6 @@ const createOrder = async (
 
     }
 
-    // ==================================================
-    // TOTALS
-    // ==================================================
-
     const safeItemsTotal =
       Number(itemsTotal) || 0;
 
@@ -22868,15 +40996,141 @@ const createOrder = async (
       );
 
     // ==================================================
-    // START TRANSACTION
+    // CALCULATE DISTANCE
+    // SHOP -> CUSTOMER
     // ==================================================
+
+    const shopLatitude =
+      Number(
+        shop.latitude
+      );
+
+    const shopLongitude =
+      Number(
+        shop.longitude
+      );
+
+    let safeDistanceKm =
+      null;
+
+    if (
+      Number.isFinite(shopLatitude) &&
+      Number.isFinite(shopLongitude)
+    ) {
+
+      const earthRadiusKm =
+        6371;
+
+      const dLat =
+        (
+          (
+            latitude -
+            shopLatitude
+          ) *
+          Math.PI
+        ) / 180;
+
+      const dLon =
+        (
+          (
+            longitude -
+            shopLongitude
+          ) *
+          Math.PI
+        ) / 180;
+
+      const customerLatRad =
+        (
+          latitude *
+          Math.PI
+        ) / 180;
+
+      const shopLatRad =
+        (
+          shopLatitude *
+          Math.PI
+        ) / 180;
+
+      const a =
+        Math.sin(
+          dLat / 2
+        ) *
+          Math.sin(
+            dLat / 2
+          ) +
+
+        Math.cos(
+          shopLatRad
+        ) *
+          Math.cos(
+            customerLatRad
+          ) *
+          Math.sin(
+            dLon / 2
+          ) *
+          Math.sin(
+            dLon / 2
+          );
+
+      const c =
+        2 *
+        Math.atan2(
+          Math.sqrt(a),
+          Math.sqrt(
+            1 - a
+          )
+        );
+
+      safeDistanceKm =
+        Number(
+          (
+            earthRadiusKm *
+            c
+          ).toFixed(2)
+        );
+
+    }
+
+    console.log(
+      '===================================='
+    );
+
+    console.log(
+      '📍 SHOP LATITUDE:',
+      shopLatitude
+    );
+
+    console.log(
+      '📍 SHOP LONGITUDE:',
+      shopLongitude
+    );
+
+    console.log(
+      '📍 CUSTOMER LATITUDE:',
+      latitude
+    );
+
+    console.log(
+      '📍 CUSTOMER LONGITUDE:',
+      longitude
+    );
+
+    console.log(
+      '📏 CALCULATED DISTANCE:',
+      safeDistanceKm,
+      'KM'
+    );
+
+    console.log(
+      '===================================='
+    );
 
     await client.query(
       'BEGIN'
     );
 
     // ==================================================
-    // CREATE ORDER
+    // INSERT ORDER
     // ==================================================
 
     const orderResult =
@@ -22893,6 +41147,7 @@ const createOrder = async (
           items_total,
           delivery_fee,
           service_fee,
+          distance_km,
           total_amount,
           status
         )
@@ -22908,7 +41163,8 @@ const createOrder = async (
           $9,
           $10,
           $11,
-          $12
+          $12,
+          $13
         )
         RETURNING *
         `,
@@ -22923,6 +41179,7 @@ const createOrder = async (
           safeItemsTotal,
           safeDeliveryFee,
           safeServiceFee,
+          safeDistanceKm,
           safeTotalAmount,
           'waiting_for_shopper',
         ]
@@ -22932,67 +41189,12 @@ const createOrder = async (
       orderResult.rows[0];
 
     // ==================================================
-    // CREATE ORDER ITEMS
+    // INSERT ORDER ITEMS
     // ==================================================
 
     for (
       const item of items
     ) {
-
-      // ==================================================
-      // DEBUG - EACH RAW ITEM
-      // ==================================================
-
-      console.log(
-        '===================================='
-      );
-
-      console.log(
-        '🛒 PROCESSING ORDER ITEM'
-      );
-
-      console.log(
-        'ORDER ID:',
-        order.id
-      );
-
-      console.log(
-        'RAW ITEM:',
-        JSON.stringify(
-          item,
-          null,
-          2
-        )
-      );
-
-      console.log(
-        'CUSTOM:',
-        item?.custom
-      );
-
-      console.log(
-        'PHOTO:',
-        item?.photo
-      );
-
-      console.log(
-        'IMAGE:',
-        item?.image
-      );
-
-      console.log(
-        'VOICE:',
-        item?.voice
-      );
-
-      console.log(
-        'VOICE URL:',
-        item?.voice_url
-      );
-
-      console.log(
-        '===================================='
-      );
 
       const productId =
         item.productId ||
@@ -23033,10 +41235,6 @@ const createOrder = async (
         item.details ||
         null;
 
-      // ==================================================
-      // CUSTOMER ITEM PHOTO
-      // ==================================================
-
       const image =
         item.image ||
         item.imageUrl ||
@@ -23046,139 +41244,57 @@ const createOrder = async (
         item.photo_url ||
         null;
 
-      // ==================================================
-      // CUSTOMER VOICE NOTE
-      // ==================================================
-
       const voiceUrl =
         item.voice_url ||
         item.voiceUrl ||
         item.voice ||
         null;
 
-      // ==================================================
-      // DEBUG - FINAL MEDIA VALUES
-      // ==================================================
-
-      console.log(
-        '===================================='
-      );
-
-      console.log(
-        '💾 FINAL ORDER ITEM VALUES'
-      );
-
-      console.log(
-        'ORDER ID:',
-        order.id
-      );
-
-      console.log(
-        'ITEM NAME:',
-        itemName
-      );
-
-      console.log(
-        'CUSTOM:',
-        custom
-      );
-
-      console.log(
-        'IMAGE TO DB:',
-        image
-      );
-
-      console.log(
-        'VOICE TO DB:',
-        voiceUrl
-      );
-
-      console.log(
-        '===================================='
-      );
-
-      // ==================================================
-      // INSERT ORDER ITEM
-      // ==================================================
-
-      const insertItemResult =
-        await client.query(
-          `
-          INSERT INTO order_items (
-            order_id,
-            product_id,
-            item_name,
-            quantity,
-            amount,
-            unit,
-            price,
-            custom,
-            details,
-            image,
-            voice_url
-          )
-          VALUES (
-            $1,
-            $2,
-            $3,
-            $4,
-            $5,
-            $6,
-            $7,
-            $8,
-            $9,
-            $10,
-            $11
-          )
-          RETURNING
-            id,
-            order_id,
-            item_name,
-            custom,
-            image,
-            voice_url
-          `,
-          [
-            order.id,
-            productId,
-            itemName,
-            quantity,
-            amount,
-            unit,
-            price,
-            custom,
-            details,
-            image,
-            voiceUrl,
-          ]
-        );
-
-      // ==================================================
-      // DEBUG - DATABASE INSERT RESULT
-      // ==================================================
-
-      console.log(
-        '===================================='
-      );
-
-      console.log(
-        '✅ ORDER ITEM INSERTED'
-      );
-
-      console.log(
-        'DATABASE RESULT:',
-        insertItemResult.rows[0]
-      );
-
-      console.log(
-        '===================================='
+      await client.query(
+        `
+        INSERT INTO order_items (
+          order_id,
+          product_id,
+          item_name,
+          quantity,
+          amount,
+          unit,
+          price,
+          custom,
+          details,
+          image,
+          voice_url
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11
+        )
+        `,
+        [
+          order.id,
+          productId,
+          itemName,
+          quantity,
+          amount,
+          unit,
+          price,
+          custom,
+          details,
+          image,
+          voiceUrl,
+        ]
       );
 
     }
-
-    // ==================================================
-    // COMMIT
-    // ==================================================
 
     await client.query(
       'COMMIT'
@@ -23229,10 +41345,6 @@ const createOrder = async (
 
           ...item,
 
-          // ==================================================
-          // CUSTOMER VOICE NOTE
-          // ==================================================
-
           voice_url:
             item.voice_url ||
             null,
@@ -23241,17 +41353,9 @@ const createOrder = async (
             item.voice_url ||
             null,
 
-          // ==================================================
-          // SHOPPING STATUS
-          // ==================================================
-
           shoppingStatus:
             item.shopping_status ||
             'pending',
-
-          // ==================================================
-          // FOUND QUANTITY
-          // ==================================================
 
           foundQuantity:
             item.found_quantity !== null
@@ -23260,10 +41364,6 @@ const createOrder = async (
                 )
               : null,
 
-          // ==================================================
-          // FOUND WEIGHT
-          // ==================================================
-
           foundWeight:
             item.found_weight !== null
               ? Number(
@@ -23271,32 +41371,16 @@ const createOrder = async (
                 )
               : null,
 
-          // ==================================================
-          // WEIGHT UNIT
-          // ==================================================
-
           foundWeightUnit:
             item.found_weight_unit ||
             null,
 
-          // ==================================================
-          // BARCODE
-          // ==================================================
-
           barcodeScanned:
             item.barcode_scanned === true,
-
-          // ==================================================
-          // SHOPPER PHOTO
-          // ==================================================
 
           shopperPhotoUrl:
             item.shopper_photo_url ||
             null,
-
-          // ==================================================
-          // COMPLETED TIME
-          // ==================================================
 
           completedAt:
             item.completed_at ||
@@ -23308,72 +41392,6 @@ const createOrder = async (
     // ==================================================
     // RESPONSE
     // ==================================================
-
-    console.log(
-      '===================================='
-    );
-
-    console.log(
-      '✅ ORDER CREATED'
-    );
-
-    console.log(
-      'ORDER ID:',
-      order.id
-    );
-
-    console.log(
-      'CUSTOMER ID:',
-      customerId
-    );
-
-    console.log(
-      'SHOP ID:',
-      shopId
-    );
-
-    console.log(
-      'ITEM COUNT:',
-      createdItems.length
-    );
-
-    console.log(
-      'ITEMS TOTAL:',
-      order.items_total
-    );
-
-    console.log(
-      'TOTAL AMOUNT:',
-      order.total_amount
-    );
-
-    console.log(
-      'CUSTOM ITEM MEDIA:',
-      createdItems.map(
-        (item) => ({
-
-          id:
-            item.id,
-
-          name:
-            item.item_name,
-
-          custom:
-            item.custom,
-
-          image:
-            item.image,
-
-          voice_url:
-            item.voice_url,
-
-        })
-      )
-    );
-
-    console.log(
-      '===================================='
-    );
 
     return res.status(201).json({
 
@@ -23410,6 +41428,20 @@ const createOrder = async (
           Number(
             order.service_fee
           ),
+
+        distance_km:
+          order.distance_km !== null
+            ? Number(
+                order.distance_km
+              )
+            : null,
+
+        distanceKm:
+          order.distance_km !== null
+            ? Number(
+                order.distance_km
+              )
+            : null,
 
         shop: {
 
@@ -23519,6 +41551,7 @@ const getCustomerOrders = async (
           o.items_total,
           o.delivery_fee,
           o.service_fee,
+          o.distance_km,
           o.total_amount,
 
           o.status,
@@ -23568,21 +41601,16 @@ const getCustomerOrders = async (
                 SELECT
                   oi.id,
                   oi.order_id,
-
                   oi.product_id,
-
                   oi.item_name,
-
                   oi.quantity,
                   oi.amount,
                   oi.unit,
                   oi.price,
-
                   oi.custom,
                   oi.details,
                   oi.image,
                   oi.voice_url,
-
                   oi.shopper_photo_url,
                   oi.shopping_status,
                   oi.found_quantity,
@@ -23590,7 +41618,6 @@ const getCustomerOrders = async (
                   oi.found_weight_unit,
                   oi.barcode_scanned,
                   oi.completed_at,
-
                   oi.created_at,
 
                   COALESCE(
@@ -23765,6 +41792,13 @@ const getCustomerOrders = async (
                 order.service_fee
               ) || 0;
 
+            const distanceKm =
+              order.distance_km !== null
+                ? Number(
+                    order.distance_km
+                  )
+                : null;
+
             const shopper =
               order.shopper_id
                 ? {
@@ -23849,6 +41883,12 @@ const getCustomerOrders = async (
               service_fee:
                 serviceFee,
 
+              distance_km:
+                distanceKm,
+
+              distanceKm:
+                distanceKm,
+
               total_amount:
                 totalAmount,
 
@@ -23932,139 +41972,6 @@ const getCustomerOrders = async (
           }
         )
       );
-
-    // ==================================================
-    // DEBUG
-    // ==================================================
-
-    console.log(
-      '===================================='
-    );
-
-    console.log(
-      '📦 CUSTOMER ORDERS'
-    );
-
-    console.log(
-      'CUSTOMER ID:',
-      customerId
-    );
-
-    formattedOrders.forEach(
-      (order) => {
-
-        console.log(
-          `ORDER #${order.id}`
-        );
-
-        console.log(
-          'ITEM COUNT:',
-          order.items.length
-        );
-
-        console.log(
-          'ITEMS TOTAL:',
-          order.items_total
-        );
-
-        console.log(
-          'TOTAL:',
-          order.total_amount
-        );
-
-        console.log(
-          'SHOPPER ID:',
-          order.shopper_id
-        );
-
-        console.log(
-          'SHOPPER:',
-          order.shopper?.name ||
-          'Not assigned'
-        );
-
-        console.log(
-          'CUSTOM ITEM MEDIA:',
-          order.items.map(
-            (item) => ({
-
-              id:
-                item.id,
-
-              name:
-                item.item_name,
-
-              custom:
-                item.custom,
-
-              image:
-                item.image,
-
-              voice_url:
-                item.voice_url,
-
-            })
-          )
-        );
-
-        console.log(
-          'SHOPPING STATUS:',
-          order.items.map(
-            (item) => ({
-
-              id:
-                item.id,
-
-              name:
-                item.item_name,
-
-              status:
-                item.shopping_status,
-
-            })
-          )
-        );
-
-        console.log(
-          'REPLACEMENTS:',
-          order.items.map(
-            (item) => ({
-
-              itemId:
-                item.id,
-
-              itemName:
-                item.item_name,
-
-              replacements:
-                item.replacement_items?.map(
-                  (replacement) => ({
-
-                    id:
-                      replacement.id,
-
-                    photo:
-                      replacement.photo_url,
-
-                    status:
-                      replacement.status,
-
-                    option:
-                      replacement.option_number,
-
-                  })
-                ) || [],
-
-            })
-          )
-        );
-
-      }
-    );
-
-    console.log(
-      '===================================='
-    );
 
     return res.status(200).json({
 
@@ -24199,21 +42106,16 @@ const getCustomerOrderById =
           SELECT
             oi.id,
             oi.order_id,
-
             oi.product_id,
-
             oi.item_name,
-
             oi.quantity,
             oi.amount,
             oi.unit,
             oi.price,
-
             oi.custom,
             oi.details,
             oi.image,
             oi.voice_url,
-
             oi.shopper_photo_url,
             oi.shopping_status,
             oi.found_quantity,
@@ -24221,7 +42123,6 @@ const getCustomerOrderById =
             oi.found_weight_unit,
             oi.barcode_scanned,
             oi.completed_at,
-
             oi.created_at,
 
             COALESCE(
@@ -24395,6 +42296,13 @@ const getCustomerOrderById =
           order.service_fee
         ) || 0;
 
+      const distanceKm =
+        order.distance_km !== null
+          ? Number(
+              order.distance_km
+            )
+          : null;
+
       const shopper =
         order.shopper_id
           ? {
@@ -24433,141 +42341,6 @@ const getCustomerOrderById =
             }
           : null;
 
-      // ==================================================
-      // DEBUG
-      // ==================================================
-
-      console.log(
-        '===================================='
-      );
-
-      console.log(
-        '📦 CUSTOMER ORDER'
-      );
-
-      console.log(
-        'ORDER ID:',
-        order.id
-      );
-
-      console.log(
-        'STATUS:',
-        order.status
-      );
-
-      console.log(
-        'SHOPPER ID:',
-        order.shopper_id
-      );
-
-      console.log(
-        'SHOPPER:',
-        shopper?.name ||
-        'Not assigned'
-      );
-
-      console.log(
-        'SHOPPER LOCATION:',
-        shopper
-          ? `${shopper.latitude}, ${shopper.longitude}`
-          : 'Not available'
-      );
-
-      console.log(
-        'CUSTOM ITEM MEDIA:',
-        items.map(
-          (item) => ({
-
-            id:
-              item.id,
-
-            name:
-              item.item_name,
-
-            custom:
-              item.custom,
-
-            image:
-              item.image,
-
-            voice_url:
-              item.voice_url,
-
-          })
-        )
-      );
-
-      console.log(
-        'ITEM SHOPPING STATUS:',
-        items.map(
-          (item) => ({
-
-            id:
-              item.id,
-
-            name:
-              item.item_name,
-
-            status:
-              item.shopping_status,
-
-            foundQuantity:
-              item.found_quantity,
-
-            foundWeight:
-              item.found_weight,
-
-            photo:
-              item.shopper_photo_url,
-
-            completedAt:
-              item.completed_at,
-
-          })
-        )
-      );
-
-      console.log(
-        'REPLACEMENT ITEMS:',
-        items.map(
-          (item) => ({
-
-            itemId:
-              item.id,
-
-            itemName:
-              item.item_name,
-
-            replacements:
-              item.replacement_items?.map(
-                (replacement) => ({
-
-                  id:
-                    replacement.id,
-
-                  originalItemId:
-                    replacement.original_item_id,
-
-                  option:
-                    replacement.option_number,
-
-                  photo:
-                    replacement.photo_url,
-
-                  status:
-                    replacement.status,
-
-                })
-              ) || [],
-
-          })
-        )
-      );
-
-      console.log(
-        '===================================='
-      );
-
       return res.status(200).json({
 
         success: true,
@@ -24594,6 +42367,12 @@ const getCustomerOrderById =
 
           service_fee:
             serviceFee,
+
+          distance_km:
+            distanceKm,
+
+          distanceKm:
+            distanceKm,
 
           total_amount:
             totalAmount,
@@ -24888,15 +42667,10 @@ const getNearbyShoppersForOrder =
           SELECT
 
             sh.id,
-
             sh.full_name,
-
             sh.mobile,
-
             sh.status,
-
             sh.latitude,
-
             sh.longitude,
 
             (
@@ -25005,95 +42779,6 @@ const getNearbyShoppersForOrder =
 
             })
           );
-
-      // ==================================================
-      // DEBUG
-      // ==================================================
-
-      console.log(
-        '===================================='
-      );
-
-      console.log(
-        '📍 NEARBY ONLINE SHOPPERS'
-      );
-
-      console.log(
-        'ORDER ID:',
-        orderId
-      );
-
-      console.log(
-        'SHOP ID:',
-        order.shop_id
-      );
-
-      console.log(
-        'SHOP:',
-        order.shop_name
-      );
-
-      console.log(
-        'SHOP LOCATION:',
-        shopLatitude,
-        shopLongitude
-      );
-
-      console.log(
-        'ORDER STATUS:',
-        order.status
-      );
-
-      console.log(
-        'ACCEPTED SHOPPER:',
-        acceptedShopper
-      );
-
-      console.log(
-        'ONLINE SHOPPERS:',
-        shoppers.length
-      );
-
-      shoppers.forEach(
-        (shopper) => {
-
-          console.log(
-            '--------------------------------'
-          );
-
-          console.log(
-            'SHOPPER ID:',
-            shopper.id
-          );
-
-          console.log(
-            'SHOPPER NAME:',
-            shopper.name
-          );
-
-          console.log(
-            'STATUS:',
-            shopper.status
-          );
-
-          console.log(
-            'LOCATION:',
-            shopper.latitude,
-            shopper.longitude
-          );
-
-          console.log(
-            'DISTANCE:',
-            shopper.distance_km,
-            'KM'
-          );
-
-        }
-      );
-
-      console.log(
-        '===================================='
-      );
 
       return res.status(200).json({
 
@@ -25319,6 +43004,9 @@ const updateReplacementStatus =
     res
   ) => {
 
+    const client =
+      await pool.connect();
+
     try {
 
       const customerId =
@@ -25338,6 +43026,10 @@ const updateReplacementStatus =
         status,
         decision
       } = req.body;
+
+      // ==================================================
+      // VALIDATION
+      // ==================================================
 
       if (
         !Number.isInteger(orderId) ||
@@ -25379,8 +43071,20 @@ const updateReplacementStatus =
 
       }
 
+      // ==================================================
+      // START TRANSACTION
+      // ==================================================
+
+      await client.query(
+        'BEGIN'
+      );
+
+      // ==================================================
+      // CHECK ORDER BELONGS TO CUSTOMER
+      // ==================================================
+
       const orderResult =
-        await pool.query(
+        await client.query(
           `
           SELECT
             id,
@@ -25401,6 +43105,10 @@ const updateReplacementStatus =
         orderResult.rows.length === 0
       ) {
 
+        await client.query(
+          'ROLLBACK'
+        );
+
         return res.status(404).json({
 
           success: false,
@@ -25412,8 +43120,12 @@ const updateReplacementStatus =
 
       }
 
+      // ==================================================
+      // GET REPLACEMENT
+      // ==================================================
+
       const replacementResult =
-        await pool.query(
+        await client.query(
           `
           SELECT
             id,
@@ -25441,6 +43153,10 @@ const updateReplacementStatus =
         replacementResult.rows.length === 0
       ) {
 
+        await client.query(
+          'ROLLBACK'
+        );
+
         return res.status(404).json({
 
           success: false,
@@ -25455,10 +43171,18 @@ const updateReplacementStatus =
       const replacement =
         replacementResult.rows[0];
 
+      // ==================================================
+      // CHECK CURRENT STATUS
+      // ==================================================
+
       if (
         replacement.status !==
         'waiting_customer'
       ) {
+
+        await client.query(
+          'ROLLBACK'
+        );
 
         return res.status(400).json({
 
@@ -25474,13 +43198,21 @@ const updateReplacementStatus =
 
       }
 
+      // ==================================================
+      // ACCEPT / REJECT DATABASE STATUS
+      // ==================================================
+
       const databaseStatus =
         finalStatus === 'accepted'
           ? 'customer_accepted'
           : 'customer_rejected';
 
-      const updateResult =
-        await pool.query(
+      // ==================================================
+      // UPDATE REPLACEMENT ITEM
+      // ==================================================
+
+      const updateReplacementResult =
+        await client.query(
           `
           UPDATE replacement_items
 
@@ -25511,8 +43243,12 @@ const updateReplacementStatus =
         );
 
       if (
-        updateResult.rows.length === 0
+        updateReplacementResult.rows.length === 0
       ) {
+
+        await client.query(
+          'ROLLBACK'
+        );
 
         return res.status(404).json({
 
@@ -25526,7 +43262,105 @@ const updateReplacementStatus =
       }
 
       const updatedReplacement =
-        updateResult.rows[0];
+        updateReplacementResult.rows[0];
+
+      // ==================================================
+      // ACCEPTED / REJECTED
+      // ORIGINAL ITEM -> DONE
+      //
+      // ACCEPTED:
+      //   replacement_items.status
+      //   = customer_accepted
+      //
+      // REJECTED:
+      //   replacement_items.status
+      //   = customer_rejected
+      //
+      // BOTH:
+      //   order_items.shopping_status
+      //   = done
+      //
+      // IMPORTANT:
+      // DO NOT CHANGE order_items.image
+      // ==================================================
+
+      const originalItemResult =
+        await client.query(
+          `
+          UPDATE order_items
+
+          SET
+            shopping_status =
+              'done',
+
+            completed_at =
+              CURRENT_TIMESTAMP
+
+          WHERE
+            id = $1
+            AND order_id = $2
+
+          RETURNING
+            id,
+            order_id,
+            product_id,
+            item_name,
+            quantity,
+            amount,
+            unit,
+            price,
+            custom,
+            details,
+            image,
+            voice_url,
+            shopper_photo_url,
+            shopping_status,
+            found_quantity,
+            found_weight,
+            found_weight_unit,
+            barcode_scanned,
+            completed_at,
+            created_at
+          `,
+          [
+            updatedReplacement.original_item_id,
+            orderId,
+          ]
+        );
+
+      if (
+        originalItemResult.rows.length === 0
+      ) {
+
+        await client.query(
+          'ROLLBACK'
+        );
+
+        return res.status(404).json({
+
+          success: false,
+
+          message:
+            'Original order item not found',
+
+        });
+
+      }
+
+      const updatedOriginalItem =
+        originalItemResult.rows[0];
+
+      // ==================================================
+      // COMMIT
+      // ==================================================
+
+      await client.query(
+        'COMMIT'
+      );
+
+      // ==================================================
+      // DEBUG
+      // ==================================================
 
       console.log(
         '===================================='
@@ -25557,18 +43391,37 @@ const updateReplacementStatus =
       );
 
       console.log(
-        'OLD STATUS:',
+        'OLD REPLACEMENT STATUS:',
         replacement.status
       );
 
       console.log(
-        'NEW STATUS:',
+        'NEW REPLACEMENT STATUS:',
         updatedReplacement.status
+      );
+
+      console.log(
+        'DECISION:',
+        finalStatus
+      );
+
+      console.log(
+        'ORIGINAL ITEM SHOPPING STATUS:',
+        updatedOriginalItem.shopping_status
+      );
+
+      console.log(
+        'ORIGINAL ITEM COMPLETED AT:',
+        updatedOriginalItem.completed_at
       );
 
       console.log(
         '===================================='
       );
+
+      // ==================================================
+      // RESPONSE
+      // ==================================================
 
       return res.status(200).json({
 
@@ -25576,8 +43429,8 @@ const updateReplacementStatus =
 
         message:
           finalStatus === 'accepted'
-            ? 'Replacement accepted successfully'
-            : 'Replacement rejected successfully',
+            ? 'Replacement accepted and order item moved to DONE successfully'
+            : 'Replacement rejected and order item moved to DONE successfully',
 
         replacement: {
 
@@ -25619,9 +43472,64 @@ const updateReplacementStatus =
 
         },
 
+        originalItem: {
+
+          ...updatedOriginalItem,
+
+          shoppingStatus:
+            updatedOriginalItem.shopping_status,
+
+          foundQuantity:
+            updatedOriginalItem.found_quantity !== null
+              ? Number(
+                  updatedOriginalItem.found_quantity
+                )
+              : null,
+
+          foundWeight:
+            updatedOriginalItem.found_weight !== null
+              ? Number(
+                  updatedOriginalItem.found_weight
+                )
+              : null,
+
+          foundWeightUnit:
+            updatedOriginalItem.found_weight_unit ||
+            null,
+
+          barcodeScanned:
+            updatedOriginalItem.barcode_scanned === true,
+
+          shopperPhotoUrl:
+            updatedOriginalItem.shopper_photo_url ||
+            null,
+
+          completedAt:
+            updatedOriginalItem.completed_at ||
+            null,
+
+        },
+
       });
 
     } catch (error) {
+
+      try {
+
+        await client.query(
+          'ROLLBACK'
+        );
+
+      } catch (
+        rollbackError
+      ) {
+
+        console.error(
+          '❌ Rollback error:',
+          rollbackError.message
+        );
+
+      }
 
       console.error(
         '❌ UPDATE REPLACEMENT STATUS ERROR:',
@@ -25639,6 +43547,10 @@ const updateReplacementStatus =
           error.message,
 
       });
+
+    } finally {
+
+      client.release();
 
     }
 
