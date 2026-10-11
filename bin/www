@@ -1,342 +1,292 @@
-// #!/usr/bin/env node
-
-// /**
-//  * Module dependencies.
-//  */
-
-// var app = require('../app');
-// var debug = require('debug')('customer-backend:server');
-// var http = require('http');
-
-// /**
-//  * Get port from environment and store in Express.
-//  */
-
-// var port = normalizePort(process.env.PORT || '3000');
-// app.set('port', port);
-
-// /**
-//  * Create HTTP server.
-//  */
-
-// var server = http.createServer(app);
-
-// /**
-//  * Listen on provided port, on all network interfaces.
-//  */
-
-// server.listen(port);
-// server.on('error', onError);
-// server.on('listening', onListening);
-
-// /**
-//  * Normalize a port into a number, string, or false.
-//  */
-
-// function normalizePort(val) {
-//   var port = parseInt(val, 10);
-
-//   if (isNaN(port)) {
-//     // named pipe
-//     return val;
-//   }
-
-//   if (port >= 0) {
-//     // port number
-//     return port;
-//   }
-
-//   return false;
-// }
-
-// /**
-//  * Event listener for HTTP server "error" event.
-//  */
-
-// function onError(error) {
-//   if (error.syscall !== 'listen') {
-//     throw error;
-//   }
-
-//   var bind = typeof port === 'string'
-//     ? 'Pipe ' + port
-//     : 'Port ' + port;
-
-//   // handle specific listen errors with friendly messages
-//   switch (error.code) {
-//     case 'EACCES':
-//       console.error(bind + ' requires elevated privileges');
-//       process.exit(1);
-//       break;
-//     case 'EADDRINUSE':
-//       console.error(bind + ' is already in use');
-//       process.exit(1);
-//       break;
-//     default:
-//       throw error;
-//   }
-// }
-
-// /**
-//  * Event listener for HTTP server "listening" event.
-//  */
-
-// function onListening() {
-//   var addr = server.address();
-//   var bind = typeof addr === 'string'
-//     ? 'pipe ' + addr
-//     : 'port ' + addr.port;
-//   debug('Listening on ' + bind);
-// }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 /**
-
-* Module dependencies.
-  */
+ * Module dependencies.
+ */
 
 var app = require('../app');
 var debug = require('debug')('customer-backend:server');
 var http = require('http');
 var { Server } = require('socket.io');
+var jwt = require('jsonwebtoken');
 
 /**
-
-* Get port from environment and store in Express.
-  */
+ * Get port from environment.
+ * Ensure PORT=5000 in your .env file if your API uses port 5000.
+ */
 
 var port = normalizePort(
-process.env.PORT || '3000'
+  process.env.PORT || '5000'
 );
 
-app.set(
-'port',
-port
-);
+app.set('port', port);
 
 /**
-
-* Create HTTP server.
-  */
+ * Create HTTP server.
+ */
 
 var server = http.createServer(app);
 
 /**
+ * Create Socket.IO server.
+ */
 
-* Create Socket.IO server.
-  */
-
-var io = new Server(
-server,
-{
-cors: {
-origin: '*',
-methods: [
-'GET',
-'POST',
-'PUT',
-'PATCH',
-'DELETE'
-]
-}
-}
-);
+var io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: [
+      'GET',
+      'POST',
+      'PUT',
+      'PATCH',
+      'DELETE',
+      'OPTIONS',
+    ],
+  },
+});
 
 /**
+ * Make Socket.IO available to Express controllers.
+ */
 
-* Make Socket.IO available
-* throughout the Express app.
-  */
-
-app.set(
-'io',
-io
-);
+app.set('io', io);
 
 /**
+ * Socket.IO authentication.
+ */
 
-* Socket.IO connection.
-  */
+io.use(function (socket, next) {
+  try {
+    const token = socket.handshake.auth?.token;
 
-io.on(
-'connection',
-function(socket) {
+    if (!token) {
+      console.error('❌ SOCKET AUTH: Token missing');
+      return next(new Error('Authentication token is required'));
+    }
 
+    if (!process.env.JWT_SECRET) {
+      console.error('❌ SOCKET AUTH: JWT_SECRET is not configured');
+      return next(new Error('Server authentication is not configured'));
+    }
 
-console.log(
-  '🔌 Socket connected:',
-  socket.id
-);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-socket.on(
-  'disconnect',
-  function() {
+    const customerId =
+      decoded?.customerId ??
+      decoded?.customer_id ??
+      null;
 
-    console.log(
-      '🔌 Socket disconnected:',
-      socket.id
-    );
+    const shopperId =
+      decoded?.shopperId ??
+      decoded?.shopper_id ??
+      null;
 
+    if (customerId !== null && customerId !== undefined) {
+      socket.customer = decoded;
+      socket.userType = 'customer';
+    } else if (shopperId !== null && shopperId !== undefined) {
+      socket.shopper = decoded;
+      socket.userType = 'shopper';
+    } else {
+      console.error('❌ SOCKET AUTH: Customer/Shopper ID missing');
+      return next(new Error('Invalid socket user'));
+    }
+
+    console.log('🔐 SOCKET AUTH SUCCESS:', {
+      type: socket.userType,
+      customerId,
+      shopperId,
+    });
+
+    return next();
+  } catch (error) {
+    console.error('❌ SOCKET JWT ERROR:', error.message);
+    return next(new Error('Invalid or expired token'));
   }
-);
-
-
-}
-);
+});
 
 /**
+ * Socket.IO connections and rooms.
+ */
 
-* Listen on provided port,
-* on all network interfaces.
-  */
+io.on('connection', function (socket) {
+  const customerId =
+    socket.customer?.customerId ??
+    socket.customer?.customer_id ??
+    socket.customer?.id ??
+    null;
+
+  const shopperId =
+    socket.shopper?.shopperId ??
+    socket.shopper?.shopper_id ??
+    socket.shopper?.id ??
+    null;
+
+  console.log('🔌 Socket connected:', socket.id);
+
+  console.log('👤 Socket user:', {
+    type: socket.userType,
+    customerId,
+    shopperId,
+  });
+
+  /**
+   * Automatically join customer room.
+   */
+
+  if (socket.userType === 'customer' && customerId != null) {
+    const room = `customer:${customerId}`;
+    socket.join(room);
+    console.log('🏠 Joined customer room:', room);
+  }
+
+  /**
+   * Automatically join shopper room.
+   */
+
+  if (socket.userType === 'shopper' && shopperId != null) {
+    const room = `shopper:${shopperId}`;
+    socket.join(room);
+    console.log('🏠 Joined shopper room:', room);
+  }
+
+  /**
+   * Join order room.
+   */
+
+  socket.on('join-order', function (orderId) {
+    const numericOrderId = Number(orderId);
+
+    if (!Number.isSafeInteger(numericOrderId) || numericOrderId <= 0) {
+      console.warn('⚠️ SOCKET: Invalid order ID:', orderId);
+      return;
+    }
+
+    const room = `order:${numericOrderId}`;
+
+    socket.join(room);
+
+    console.log('📦 Joined order room:', {
+      socketId: socket.id,
+      room,
+      userType: socket.userType,
+    });
+  });
+
+  /**
+   * Leave order room.
+   */
+
+  socket.on('leave-order', function (orderId) {
+    const numericOrderId = Number(orderId);
+
+    if (!Number.isSafeInteger(numericOrderId) || numericOrderId <= 0) {
+      console.warn('⚠️ SOCKET: Invalid order ID:', orderId);
+      return;
+    }
+
+    const room = `order:${numericOrderId}`;
+
+    socket.leave(room);
+
+    console.log('🚪 Left order room:', {
+      socketId: socket.id,
+      room,
+    });
+  });
+
+  /**
+   * Connection errors.
+   */
+
+  socket.on('error', function (error) {
+    console.error('❌ SOCKET CLIENT ERROR:', error.message);
+  });
+
+  /**
+   * Disconnect.
+   */
+
+  socket.on('disconnect', function (reason) {
+    console.log('🔌 Socket disconnected:', {
+      socketId: socket.id,
+      reason,
+      userType: socket.userType,
+      customerId,
+      shopperId,
+    });
+  });
+});
+
+/**
+ * Start HTTP and Socket.IO server.
+ */
 
 server.listen(port);
 
-server.on(
-'error',
-onError
-);
+server.on('error', onError);
 
-server.on(
-'listening',
-onListening
-);
+server.on('listening', onListening);
 
 /**
-
-* Normalize a port into a number,
-* string, or false.
-  */
+ * Normalize a port.
+ */
 
 function normalizePort(val) {
+  var parsedPort = parseInt(val, 10);
 
-var port =
-parseInt(
-val,
-10
-);
+  if (isNaN(parsedPort)) {
+    return val;
+  }
 
-if (isNaN(port)) {
+  if (parsedPort >= 0) {
+    return parsedPort;
+  }
 
-
-return val;
-
-
-}
-
-if (port >= 0) {
-
-return port;
-
-}
-
-return false;
-
+  return false;
 }
 
 /**
-
-* Event listener for HTTP server
-* "error" event.
-  */
+ * Server error handler.
+ */
 
 function onError(error) {
+  if (error.syscall !== 'listen') {
+    throw error;
+  }
 
-if (
-error.syscall !== 'listen'
-) {
+  var bind =
+    typeof port === 'string'
+      ? 'Pipe ' + port
+      : 'Port ' + port;
 
+  if (error.code === 'EACCES') {
+    console.error(bind + ' requires elevated privileges');
+    process.exit(1);
+  }
 
-throw error;
-
-}
-
-var bind =
-typeof port === 'string'
-? 'Pipe ' + port
-: 'Port ' + port;
-
-switch (error.code) {
-
-case 'EACCES':
-
-  console.error(
-    bind +
-    ' requires elevated privileges'
-  );
-
-  process.exit(1);
-
-  break;
-
-case 'EADDRINUSE':
-
-  console.error(
-    bind +
-    ' is already in use'
-  );
-
-  process.exit(1);
-
-  break;
-
-default:
+  if (error.code === 'EADDRINUSE') {
+    console.error(bind + ' is already in use');
+    process.exit(1);
+  }
 
   throw error;
-
-
-}
-
 }
 
 /**
-
-* Event listener for HTTP server
-* "listening" event.
-  */
+ * Listening handler.
+ */
 
 function onListening() {
+  var addr = server.address();
 
-var addr =
-server.address();
+  var bind =
+    typeof addr === 'string'
+      ? 'pipe ' + addr
+      : 'port ' + addr.port;
 
-var bind =
-typeof addr === 'string'
-? 'pipe ' + addr
-: 'port ' + addr.port;
+  debug('Listening on ' + bind);
 
-debug(
-'Listening on ' +
-bind
-);
-
-console.log(
-'🚀 Server listening on ' +
-bind
-);
-
-console.log(
-'🔌 Socket.IO ready'
-);
-
+  console.log('🚀 Server listening on ' + bind);
+  console.log('🔌 Socket.IO ready');
 }
-
-
-
-
-
-
-
 
