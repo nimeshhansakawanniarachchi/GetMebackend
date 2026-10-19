@@ -44,6 +44,54 @@ const PAYMENT_METHODS = ['cash', 'card', 'wallet', 'payhere', 'lankaqr', 'card_o
 
 const issue = (code, message, extra = {}) => ({ code, message, ...extra });
 
+const REPLACEMENT_PREFERENCES = ['best_match', 'specific', 'refund'];
+
+// =====================================================
+// REPLACEMENT PREFERENCE
+// What the customer wants if the item is out of stock.
+// A "specific" backup must be an available product from
+// the same shop; otherwise only the note is kept, and
+// with no product and no note it falls back to best_match.
+// =====================================================
+
+const buildReplacement = (item, shopId, originalProductId, products) => {
+  let preference = REPLACEMENT_PREFERENCES.includes(item?.replacementPreference)
+    ? item.replacementPreference
+    : 'best_match';
+
+  const note = item?.replacementNote
+    ? String(item.replacementNote).trim().slice(0, 300) || null
+    : null;
+
+  let product = null;
+
+  if (preference === 'specific') {
+    const candidate = products.get(Number(item?.replacementProductId));
+
+    if (
+      candidate &&
+      candidate.shop_id === shopId &&
+      candidate.id !== originalProductId &&
+      candidate.is_available
+    ) {
+      product = candidate;
+    }
+
+    if (!product && !note) {
+      preference = 'best_match';
+    }
+  }
+
+  return {
+    replacementPreference: preference,
+    replacementProductId: product ? product.id : null,
+    replacementProductName: product ? product.product_name : null,
+    replacementProductImage: product ? product.image_url : null,
+    replacementProductPrice: product ? Number(product.price) : null,
+    replacementNote: preference === 'specific' ? note : null,
+  };
+};
+
 
 // =====================================================
 // BUILD QUOTE
@@ -93,11 +141,16 @@ const buildQuote = async ({
   // Load products and shops in two queries
   // ---------------------------------------------------
 
+  // Includes chosen replacement products so they load in the same query
   const productIds = [
     ...new Set(
       safeItems
-        .filter((item) => !item?.custom)
-        .map((item) => Number(item?.productId))
+        .flatMap((item) => [
+          item?.custom ? null : Number(item?.productId),
+          item?.replacementPreference === 'specific'
+            ? Number(item?.replacementProductId)
+            : null,
+        ])
         .filter((id) => Number.isInteger(id) && id > 0)
     ),
   ];
@@ -160,6 +213,7 @@ const buildQuote = async ({
         unitPrice: 0,
         packPrice: 0,
         lineTotal: 0,
+        ...buildReplacement(item, shopId, null, products),
       };
 
       if (!name) {
@@ -203,6 +257,7 @@ const buildQuote = async ({
       unitPrice: Number(product.price),
       packPrice: 0,
       lineTotal: 0,
+      ...buildReplacement(item, product.shop_id, product.id, products),
     };
 
     if (Number(item?.shopId) && Number(item.shopId) !== product.shop_id) {

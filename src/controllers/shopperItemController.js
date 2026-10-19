@@ -256,6 +256,7 @@ const uploadReplacementPhoto = async (req, res) => {
         oi.id,
         oi.order_id,
         oi.shop_id,
+        oi.replacement_preference,
         o.customer_id
       FROM order_items oi
       INNER JOIN orders o
@@ -279,6 +280,22 @@ const uploadReplacementPhoto = async (req, res) => {
     }
 
     const item = itemResult.rows[0];
+
+    // -------------------------------------------------
+    // CUSTOMER ASKED FOR A REFUND, NOT A REPLACEMENT
+    // -------------------------------------------------
+
+    if (item.replacement_preference === 'refund') {
+      fs.unlink(req.file.path, () => {});
+
+      return res.status(409).json({
+        success: false,
+        code: 'refund_requested',
+        message: 'Customer asked for a refund instead of a replacement.',
+        orderId,
+        itemId,
+      });
+    }
 
     // -------------------------------------------------
     // GET UPLOADED PHOTO URL

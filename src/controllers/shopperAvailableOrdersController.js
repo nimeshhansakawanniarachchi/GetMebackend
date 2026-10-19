@@ -251,7 +251,13 @@ const getAvailableOrders = async (req, res) => {
           found_weight_unit,
           barcode_scanned,
           completed_at,
-          shop_id
+          shop_id,
+          replacement_preference,
+          replacement_product_id,
+          replacement_product_name,
+          replacement_product_image,
+          replacement_product_price,
+          replacement_note
 
         FROM order_items
 
@@ -295,6 +301,13 @@ const getAvailableOrders = async (req, res) => {
 
         shopId: item.shop_id,
         shop_id: item.shop_id,
+
+        replacementPreference: item.replacement_preference || 'best_match',
+        replacementProductId: item.replacement_product_id,
+        replacementProductName: item.replacement_product_name,
+        replacementProductImage: item.replacement_product_image,
+        replacementProductPrice: item.replacement_product_price,
+        replacementNote: item.replacement_note,
       }));
 
       if (orderItems.length === 0) {

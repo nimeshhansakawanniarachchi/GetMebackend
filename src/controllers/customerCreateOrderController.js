@@ -183,9 +183,12 @@ const createOrder = async (req, res) => {
         INSERT INTO order_items (
           order_id, shop_id, product_id, item_name,
           quantity, amount, unit, price, unit_price, pack_amount,
-          custom, details, image, voice_url
+          custom, details, image, voice_url,
+          replacement_preference, replacement_product_id,
+          replacement_product_name, replacement_product_image,
+          replacement_product_price, replacement_note
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
         `,
         [
           order.id,
@@ -202,6 +205,12 @@ const createOrder = async (req, res) => {
           line.details || null,
           line.image || null,
           line.voiceUrl || null,
+          line.replacementPreference || 'best_match',
+          line.replacementProductId,
+          line.replacementProductName,
+          line.replacementProductImage,
+          line.replacementProductPrice,
+          line.replacementNote,
         ]
       );
     }
