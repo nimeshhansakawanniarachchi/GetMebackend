@@ -1,44 +1,66 @@
 const express = require('express');
 
-const {
-  getDashboard,
-  getOrders,
-  getOrderById,
-  getCustomers,
-  getShops,
-  getProducts,
-} = require('../controllers/adminController');
+const requireAdmin = require('../middleware/requireAdmin');
+const loginRateLimit = require('../middleware/loginRateLimit');
+
+const account = require('../controllers/admin/adminAccountController');
+const { getDashboard } = require('../controllers/admin/adminDashboardController');
+const orders = require('../controllers/admin/adminOrderController');
+const people = require('../controllers/admin/adminPeopleController');
+const catalog = require('../controllers/admin/adminCatalogController');
+const finance = require('../controllers/admin/adminFinanceController');
+const settings = require('../controllers/admin/adminSettingsController');
 
 const router = express.Router();
 
-router.get(
-  '/dashboard',
-  getDashboard
-);
+// =====================================================
+// PUBLIC: login only
+// =====================================================
 
-router.get(
-  '/orders',
-  getOrders
-);
+router.post('/auth/login', loginRateLimit, account.login);
 
-router.get(
-  '/orders/:orderId',
-  getOrderById
-);
+// =====================================================
+// EVERYTHING BELOW REQUIRES AN ADMIN TOKEN
+// =====================================================
 
-router.get(
-  '/customers',
-  getCustomers
-);
+router.use(requireAdmin);
 
-router.get(
-  '/shops',
-  getShops
-);
+// Account
+router.get('/auth/me', account.me);
+router.put('/auth/password', account.changePassword);
+router.get('/admins', account.listAdmins);
+router.post('/admins', account.createAdmin);
+router.patch('/admins/:id', account.setAdminActive);
 
-router.get(
-  '/products',
-  getProducts
-);
+// Dashboard
+router.get('/dashboard', getDashboard);
+
+// Orders
+router.get('/orders', orders.listOrders);
+router.get('/orders/:id', orders.getOrder);
+router.patch('/orders/:id/cancel', orders.cancelOrder);
+
+// Customers
+router.get('/customers', people.listCustomers);
+router.get('/customers/:id', people.getCustomer);
+
+// Shoppers
+router.get('/shoppers', people.listShoppers);
+router.patch('/shoppers/:id/approval', people.setShopperApproval);
+
+// Shops + products
+router.get('/shops', catalog.listShops);
+router.patch('/shops/:id/status', catalog.setShopStatus);
+router.get('/products', catalog.listProducts);
+router.patch('/products/:id/availability', catalog.setProductAvailability);
+
+// Money + reports
+router.get('/payments', finance.listPayments);
+router.get('/reports', finance.getReports);
+
+// Fees & pricing (GetMe earns the service fee; shoppers earn delivery + fast fee)
+router.get('/settings/pricing', settings.getPricing);
+router.put('/settings/pricing', settings.updatePricing);
+router.post('/settings/pricing/preview', settings.previewPricing);
 
 module.exports = router;

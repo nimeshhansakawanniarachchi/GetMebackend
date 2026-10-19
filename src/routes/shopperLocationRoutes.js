@@ -386,26 +386,62 @@ router.post('/status', async (req, res) => {
     // VALIDATE STATUS
     // ================================================
 
-    const allowedStatuses = [
-      'online',
-      'pending',
-    ];
+    // The app still sends 'pending' for "go offline"
+    const statusMap = {
+      online: 'online',
+      offline: 'offline',
+      pending: 'offline',
+    };
+
+    const newStatus =
+      statusMap[requestedStatus];
 
 
-    if (
-      !allowedStatuses.includes(
-        requestedStatus
-      )
-    ) {
+    if (!newStatus) {
 
       return res.status(400).json({
 
         success: false,
 
         message:
-          'Invalid shopper status. Use online or pending.',
+          'Invalid shopper status. Use online or offline.',
 
       });
+
+    }
+
+
+    // ================================================
+    // ONLY APPROVED SHOPPERS CAN GO ONLINE
+    // ================================================
+
+    if (newStatus === 'online') {
+
+      const approvalResult =
+        await db.query(
+          'SELECT approval_status FROM shoppers WHERE id = $1',
+          [shopperId]
+        );
+
+      const approvalStatus =
+        approvalResult.rows[0]?.approval_status;
+
+      if (approvalStatus !== 'approved') {
+
+        return res.status(403).json({
+
+          success: false,
+
+          approvalStatus,
+
+          message:
+            approvalStatus === 'pending'
+              ? 'Your account is waiting for GetMe approval. You can go online once it is approved.'
+              : 'Your shopper account is not active. Please contact GetMe support.',
+
+        });
+
+      }
 
     }
 
@@ -433,7 +469,7 @@ router.post('/status', async (req, res) => {
           updated_at
         `,
         [
-          requestedStatus,
+          newStatus,
           shopperId,
         ]
       );

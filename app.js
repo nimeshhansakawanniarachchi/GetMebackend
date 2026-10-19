@@ -409,10 +409,12 @@ var shopRoutes = require('./src/routes/shopRoutes');
 var customerShopRoutes = require('./src/routes/customerShopRoutes');
 var customerOrderRoutes = require('./src/routes/customerOrderRoutes');
 var customerOrderMediaRoutes = require('./src/routes/customerOrderMediaRoutes');
+var customerAddressRoutes = require('./src/routes/customerAddressRoutes');
 var adminRoutes = require('./src/routes/adminRoutes');
 var shopperAuthRoutes = require('./src/routes/shopperAuthRoutes');
 var shopperLocationRoutes = require('./src/routes/shopperLocationRoutes');
 var shopperOrderRoutes = require('./src/routes/shopperOrderRoutes');
+var shopperAccountRoutes = require('./src/routes/shopperAccountRoutes');
 var chatRoutes = require('./src/routes/chatRoutes');
 
 // NEW: PAYMENT ROUTES
@@ -458,7 +460,24 @@ app.set('view engine', 'jade');
 
 app.use(logger('dev'));
 
-app.use(cors());
+// Browsers may only call the API from the admin panel / shop website.
+// Mobile apps send no Origin header, so they are always allowed.
+const allowedOrigins = String(
+  process.env.CORS_ORIGINS ||
+    'http://localhost:5173,http://localhost:5174'
+)
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.set('allowedOrigins', allowedOrigins);
+
+app.use(
+  cors({
+    origin: (origin, callback) =>
+      callback(null, !origin || allowedOrigins.includes(origin)),
+  })
+);
 
 app.use(express.json());
 
@@ -667,6 +686,12 @@ app.use('/api/customer', customerOrderRoutes);
 app.use('/api/customer', customerOrderMediaRoutes);
 
 // ==================================================
+// CUSTOMER SAVED ADDRESSES + ADDRESS SEARCH API
+// ==================================================
+
+app.use('/api/customer', customerAddressRoutes);
+
+// ==================================================
 // ADMIN API
 // ==================================================
 
@@ -689,6 +714,12 @@ app.use('/api/shopper', shopperLocationRoutes);
 // ==================================================
 
 app.use('/api/shopper', shopperOrderRoutes);
+
+// ==================================================
+// SHOPPER EARNINGS, NOTIFICATIONS, PROFILE, BATCH HIDE
+// ==================================================
+
+app.use('/api/shopper', shopperAccountRoutes);
 
 // ==================================================
 // CHAT API

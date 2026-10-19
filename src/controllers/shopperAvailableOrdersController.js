@@ -1,6 +1,12 @@
 
 const db = require('../config/db');
 
+const {
+  OFFER_SECONDS,
+  OFFER_RADIUS_KM,
+  shopperPayForOrder,
+} = require('./shopperPay');
+
 // =====================================================
 // GET SHOPPER ID
 // =====================================================
@@ -41,7 +47,8 @@ const getAvailableOrders = async (req, res) => {
         id,
         latitude,
         longitude,
-        status
+        status,
+        approval_status
       FROM shoppers
       WHERE id = $1
       LIMIT 1
@@ -57,6 +64,14 @@ const getAvailableOrders = async (req, res) => {
     }
 
     const shopper = shopperResult.rows[0];
+
+    if (shopper.approval_status !== 'approved') {
+      return res.status(403).json({
+        success: false,
+        approvalStatus: shopper.approval_status,
+        message: 'Your account is waiting for GetMe approval.',
+      });
+    }
 
     const shopperLatitude = Number(shopper.latitude);
     const shopperLongitude = Number(shopper.longitude);
@@ -95,6 +110,7 @@ const getAvailableOrders = async (req, res) => {
 
         o.items_total,
         o.delivery_fee,
+        o.fast_delivery_fee,
         o.service_fee,
         o.total_amount,
 
@@ -104,6 +120,9 @@ const getAvailableOrders = async (req, res) => {
         o.created_at,
         o.updated_at,
         o.shopper_id,
+        o.shopper_search_started_at,
+
+        EXTRACT(EPOCH FROM (NOW() - so.first_seen_at)) AS offer_age_seconds,
 
         s.shop_name,
         s.image_url AS shop_image,
@@ -147,18 +166,33 @@ const getAvailableOrders = async (req, res) => {
       INNER JOIN shops s
         ON s.id = os.shop_id
 
+      -- This shopper's countdown for the batch
+      LEFT JOIN shopper_order_offers so
+        ON so.order_id = o.id
+        AND so.shopper_id = $3
+
       WHERE
         o.status = 'waiting_for_shopper'
         AND o.shopper_id IS NULL
         AND s.status = 'approved'
+        AND s.is_open = true
         AND s.latitude IS NOT NULL
         AND s.longitude IS NOT NULL
+
+        -- Hide batches this shopper hid or let expire
+        AND (
+          so.order_id IS NULL
+          OR (
+            so.dismissed_at IS NULL
+            AND so.first_seen_at > NOW() - make_interval(secs => $4)
+          )
+        )
 
       ORDER BY
         o.created_at ASC,
         shop_distance_km ASC
       `,
-      [shopperLatitude, shopperLongitude]
+      [shopperLatitude, shopperLongitude, shopperId, OFFER_SECONDS]
     );
 
     console.log('🟢 SHOPPER ID:', shopperId);
@@ -418,7 +452,7 @@ const getAvailableOrders = async (req, res) => {
         shopDistances.every(
           (distance) =>
             Number.isFinite(distance) &&
-            distance <= 10
+            distance <= OFFER_RADIUS_KM
         );
 
       if (!allShopsWithin10Km) {
@@ -448,6 +482,15 @@ const getAvailableOrders = async (req, res) => {
       }, 0);
 
       const primaryShop = group.shops[0] || null;
+
+      const shopperEarnings = shopperPayForOrder(order);
+
+      // First time this shopper sees the batch, the full countdown starts
+      const offerAgeSeconds = Number(order.offer_age_seconds);
+
+      const offerSecondsLeft = Number.isFinite(offerAgeSeconds)
+        ? Math.max(0, Math.round(OFFER_SECONDS - offerAgeSeconds))
+        : OFFER_SECONDS;
 
       const finalOrder = {
         id: order.id,
@@ -536,9 +579,20 @@ const getAvailableOrders = async (req, res) => {
         shopNames: group.shopNames,
         shops: group.shops,
 
+        // SHOPPER PAY (delivery fee + fast delivery fee)
+        shopperEarnings,
+        fastDeliveryFee: Number(order.fast_delivery_fee || 0),
+
+        // BATCH COUNTDOWN
+        offerSeconds: OFFER_SECONDS,
+        offerSecondsLeft,
+        waitingSince:
+          order.shopper_search_started_at ||
+          order.created_at,
+
         // TOTALS
-        batchFee: Number(order.total_amount || 0),
-        totalFee: Number(order.total_amount || 0),
+        batchFee: shopperEarnings,
+        totalFee: shopperEarnings,
         batchTotalAmount: Number(order.total_amount || 0),
 
         batchDistanceKm: Number.isFinite(nearestShopDistanceKm)
@@ -601,6 +655,11 @@ const getAvailableOrders = async (req, res) => {
       totalFee: order.totalFee,
       batchTotalAmount: order.batchTotalAmount,
 
+      shopperEarnings: order.shopperEarnings,
+      offerSeconds: order.offerSeconds,
+      offerSecondsLeft: order.offerSecondsLeft,
+      waitingSince: order.waitingSince,
+
       batchDistanceKm: order.batchDistanceKm,
       batchDistance: order.batchDistance,
 
@@ -613,6 +672,21 @@ const getAvailableOrders = async (req, res) => {
       orderItems: order.orderItems,
       items: order.items,
     }));
+
+    // ===================================================
+    // START THIS SHOPPER'S COUNTDOWN FOR NEW BATCHES
+    // ===================================================
+
+    if (orders.length > 0) {
+      await db.query(
+        `
+        INSERT INTO shopper_order_offers (shopper_id, order_id)
+        SELECT $1, UNNEST($2::int[])
+        ON CONFLICT (shopper_id, order_id) DO NOTHING
+        `,
+        [shopperId, orders.map((order) => Number(order.id))]
+      );
+    }
 
     // ===================================================
     // NO CACHE
@@ -649,6 +723,58 @@ const getAvailableOrders = async (req, res) => {
   }
 };
 
+// =====================================================
+// HIDE A BATCH FOR THIS SHOPPER
+// POST /api/shopper/orders/:orderId/dismiss
+// Called when the countdown runs out or the shopper taps "Hide".
+// =====================================================
+
+const dismissOrderOffer = async (req, res) => {
+  try {
+    const shopperId = getShopperId(req);
+    const orderId = Number(req.params.orderId);
+
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid order ID',
+      });
+    }
+
+    const orderResult = await db.query(
+      'SELECT id FROM orders WHERE id = $1',
+      [orderId]
+    );
+
+    if (orderResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found',
+      });
+    }
+
+    await db.query(
+      `
+      INSERT INTO shopper_order_offers (shopper_id, order_id, dismissed_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (shopper_id, order_id)
+      DO UPDATE SET dismissed_at = COALESCE(shopper_order_offers.dismissed_at, NOW())
+      `,
+      [shopperId, orderId]
+    );
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('❌ dismissOrderOffer error:', error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Unable to hide this batch',
+    });
+  }
+};
+
 module.exports = {
   getAvailableOrders,
+  dismissOrderOffer,
 };

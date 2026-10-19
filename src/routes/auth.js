@@ -1,5 +1,12 @@
 
 const express = require('express');
+const loginRateLimit = require('../middleware/loginRateLimit');
+
+const {
+  normalizeSriLankanMobile,
+  isEmail,
+} = require('../utils/phone');
+
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
@@ -12,38 +19,38 @@ const router = express.Router();
 // CUSTOMER REGISTER
 // ==================================================
 
-router.post('/register', async (req, res) => {
-  console.log('====================================');
-  console.log('REGISTER REQUEST RECEIVED');
-  console.log('BODY:', {
-    ...req.body,
-    password: req.body?.password ? '******' : undefined,
-  });
-  console.log('CONTENT TYPE:', req.headers['content-type']);
-  console.log('====================================');
-
+router.post('/register', loginRateLimit, async (req, res) => {
   try {
-    const fullName = req.body?.fullName;
-    const mobile = req.body?.mobile;
-    const email = req.body?.email;
+    const fullName = String(req.body?.fullName || '').trim();
+    const rawMobile = req.body?.mobile;
+    const email = String(req.body?.email || '').trim().toLowerCase();
     const password = req.body?.password;
+
+    // Stored as +94XXXXXXXXX so 077..., 77... and +9477... are one account
+    const mobile = normalizeSriLankanMobile(rawMobile);
 
     // ==================================================
     // VALIDATION
     // ==================================================
 
-    if (!fullName || !mobile || !email || !password) {
-      console.log('❌ Missing required field');
-
+    if (!fullName || !rawMobile || !email || !password) {
       return res.status(400).json({
         success: false,
         message: 'All fields are required',
-        received: {
-          fullName: !!fullName,
-          mobile: !!mobile,
-          email: !!email,
-          password: !!password,
-        },
+      });
+    }
+
+    if (!mobile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter a valid Sri Lankan mobile number (e.g. 077 123 4567)',
+      });
+    }
+
+    if (!isEmail(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter a valid email address',
       });
     }
 
@@ -63,7 +70,7 @@ router.post('/register', async (req, res) => {
     const existingCustomer = await db.query(
       `SELECT id
        FROM customers
-       WHERE email = $1 OR mobile = $2`,
+       WHERE LOWER(email) = $1 OR mobile = $2`,
       [email, mobile]
     );
 
@@ -136,12 +143,19 @@ router.post('/register', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ REGISTER ERROR:', error);
+    // Two sign-ups racing past the duplicate check
+    if (error.code === '23505') {
+      return res.status(409).json({
+        success: false,
+        message: 'Email or mobile number already registered',
+      });
+    }
+
+    console.error('❌ REGISTER ERROR:', error.message);
 
     return res.status(500).json({
       success: false,
       message: 'Server error',
-      error: error.message,
     });
   }
 });
@@ -150,18 +164,15 @@ router.post('/register', async (req, res) => {
 // CUSTOMER LOGIN
 // ==================================================
 
-router.post('/login', async (req, res) => {
-  console.log('====================================');
-  console.log('LOGIN REQUEST RECEIVED');
-  console.log('BODY:', {
-    ...req.body,
-    password: req.body?.password ? '******' : undefined,
-  });
-  console.log('====================================');
-
+router.post('/login', loginRateLimit, async (req, res) => {
   try {
-    const loginValue = req.body?.loginValue;
+    const rawLogin = String(req.body?.loginValue || '').trim();
     const password = req.body?.password;
+
+    // Email (any case) or a Sri Lankan mobile in any format
+    const loginValue = isEmail(rawLogin)
+      ? rawLogin.toLowerCase()
+      : normalizeSriLankanMobile(rawLogin) || rawLogin;
 
     // ==================================================
     // VALIDATION
@@ -189,7 +200,7 @@ router.post('/login', async (req, res) => {
         password_hash,
         created_at
        FROM customers
-       WHERE email = $1 OR mobile = $1
+       WHERE LOWER(email) = $1 OR mobile = $1
        LIMIT 1`,
       [loginValue]
     );

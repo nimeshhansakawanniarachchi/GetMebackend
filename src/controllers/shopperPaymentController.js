@@ -1,6 +1,8 @@
 
 const db = require('../config/db');
 
+const { broadcastOrderChange } = require('../realtime');
+
 // =====================================================
 // GET SHOPPER ID
 // =====================================================
@@ -62,6 +64,12 @@ const emitOrderSocketEvent = ({
         event,
         eventPayload
       );
+
+      // Admin panel + shop websites
+      broadcastOrderChange(io, orderId, {
+        event,
+        status: eventPayload?.status || null,
+      });
     }
   } catch (error) {
     console.error('Socket event error:', error);

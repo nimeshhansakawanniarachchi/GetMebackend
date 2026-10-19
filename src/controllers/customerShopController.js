@@ -207,6 +207,7 @@ const getCustomerShops = async (req, res) => {
           FROM shops
 
           WHERE status = 'approved'
+            AND is_open = true
           AND latitude IS NOT NULL
           AND longitude IS NOT NULL
 
@@ -324,6 +325,7 @@ const getCustomerShopProducts = async (
         FROM shops
         WHERE id = $1
         AND status = 'approved'
+        AND is_open = true
         `,
         [shopId]
       );
@@ -351,6 +353,7 @@ const getCustomerShopProducts = async (
           product_name,
           category,
           price,
+          unit,
           stock_quantity,
           description,
           is_available,

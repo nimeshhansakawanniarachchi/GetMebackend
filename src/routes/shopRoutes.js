@@ -1,232 +1,129 @@
-
-const express = require('express')
-const multer = require('multer')
-const path = require('path')
+const express = require('express');
+const multer = require('multer');
+const path = require('path');
 
 const {
   registerShop,
   loginShop,
   getShopProfile,
   updateShopProfile,
-  addProduct,
+  setShopOpen,
+} = require('../controllers/shop/shopAccountController');
+
+const {
   getProducts,
+  getProduct,
+  addProduct,
   updateProduct,
+  patchProduct,
   deleteProduct,
-} = require('../controllers/shopController')
+} = require('../controllers/shop/shopProductController');
 
-const shopAuthMiddleware =
-  require('../middleware/shopAuthMiddleware')
+const {
+  getDashboard,
+  getOrders,
+  getOrder,
+} = require('../controllers/shop/shopOrderController');
 
-const router = express.Router()
+const shopAuthMiddleware = require('../middleware/shopAuthMiddleware');
+const loginRateLimit = require('../middleware/loginRateLimit');
+
+const router = express.Router();
 
 
 // ==================================================
-// PRODUCT IMAGE STORAGE
+// IMAGE UPLOADS (JPG / PNG / WEBP, max 5MB)
 // ==================================================
 
-const productStorage =
+const imageStorage = (folder, prefix) =>
   multer.diskStorage({
-    destination: (
-      req,
-      file,
-      cb
-    ) => {
-      cb(
-        null,
-        'uploads/products'
-      )
+    destination: (req, file, cb) => cb(null, `uploads/${folder}`),
+    filename: (req, file, cb) => {
+      const extension = path.extname(file.originalname).toLowerCase();
+      const uniqueName = `${prefix}-${Date.now()}-${Math.round(Math.random() * 1e9)}${extension}`;
+
+      cb(null, uniqueName);
     },
+  });
 
-    filename: (
-      req,
-      file,
-      cb
-    ) => {
-      const extension =
-        path.extname(
-          file.originalname
-        )
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
 
-      const uniqueName =
-        `product-${Date.now()}-${Math.round(
-          Math.random() * 1e9
-        )}${extension}`
-
-      cb(
-        null,
-        uniqueName
-      )
-    },
-  })
-
-
-// ==================================================
-// SHOP IMAGE STORAGE
-// ==================================================
-
-const shopStorage =
-  multer.diskStorage({
-    destination: (
-      req,
-      file,
-      cb
-    ) => {
-      cb(
-        null,
-        'uploads/shops'
-      )
-    },
-
-    filename: (
-      req,
-      file,
-      cb
-    ) => {
-      const extension =
-        path.extname(
-          file.originalname
-        )
-
-      const uniqueName =
-        `shop-${Date.now()}-${Math.round(
-          Math.random() * 1e9
-        )}${extension}`
-
-      cb(
-        null,
-        uniqueName
-      )
-    },
-  })
-
-
-// ==================================================
-// IMAGE FILTER
-// ==================================================
-
-const fileFilter = (
-  req,
-  file,
-  cb
-) => {
-  const allowedTypes = [
-    'image/jpeg',
-    'image/png',
-    'image/webp',
-  ]
-
-  if (
-    allowedTypes.includes(
-      file.mimetype
-    )
-  ) {
-    cb(
-      null,
-      true
-    )
+  if (allowedTypes.includes(file.mimetype)) {
+    cb(null, true);
   } else {
-    cb(
-      new Error(
-        'Only JPG, PNG and WEBP images are allowed'
-      )
-    )
+    cb(new Error('Only JPG, PNG and WEBP images are allowed'));
   }
-}
+};
 
-
-// ==================================================
-// UPLOADERS
-// ==================================================
-
-const uploadProduct =
+const uploader = (folder, prefix) =>
   multer({
-    storage:
-      productStorage,
-
+    storage: imageStorage(folder, prefix),
     fileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 },
+  });
 
-    limits: {
-      fileSize:
-        5 * 1024 * 1024,
-    },
-  })
-
-const uploadShop =
-  multer({
-    storage:
-      shopStorage,
-
-    fileFilter,
-
-    limits: {
-      fileSize:
-        5 * 1024 * 1024,
-    },
-  })
+const uploadProduct = uploader('products', 'product');
+const uploadShop = uploader('shops', 'shop');
 
 
 // ==================================================
-// SHOP AUTH
+// ACCOUNT
 // ==================================================
 
-router.post(
-  '/register',
-  registerShop
-)
+router.post('/register', loginRateLimit, registerShop);
+router.post('/login', loginRateLimit, loginShop);
 
-router.post(
-  '/login',
-  loginShop
-)
+router.get('/me', shopAuthMiddleware, getShopProfile);
+router.put('/profile', shopAuthMiddleware, uploadShop.single('image'), updateShopProfile);
+router.patch('/open', shopAuthMiddleware, setShopOpen);
 
 
 // ==================================================
-// SHOP PROFILE
+// DASHBOARD + ORDERS
 // ==================================================
 
-router.get(
-  '/me',
-  shopAuthMiddleware,
-  getShopProfile
-)
-
-router.put(
-  '/profile',
-  shopAuthMiddleware,
-  uploadShop.single('image'),
-  updateShopProfile
-)
+router.get('/dashboard', shopAuthMiddleware, getDashboard);
+router.get('/orders', shopAuthMiddleware, getOrders);
+router.get('/orders/:id', shopAuthMiddleware, getOrder);
 
 
 // ==================================================
 // PRODUCTS
 // ==================================================
 
-router.post(
-  '/products',
-  shopAuthMiddleware,
-  uploadProduct.single('image'),
-  addProduct
-)
-
-router.get(
-  '/products',
-  shopAuthMiddleware,
-  getProducts
-)
-
-router.put(
-  '/products/:id',
-  shopAuthMiddleware,
-  uploadProduct.single('image'),
-  updateProduct
-)
-
-router.delete(
-  '/products/:id',
-  shopAuthMiddleware,
-  deleteProduct
-)
+router.get('/products', shopAuthMiddleware, getProducts);
+router.get('/products/:id', shopAuthMiddleware, getProduct);
+router.post('/products', shopAuthMiddleware, uploadProduct.single('image'), addProduct);
+router.put('/products/:id', shopAuthMiddleware, uploadProduct.single('image'), updateProduct);
+router.patch('/products/:id', shopAuthMiddleware, patchProduct);
+router.delete('/products/:id', shopAuthMiddleware, deleteProduct);
 
 
-module.exports = router
+// ==================================================
+// UPLOAD ERRORS -> clear 400 instead of a 500
+// ==================================================
+
+router.use((error, req, res, next) => {
+  if (res.headersSent) {
+    return next(error);
+  }
+
+  if (error instanceof multer.MulterError) {
+    return res.status(400).json({
+      success: false,
+      message:
+        error.code === 'LIMIT_FILE_SIZE'
+          ? 'Image is too large. Maximum size is 5MB.'
+          : error.message,
+    });
+  }
+
+  if (error?.message?.startsWith('Only JPG')) {
+    return res.status(400).json({ success: false, message: error.message });
+  }
+
+  return next(error);
+});
+
+module.exports = router;

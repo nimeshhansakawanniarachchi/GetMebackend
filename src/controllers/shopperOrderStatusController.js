@@ -1,6 +1,14 @@
 
 const db = require('../config/db');
 
+const { shopperPayForOrder } = require('./shopperPay');
+
+const { broadcastOrderChange } = require('../realtime');
+
+const {
+  createShopperNotification,
+} = require('./shopperNotificationController');
+
 // =====================================================
 // GET SHOPPER ID
 // =====================================================
@@ -68,6 +76,12 @@ const emitOrderSocketEvent = ({
         event,
         eventPayload
       );
+
+      // Admin panel + shop websites
+      broadcastOrderChange(io, normalizedOrderId, {
+        event,
+        status: eventPayload?.status || null,
+      });
     }
   } catch (error) {
     console.error(
@@ -96,6 +110,18 @@ const acceptOrder = async (req, res) => {
     return res.status(400).json({
       success: false,
       message: 'Invalid order ID',
+    });
+  }
+
+  const approvalResult = await db.query(
+    'SELECT approval_status FROM shoppers WHERE id = $1',
+    [shopperId]
+  );
+
+  if (approvalResult.rows[0]?.approval_status !== 'approved') {
+    return res.status(403).json({
+      success: false,
+      message: 'Your account must be approved before you can accept batches.',
     });
   }
 
@@ -237,6 +263,17 @@ const acceptOrder = async (req, res) => {
         status: acceptedOrder.status,
         order: acceptedOrder,
       },
+    });
+
+    createShopperNotification({
+      io: req.app.get('io'),
+      shopperId,
+      type: 'batch_accepted',
+      title: 'Batch accepted',
+      body: `Order #${acceptedOrder.id} from ${
+        shops.map((shop) => shop.shop_name).join(' + ') || 'the store'
+      }. You'll earn LKR ${shopperPayForOrder(acceptedOrder).toFixed(2)}.`,
+      orderId: acceptedOrder.id,
     });
 
     return res.status(200).json({
@@ -749,6 +786,7 @@ const verifyDeliveryPin = async (req, res) => {
       SET
         status = 'delivered',
         delivery_pin = NULL,
+        delivered_at = NOW(),
         updated_at = NOW()
       WHERE
         id = $1
@@ -777,6 +815,17 @@ const verifyDeliveryPin = async (req, res) => {
       payload: {
         status: updatedOrder.status,
       },
+    });
+
+    createShopperNotification({
+      io: req.app.get('io'),
+      shopperId,
+      type: 'delivered',
+      title: 'Delivery complete',
+      body: `Order #${updatedOrder.id} delivered. You earned LKR ${shopperPayForOrder(
+        updatedOrder
+      ).toFixed(2)}.`,
+      orderId: updatedOrder.id,
     });
 
     return res.status(200).json({

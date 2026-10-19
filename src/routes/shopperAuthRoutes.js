@@ -1,11 +1,17 @@
 
 const express = require('express');
+const loginRateLimit = require('../middleware/loginRateLimit');
+
 
 const bcrypt = require('bcryptjs');
 
 const jwt = require('jsonwebtoken');
 
 const db = require('../config/db');
+
+const { emitToAdmins } = require('../realtime');
+
+const { normalizeSriLankanMobile } = require('../utils/phone');
 
 const router = express.Router();
 
@@ -14,7 +20,7 @@ const router = express.Router();
 // SHOPPER REGISTER
 // ==================================================
 
-router.post('/register', async (req, res) => {
+router.post('/register', loginRateLimit, async (req, res) => {
   try {
 
     const {
@@ -69,9 +75,17 @@ router.post('/register', async (req, res) => {
 
     const cleanName = fullName.trim();
 
-    const cleanMobile = mobile.trim();
+    // Stored as +94XXXXXXXXX
+    const cleanMobile = normalizeSriLankanMobile(mobile);
 
     const cleanEmail = email.trim().toLowerCase();
+
+    if (!cleanMobile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter a valid Sri Lankan mobile number (e.g. 077 123 4567)',
+      });
+    }
 
 
     // ================================================
@@ -126,16 +140,18 @@ router.post('/register', async (req, res) => {
         mobile,
         email,
         password_hash,
-        status
+        status,
+        approval_status
       )
       VALUES
-      ($1, $2, $3, $4, 'pending')
+      ($1, $2, $3, $4, 'offline', 'pending')
       RETURNING
         id,
         full_name,
         mobile,
         email,
         status,
+        approval_status,
         created_at
       `,
       [
@@ -182,22 +198,11 @@ router.post('/register', async (req, res) => {
     // SOCKET.IO - SHOPPER CREATED
     // ================================================
 
-    const io = req.app.get('io');
-
-    if (io) {
-
-      io.emit('shopper_registered', {
-        id: shopper.id,
-        fullName: shopper.full_name,
-        mobile: shopper.mobile,
-        email: shopper.email,
-        status: shopper.status,
-        createdAt: shopper.created_at,
-      });
-
-      io.emit('shoppers_updated');
-
-    }
+    // Only admins hear about new shoppers (no PII broadcast)
+    emitToAdmins(req.app.get('io'), 'admin:shoppers-updated', {
+      shopperId: shopper.id,
+      reason: 'registered',
+    });
 
 
     // ================================================
@@ -227,6 +232,9 @@ router.post('/register', async (req, res) => {
 
         status:
           shopper.status,
+
+        approvalStatus:
+          shopper.approval_status,
 
         createdAt:
           shopper.created_at,
@@ -260,7 +268,7 @@ router.post('/register', async (req, res) => {
 // SHOPPER LOGIN
 // ==================================================
 
-router.post('/login', async (req, res) => {
+router.post('/login', loginRateLimit, async (req, res) => {
   try {
 
     const {
@@ -317,6 +325,7 @@ router.post('/login', async (req, res) => {
           email,
           password_hash,
           status,
+          approval_status,
           latitude,
           longitude,
           created_at
@@ -339,7 +348,8 @@ router.post('/login', async (req, res) => {
     else {
 
       const cleanMobile =
-        mobile.trim();
+        normalizeSriLankanMobile(mobile) ||
+        String(mobile).trim();
 
 
       result = await db.query(
@@ -351,6 +361,7 @@ router.post('/login', async (req, res) => {
           email,
           password_hash,
           status,
+          approval_status,
           latitude,
           longitude,
           created_at
@@ -414,17 +425,23 @@ router.post('/login', async (req, res) => {
 
 
     // ================================================
-    // REJECTED SHOPPER
+    // REJECTED / SUSPENDED SHOPPER
+    // Pending shoppers may log in but can't go online
     // ================================================
 
-    if (shopper.status === 'rejected') {
+    if (
+      shopper.approval_status === 'rejected' ||
+      shopper.approval_status === 'suspended'
+    ) {
 
       return res.status(403).json({
 
         success: false,
 
         message:
-          'Your shopper account has been rejected',
+          shopper.approval_status === 'rejected'
+            ? 'Your shopper account has been rejected'
+            : 'Your shopper account is suspended. Please contact GetMe support.',
 
       });
 
@@ -515,6 +532,9 @@ router.post('/login', async (req, res) => {
         status:
           shopper.status,
 
+        approvalStatus:
+          shopper.approval_status,
+
         latitude:
           shopper.latitude,
 
@@ -550,316 +570,9 @@ router.post('/login', async (req, res) => {
 
 
 // ==================================================
-// SHOPPER STATUS UPDATE
+// Shopper approval/status changes and the admin shopper list
+// moved to the admin API (requireAdmin): /api/admin/shoppers
 // ==================================================
-
-router.post('/status', async (req, res) => {
-  try {
-
-    const {
-      shopperId,
-      status,
-    } = req.body;
-
-
-    // ================================================
-    // VALIDATION
-    // ================================================
-
-    if (!shopperId || !status) {
-
-      return res.status(400).json({
-
-        success: false,
-
-        message:
-          'Shopper ID and status are required',
-
-      });
-
-    }
-
-
-    // ================================================
-    // ALLOWED STATUS VALUES
-    // ================================================
-
-    const allowedStatuses = [
-      'pending',
-      'approved',
-      'online',
-      'offline',
-      'rejected',
-    ];
-
-
-    if (!allowedStatuses.includes(status)) {
-
-      return res.status(400).json({
-
-        success: false,
-
-        message:
-          'Invalid shopper status',
-
-      });
-
-    }
-
-
-    // ================================================
-    // UPDATE DATABASE
-    // ================================================
-
-    const result = await db.query(
-      `
-      UPDATE shoppers
-      SET status = $1
-      WHERE id = $2
-      RETURNING
-        id,
-        full_name,
-        mobile,
-        email,
-        status,
-        latitude,
-        longitude,
-        created_at
-      `,
-      [
-        status,
-        shopperId,
-      ]
-    );
-
-
-    if (result.rows.length === 0) {
-
-      return res.status(404).json({
-
-        success: false,
-
-        message:
-          'Shopper not found',
-
-      });
-
-    }
-
-
-    const shopper =
-      result.rows[0];
-
-
-    console.log(
-      '===================================='
-    );
-
-    console.log(
-      '🔄 SHOPPER STATUS UPDATED'
-    );
-
-    console.log(
-      'SHOPPER ID:',
-      shopper.id
-    );
-
-    console.log(
-      'NAME:',
-      shopper.full_name
-    );
-
-    console.log(
-      'STATUS:',
-      shopper.status
-    );
-
-    console.log(
-      '===================================='
-    );
-
-
-    // ================================================
-    // SOCKET.IO - STATUS UPDATED
-    // ================================================
-
-    const io = req.app.get('io');
-
-    if (io) {
-
-      io.emit('shopper_status_updated', {
-
-        id:
-          shopper.id,
-
-        fullName:
-          shopper.full_name,
-
-        mobile:
-          shopper.mobile,
-
-        email:
-          shopper.email,
-
-        status:
-          shopper.status,
-
-        latitude:
-          shopper.latitude,
-
-        longitude:
-          shopper.longitude,
-
-      });
-
-      io.emit('shoppers_updated');
-
-    }
-
-
-    // ================================================
-    // RESPONSE
-    // ================================================
-
-    return res.json({
-
-      success: true,
-
-      message:
-        'Shopper status updated successfully',
-
-      shopper: {
-
-        id:
-          shopper.id,
-
-        fullName:
-          shopper.full_name,
-
-        mobile:
-          shopper.mobile,
-
-        email:
-          shopper.email,
-
-        status:
-          shopper.status,
-
-        latitude:
-          shopper.latitude,
-
-        longitude:
-          shopper.longitude,
-
-        createdAt:
-          shopper.created_at,
-
-      },
-
-    });
-
-  } catch (error) {
-
-    console.error(
-      '❌ Shopper status update error:',
-      error
-    );
-
-
-    return res.status(500).json({
-
-      success: false,
-
-      message:
-        'Failed to update shopper status',
-
-    });
-
-  }
-});
-
-
-// ==================================================
-// ADMIN - GET ALL SHOPPERS
-// ==================================================
-
-router.get('/admin/all', async (req, res) => {
-  try {
-
-    const result = await db.query(
-      `
-      SELECT
-        id,
-        full_name,
-        mobile,
-        email,
-        status,
-        latitude,
-        longitude,
-        created_at
-      FROM shoppers
-      ORDER BY created_at DESC
-      `
-    );
-
-
-    return res.json({
-
-      success: true,
-
-      shoppers:
-        result.rows.map(
-          (shopper) => ({
-
-            id:
-              shopper.id,
-
-            fullName:
-              shopper.full_name,
-
-            mobile:
-              shopper.mobile,
-
-            email:
-              shopper.email,
-
-            status:
-              shopper.status,
-
-            latitude:
-              shopper.latitude,
-
-            longitude:
-              shopper.longitude,
-
-            createdAt:
-              shopper.created_at,
-
-          })
-        ),
-
-    });
-
-  } catch (error) {
-
-    console.error(
-      '❌ Admin shoppers fetch error:',
-      error
-    );
-
-
-    return res.status(500).json({
-
-      success: false,
-
-      message:
-        'Failed to fetch shoppers',
-
-    });
-
-  }
-});
-
 
 // ==================================================
 // EXPORT

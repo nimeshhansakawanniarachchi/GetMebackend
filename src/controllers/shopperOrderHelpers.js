@@ -1,4 +1,6 @@
 
+const { broadcastOrderChange } = require('../realtime');
+
 // =====================================================
 // SHOPPER ORDER SHARED HELPERS
 // =====================================================
@@ -61,6 +63,12 @@ const emitOrderSocketEvent = ({
         event,
         eventPayload
       );
+
+      // Admin panel + shop websites
+      broadcastOrderChange(io, numericOrderId, {
+        event,
+        status: eventPayload?.status || null,
+      });
     }
 
     if (

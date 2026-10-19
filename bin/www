@@ -8,6 +8,7 @@ var debug = require('debug')('customer-backend:server');
 var http = require('http');
 var { Server } = require('socket.io');
 var jwt = require('jsonwebtoken');
+var db = require('../src/config/db');
 
 /**
  * Get port from environment.
@@ -30,9 +31,14 @@ var server = http.createServer(app);
  * Create Socket.IO server.
  */
 
+var allowedOrigins = app.get('allowedOrigins') || [];
+
 var io = new Server(server, {
   cors: {
-    origin: '*',
+    // Same allow-list as the REST API; mobile apps send no Origin
+    origin: function (origin, callback) {
+      callback(null, !origin || allowedOrigins.includes(origin));
+    },
     methods: [
       'GET',
       'POST',
@@ -80,14 +86,20 @@ io.use(function (socket, next) {
       decoded?.shopper_id ??
       null;
 
-    if (customerId !== null && customerId !== undefined) {
+    if (decoded?.adminId != null && decoded?.role === 'admin') {
+      socket.admin = decoded;
+      socket.userType = 'admin';
+    } else if (decoded?.shopId != null) {
+      socket.shop = decoded;
+      socket.userType = 'shop';
+    } else if (customerId !== null && customerId !== undefined) {
       socket.customer = decoded;
       socket.userType = 'customer';
     } else if (shopperId !== null && shopperId !== undefined) {
       socket.shopper = decoded;
       socket.userType = 'shopper';
     } else {
-      console.error('❌ SOCKET AUTH: Customer/Shopper ID missing');
+      console.error('❌ SOCKET AUTH: Unknown token type');
       return next(new Error('Invalid socket user'));
     }
 
@@ -150,14 +162,62 @@ io.on('connection', function (socket) {
   }
 
   /**
-   * Join order room.
+   * Admin panel and shop websites.
    */
 
-  socket.on('join-order', function (orderId) {
+  if (socket.userType === 'admin') {
+    socket.join('admins');
+    console.log('🏠 Joined admins room');
+  }
+
+  if (socket.userType === 'shop') {
+    const room = `shop:${socket.shop.shopId}`;
+    socket.join(room);
+    console.log('🏠 Joined shop room:', room);
+  }
+
+  /**
+   * Join order room.
+   * Only the order's customer, its shopper (or any shopper while the
+   * order is still looking for one) and admins may listen to it.
+   */
+
+  socket.on('join-order', async function (orderId) {
     const numericOrderId = Number(orderId);
 
     if (!Number.isSafeInteger(numericOrderId) || numericOrderId <= 0) {
       console.warn('⚠️ SOCKET: Invalid order ID:', orderId);
+      return;
+    }
+
+    try {
+      if (socket.userType !== 'admin') {
+        const result = await db.query(
+          'SELECT customer_id, shopper_id, status FROM orders WHERE id = $1',
+          [numericOrderId]
+        );
+
+        const order = result.rows[0];
+
+        const allowed =
+          order &&
+          ((socket.userType === 'customer' &&
+            Number(order.customer_id) === Number(customerId)) ||
+            (socket.userType === 'shopper' &&
+              (Number(order.shopper_id) === Number(shopperId) ||
+                (order.shopper_id == null &&
+                  order.status === 'waiting_for_shopper'))));
+
+        if (!allowed) {
+          console.warn('⚠️ SOCKET: join-order denied', {
+            orderId: numericOrderId,
+            userType: socket.userType,
+          });
+          return;
+        }
+      }
+    } catch (error) {
+      console.error('❌ SOCKET join-order check failed:', error.message);
       return;
     }
 

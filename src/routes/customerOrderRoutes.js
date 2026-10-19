@@ -7,6 +7,11 @@ const upload = require('../middleware/uploadMiddleware');
 
 const {
   createOrder,
+  getQuote,
+  getDeliverySlots,
+} = require('../controllers/customerCreateOrderController');
+
+const {
   getCustomerOrders,
   getCustomerOrderById,
   getNearbyShoppersForOrder,
@@ -18,6 +23,23 @@ const {
 } = require('../controllers/customerOrderController');
 
 const router = express.Router();
+
+
+// ==================================================
+// PRICE A CART (server-side, nothing saved)
+// ==================================================
+
+router.post(
+  '/orders/quote',
+  authMiddleware,
+  getQuote
+);
+
+router.get(
+  '/delivery-slots',
+  authMiddleware,
+  getDeliverySlots
+);
 
 
 // ==================================================

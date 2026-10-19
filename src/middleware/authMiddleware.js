@@ -44,6 +44,17 @@ const authMiddleware = (req, res, next) => {
     );
 
     // ==================================================
+    // MUST BE A CUSTOMER TOKEN
+    // ==================================================
+
+    if (!decoded?.customerId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid customer token',
+      });
+    }
+
+    // ==================================================
     // SAVE CUSTOMER DATA
     // ==================================================
 
