@@ -13,6 +13,8 @@ const {
   cancelCustomerOrder,
   updateReplacementStatus,
   uploadCustomItemMedia,
+   startShopperSearch,
+  stopShopperSearch,
 } = require('../controllers/customerOrderController');
 
 const router = express.Router();
@@ -108,6 +110,25 @@ router.patch(
   authMiddleware,
   updateReplacementStatus
 );
+
+
+
+
+
+router.patch(
+  '/orders/:orderId/start-search',
+  authMiddleware,
+  startShopperSearch
+);
+
+router.patch(
+  '/orders/:orderId/stop-search',
+  authMiddleware,
+  stopShopperSearch
+);
+
+
+
 
 
 module.exports = router;

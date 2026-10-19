@@ -268,6 +268,244 @@ const uploadCustomItemMedia = async (
 };
 
 
+
+
+
+
+
+
+
+
+
+
+
+// ==================================================
+// START SHOPPER SEARCH
+// ==================================================
+
+const startShopperSearch = async (req, res) => {
+  try {
+    const customerId = req.customer.customerId;
+    const orderId = Number(req.params.orderId);
+
+    if (!Number.isInteger(orderId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid order ID',
+      });
+    }
+
+    const result = await pool.query(
+      `
+      UPDATE orders
+      SET
+        status = 'waiting_for_shopper',
+        updated_at = CURRENT_TIMESTAMP
+      WHERE
+        id = $1
+        AND customer_id = $2
+        AND status = 'pending_shopper_search'
+        AND shopper_id IS NULL
+      RETURNING *
+      `,
+      [orderId, customerId]
+    );
+
+    if (result.rows.length === 0) {
+      const existing = await pool.query(
+        `
+        SELECT id, status, shopper_id
+        FROM orders
+        WHERE id = $1 AND customer_id = $2
+        LIMIT 1
+        `,
+        [orderId, customerId]
+      );
+
+      if (existing.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Order not found',
+        });
+      }
+
+      const order = existing.rows[0];
+
+      if (order.shopper_id) {
+        return res.status(409).json({
+          success: false,
+          message: 'A shopper has already accepted this order',
+          status: order.status,
+        });
+      }
+
+      return res.status(409).json({
+        success: false,
+        message: 'This order cannot start shopper search',
+        status: order.status,
+      });
+    }
+
+    const order = result.rows[0];
+
+    emitOrderSocketEvent({
+      req,
+      event: 'order-status-changed',
+      orderId,
+      customerId,
+      payload: {
+        status: 'waiting_for_shopper',
+        order: {
+          ...order,
+          id: Number(order.id),
+          orderId: Number(order.id),
+          status: 'waiting_for_shopper',
+        },
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Shopper search started',
+      order: order,
+    });
+  } catch (error) {
+    console.error('START SHOPPER SEARCH ERROR:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to start shopper search',
+      error: error.message,
+    });
+  }
+};
+
+
+// ==================================================
+// STOP SHOPPER SEARCH
+// ==================================================
+
+const stopShopperSearch = async (req, res) => {
+  try {
+    const customerId = req.customer.customerId;
+    const orderId = Number(req.params.orderId);
+
+    if (!Number.isInteger(orderId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid order ID',
+      });
+    }
+
+    const result = await pool.query(
+      `
+      UPDATE orders
+      SET
+        status = 'shopper_search_cancelled',
+        updated_at = CURRENT_TIMESTAMP
+      WHERE
+        id = $1
+        AND customer_id = $2
+        AND status = 'waiting_for_shopper'
+        AND shopper_id IS NULL
+      RETURNING *
+      `,
+      [orderId, customerId]
+    );
+
+    if (result.rows.length === 0) {
+      const existing = await pool.query(
+        `
+        SELECT id, status, shopper_id
+        FROM orders
+        WHERE id = $1 AND customer_id = $2
+        LIMIT 1
+        `,
+        [orderId, customerId]
+      );
+
+      if (existing.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Order not found',
+        });
+      }
+
+      const order = existing.rows[0];
+
+      if (order.shopper_id) {
+        return res.status(409).json({
+          success: false,
+          message: 'A shopper has already accepted this order. Search cannot be stopped now.',
+          status: order.status,
+        });
+      }
+
+      return res.status(409).json({
+        success: false,
+        message: 'Shopper search is not currently active',
+        status: order.status,
+      });
+    }
+
+    const order = result.rows[0];
+
+    emitOrderSocketEvent({
+      req,
+      event: 'order-status-changed',
+      orderId,
+      customerId,
+      payload: {
+        status: 'shopper_search_cancelled',
+        order: {
+          ...order,
+          id: Number(order.id),
+          orderId: Number(order.id),
+          status: 'shopper_search_cancelled',
+        },
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Shopper search stopped. Your order is still saved.',
+      order: order,
+    });
+  } catch (error) {
+    console.error('STOP SHOPPER SEARCH ERROR:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to stop shopper search',
+      error: error.message,
+    });
+  }
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ==================================================
 // CREATE ORDER
 // ==================================================
@@ -796,7 +1034,7 @@ const createOrder = async (
           safeScheduledEndTime,
           safeEstimatedDeliveryMinutes,
           safeEstimatedDeliveryMaxMinutes,
-          'waiting_for_shopper',
+          'pending_shopper_search',
         ]
       );
 
@@ -4377,4 +4615,8 @@ module.exports = {
   updateReplacementStatus,
 
   uploadCustomItemMedia,
+
+
+  startShopperSearch,
+stopShopperSearch,
 };

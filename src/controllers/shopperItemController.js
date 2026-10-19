@@ -464,6 +464,7 @@ const updateItemShoppingStatus = async (req, res) => {
     'not_found',
     'replaced',
     'completed',
+    'done',
   ];
 
   // ---------------------------------------------------
@@ -580,7 +581,8 @@ const updateItemShoppingStatus = async (req, res) => {
             'found',
             'not_found',
             'replaced',
-            'completed'
+            'completed',
+             'done'
           )
           THEN NOW()
           ELSE NULL
