@@ -15,12 +15,18 @@ const {
   getCustomerOrders,
   getCustomerOrderById,
   getNearbyShoppersForOrder,
+  getNearbyVehiclesForOrder,
   cancelCustomerOrder,
   updateReplacementStatus,
   uploadCustomItemMedia,
    startShopperSearch,
   stopShopperSearch,
 } = require('../controllers/customerOrderController');
+
+const {
+  rateOrder,
+  getMyRatings,
+} = require('../controllers/customerRatingController');
 
 const router = express.Router();
 
@@ -100,6 +106,17 @@ router.get(
 
 
 // ==================================================
+// NEARBY VEHICLES (approximate, for the map)
+// ==================================================
+
+router.get(
+  '/orders/:orderId/nearby-vehicles',
+  authMiddleware,
+  getNearbyVehiclesForOrder
+);
+
+
+// ==================================================
 // CANCEL ORDER
 // ==================================================
 
@@ -147,6 +164,23 @@ router.patch(
   '/orders/:orderId/stop-search',
   authMiddleware,
   stopShopperSearch
+);
+
+
+// ==================================================
+// RATINGS (delivered orders)
+// ==================================================
+
+router.post(
+  '/orders/:orderId/rating',
+  authMiddleware,
+  rateOrder
+);
+
+router.get(
+  '/order-ratings',
+  authMiddleware,
+  getMyRatings
 );
 
 

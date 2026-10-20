@@ -6,6 +6,15 @@ const {
   notifyNearbyShoppersOfNewBatch,
 } = require('./shopperBatchAlerts');
 
+const {
+  dispatchOrder,
+  getNearbyVehicles,
+  getOfferHolders,
+  notifyOffersWithdrawn,
+} = require('./shopperDispatch');
+
+const { VEHICLE_TYPES } = require('../utils/vehicleTypes');
+
 const { broadcastOrderChange } = require('../realtime');
 
 const {
@@ -311,21 +320,45 @@ const startShopperSearch = async (req, res) => {
       });
     }
 
+    // Preferred shopper vehicle; missing / 'any' = any vehicle
+    const requestedVehicle = String(
+      req.body?.vehicleType || ''
+    ).trim().toLowerCase();
+
+    if (
+      requestedVehicle &&
+      requestedVehicle !== 'any' &&
+      !VEHICLE_TYPES.includes(requestedVehicle)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Choose a valid vehicle type',
+      });
+    }
+
+    const preferredVehicle =
+      requestedVehicle && requestedVehicle !== 'any'
+        ? requestedVehicle
+        : null;
+
     const result = await pool.query(
       `
       UPDATE orders
       SET
         status = 'waiting_for_shopper',
+        preferred_vehicle_type = $3,
         shopper_search_started_at = CURRENT_TIMESTAMP,
         updated_at = CURRENT_TIMESTAMP
       WHERE
         id = $1
         AND customer_id = $2
-        AND status = 'pending_shopper_search'
+        -- shopper_search_cancelled: stopped before customers could
+        -- book again; those orders can be booked again too
+        AND status IN ('pending_shopper_search', 'shopper_search_cancelled')
         AND shopper_id IS NULL
       RETURNING *
       `,
-      [orderId, customerId]
+      [orderId, customerId, preferredVehicle]
     );
 
     if (result.rows.length === 0) {
@@ -420,11 +453,14 @@ const stopShopperSearch = async (req, res) => {
       });
     }
 
+    // Stopping is not a cancellation: the order goes back to
+    // "ready to book" (keeping the chosen vehicle), so the customer
+    // can pick a vehicle and book again at any time.
     const result = await pool.query(
       `
       UPDATE orders
       SET
-        status = 'shopper_search_cancelled',
+        status = 'pending_shopper_search',
         updated_at = CURRENT_TIMESTAMP
       WHERE
         id = $1
@@ -479,15 +515,26 @@ const stopShopperSearch = async (req, res) => {
       orderId,
       customerId,
       payload: {
-        status: 'shopper_search_cancelled',
+        status: 'pending_shopper_search',
         order: {
           ...order,
           id: Number(order.id),
           orderId: Number(order.id),
-          status: 'shopper_search_cancelled',
+          status: 'pending_shopper_search',
         },
       },
     });
+
+    // Whoever held the offer loses it now (a new booking starts a
+    // fresh closest-first round anyway) - and sees it vanish at once
+    const holders = await getOfferHolders(orderId);
+
+    await pool.query(
+      'DELETE FROM shopper_order_offers WHERE order_id = $1',
+      [orderId]
+    );
+
+    notifyOffersWithdrawn(req.app.get('io'), orderId, holders, 'search-stopped');
 
     return res.status(200).json({
       success: true,
@@ -561,7 +608,9 @@ const getCustomerOrders = async (
           sh.mobile AS shopper_mobile,
           sh.status AS shopper_status,
           sh.latitude AS shopper_latitude,
-          sh.longitude AS shopper_longitude
+          sh.longitude AS shopper_longitude,
+          sh.vehicle_type AS shopper_vehicle_type,
+          sh.vehicle_number AS shopper_vehicle_number
 
         FROM orders o
 
@@ -1203,6 +1252,22 @@ const getCustomerOrders = async (
                       order.shopper_status ||
                       null,
 
+
+                    // Shown on the "Your shopper" card
+
+                    vehicle_type:
+
+                      order.shopper_vehicle_type ||
+
+                      null,
+
+
+                    vehicle_number:
+
+                      order.shopper_vehicle_number ||
+
+                      null,
+
                     latitude:
                       order.shopper_latitude !== null
                         ? Number(
@@ -1503,7 +1568,9 @@ const getCustomerOrderById =
             sh.mobile AS shopper_mobile,
             sh.status AS shopper_status,
             sh.latitude AS shopper_latitude,
-            sh.longitude AS shopper_longitude
+            sh.longitude AS shopper_longitude,
+            sh.vehicle_type AS shopper_vehicle_type,
+            sh.vehicle_number AS shopper_vehicle_number
 
           FROM orders o
 
@@ -2155,6 +2222,22 @@ const getCustomerOrderById =
                 order.shopper_status ||
                 null,
 
+
+              // Shown on the "Your shopper" card
+
+              vehicle_type:
+
+                order.shopper_vehicle_type ||
+
+                null,
+
+
+              vehicle_number:
+
+                order.shopper_vehicle_number ||
+
+                null,
+
               latitude:
                 order.shopper_latitude !== null
                   ? Number(
@@ -2404,7 +2487,11 @@ const getCustomerOrderById =
 
 
 // ==================================================
-// GET NEARBY ONLINE SHOPPERS FOR ORDER
+// SHOPPER SEARCH POLL FOR ORDER
+// GET /orders/:orderId/nearby-shoppers (path kept for old apps)
+// Returns the shop + accepted shopper only. Available shoppers and
+// their locations are never sent to customers; while searching,
+// each poll advances the closest-first dispatch.
 // ==================================================
 
 const getNearbyShoppersForOrder =
@@ -2560,111 +2647,18 @@ const getNearbyShoppersForOrder =
         });
       }
 
-      const shoppersResult =
-        await pool.query(
-          `
-          SELECT
-            sh.id,
-            sh.full_name,
-            sh.mobile,
-            sh.status,
-            sh.latitude,
-            sh.longitude,
-
-            (
-              6371 *
-              acos(
-                LEAST(
-                  1,
-                  GREATEST(
-                    -1,
-
-                    cos(radians($1)) *
-                    cos(radians(sh.latitude)) *
-                    cos(
-                      radians(sh.longitude) -
-                      radians($2)
-                    ) +
-
-                    sin(radians($1)) *
-                    sin(radians(sh.latitude))
-                  )
-                )
-              )
-            ) AS distance_km
-
-          FROM shoppers sh
-
-          WHERE
-            sh.status = 'online'
-
-            AND sh.latitude IS NOT NULL
-            AND sh.longitude IS NOT NULL
-
-            AND sh.latitude BETWEEN -90 AND 90
-            AND sh.longitude BETWEEN -180 AND 180
-
-          ORDER BY
-            distance_km ASC
-          `,
-          [
-            shopLatitude,
-            shopLongitude,
-          ]
-        );
-
-      const shoppers =
-        shoppersResult.rows
-          .filter(
-            shopper => {
-              const distance =
-                Number(
-                  shopper.distance_km
-                );
-
-              return (
-                Number.isFinite(distance) &&
-                distance <= 10
-              );
-            }
-          )
-          .map(
-            shopper => ({
-              id:
-                Number(shopper.id),
-
-              name:
-                shopper.full_name,
-
-              full_name:
-                shopper.full_name,
-
-              mobile:
-                shopper.mobile,
-
-              status:
-                shopper.status,
-
-              latitude:
-                shopper.latitude !== null
-                  ? Number(
-                      shopper.latitude
-                    )
-                  : null,
-
-              longitude:
-                shopper.longitude !== null
-                  ? Number(
-                      shopper.longitude
-                    )
-                  : null,
-
-              distance_km:
-                Number(
-                  shopper.distance_km
-                ),
-            })
-          );
+      // While searching, each poll moves the offer on to the next
+      // closest shopper when the last one passed or timed out.
+      // Customers are NOT told who is available or where they are.
+      if (
+        order.status === 'waiting_for_shopper' &&
+        !order.shopper_id
+      ) {
+        await dispatchOrder({
+          io: req.app.get('io'),
+          orderId,
+        });
+      }
 
       return res.status(200).json({
         success: true,
@@ -2701,9 +2695,6 @@ const getNearbyShoppersForOrder =
 
         assigned_shopper:
           acceptedShopper,
-
-        shoppers:
-          shoppers,
       });
 
     } catch (error) {
@@ -2821,6 +2812,14 @@ const cancelCustomerOrder =
             customerId,
           ]
         );
+
+      // Shoppers holding the offer see it vanish at once
+      notifyOffersWithdrawn(
+        req.app.get('io'),
+        orderId,
+        await getOfferHolders(orderId),
+        'cancelled'
+      );
 
       emitOrderSocketEvent({
         req,
@@ -3512,6 +3511,65 @@ const updateReplacementStatus =
 // EXPORT
 // ==================================================
 
+// ==================================================
+// NEARBY VEHICLES FOR THE FIND A SHOPPER MAP
+// GET /orders/:orderId/nearby-vehicles
+// PickMe-style vehicle icons: type + approximate position only
+// (no ids / names; positions shifted 200-300 m, see
+// shopperDispatch.getNearbyVehicles). Only until a shopper accepts.
+// ==================================================
+
+const getNearbyVehiclesForOrder = async (req, res) => {
+  try {
+    const customerId = req.customer.customerId;
+    const orderId = Number(req.params.orderId);
+
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid order ID',
+      });
+    }
+
+    const orderResult = await pool.query(
+      `
+      SELECT status, shopper_id
+      FROM orders
+      WHERE id = $1 AND customer_id = $2
+      LIMIT 1
+      `,
+      [orderId, customerId]
+    );
+
+    const order = orderResult.rows[0];
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found',
+      });
+    }
+
+    const searching =
+      !order.shopper_id &&
+      (order.status === 'pending_shopper_search' ||
+        order.status === 'waiting_for_shopper' ||
+        order.status === 'shopper_search_cancelled');
+
+    return res.status(200).json({
+      success: true,
+      vehicles: searching ? await getNearbyVehicles(orderId) : [],
+    });
+  } catch (error) {
+    console.error('❌ GET NEARBY VEHICLES ERROR:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to load nearby vehicles',
+    });
+  }
+};
+
 module.exports = {
 
   getCustomerOrders,
@@ -3519,6 +3577,8 @@ module.exports = {
   getCustomerOrderById,
 
   getNearbyShoppersForOrder,
+
+  getNearbyVehiclesForOrder,
 
   cancelCustomerOrder,
 

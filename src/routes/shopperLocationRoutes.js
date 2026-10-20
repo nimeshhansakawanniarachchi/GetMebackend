@@ -3,6 +3,8 @@ const jwt = require('jsonwebtoken');
 
 const db = require('../config/db');
 
+const { emitToAdmins } = require('../realtime');
+
 const router = express.Router();
 
 
@@ -215,6 +217,53 @@ router.post('/location', async (req, res) => {
     const shopper =
       result.rows[0];
 
+
+    // ================================================
+    // REAL TIME: push the position to the customer of every
+    // order this shopper is working on (tracking map, route,
+    // ETA). Polling stays as a fallback in the app.
+    // ================================================
+
+    const io = req.app.get('io');
+
+    if (io) {
+      const activeOrders =
+        await db.query(
+          `
+          SELECT id, customer_id
+          FROM orders
+          WHERE shopper_id = $1
+            AND status NOT IN (
+              'delivered',
+              'completed',
+              'cancelled',
+              'shopper_search_cancelled'
+            )
+          `,
+          [shopper.id]
+        );
+
+      activeOrders.rows.forEach((order) => {
+        const payload = {
+          orderId: Number(order.id),
+          order_id: Number(order.id),
+          shopperId: Number(shopper.id),
+          latitude: Number(shopper.latitude),
+          longitude: Number(shopper.longitude),
+          at: new Date().toISOString(),
+        };
+
+        io.to(`customer:${order.customer_id}`).emit(
+          'shopper-location-updated',
+          payload
+        );
+
+        io.to(`order:${order.id}`).emit(
+          'shopper-location-updated',
+          payload
+        );
+      });
+    }
 
     console.log(
       '📍 SHOPPER LOCATION UPDATED'
@@ -497,6 +546,18 @@ router.post('/status', async (req, res) => {
 
     const updatedShopper =
       result.rows[0];
+
+
+    // Admin Shoppers page + dashboard "online" count update live
+    emitToAdmins(
+      req.app.get('io'),
+      'admin:shoppers-updated',
+      {
+        shopperId: Number(updatedShopper.id),
+        reason: 'status',
+        status: updatedShopper.status,
+      }
+    );
 
 
     // ================================================

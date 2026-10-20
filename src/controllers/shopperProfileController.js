@@ -1,12 +1,6 @@
 const db = require('../config/db');
 
-const VEHICLE_TYPES = [
-  'bicycle',
-  'motorbike',
-  'scooter',
-  'three-wheeler',
-  'car',
-];
+const { VEHICLE_TYPES } = require('../utils/vehicleTypes');
 
 const getShopperId = (req) =>
   req.shopper?.shopperId ||

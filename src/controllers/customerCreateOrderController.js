@@ -6,13 +6,17 @@ const {
 } = require('../pricing/quote');
 
 const { buildSlots } = require('../pricing/slots');
+const { evaluatePromo } = require('../pricing/promos');
 const { getPricingSettings } = require('../pricing/settings');
 
 const { broadcastOrderChange } = require('../realtime');
 
 const MAX_ADDRESS_LENGTH = 500;
 
-const readQuoteInput = (body) => ({
+const readQuoteInput = (body, customerId) => ({
+  customerId,
+  tipAmount: body?.tipAmount ?? 0,
+  promoCode: body?.promoCode || null,
   deliveryLatitude: body?.deliveryLatitude,
   deliveryLongitude: body?.deliveryLongitude,
   deliveryOption: body?.deliveryOption,
@@ -30,7 +34,7 @@ const readQuoteInput = (body) => ({
 
 const getQuote = async (req, res) => {
   try {
-    const quote = await buildQuote(readQuoteInput(req.body));
+    const quote = await buildQuote(readQuoteInput(req.body, req.customer.customerId));
 
     return res.json({ success: true, quote });
   } catch (error) {
@@ -64,7 +68,7 @@ const getDeliverySlots = async (req, res) => {
 // POST /api/customer/orders
 // Body: deliveryAddress, deliveryLatitude, deliveryLongitude,
 //   deliveryOption ('fast'|'scheduled'), scheduledDate, scheduledStartTime,
-//   paymentMethod, expectedTotal, items[{ productId, shopId, quantity,
+//   paymentMethod, expectedTotal, tipAmount, promoCode, items[{ productId, shopId, quantity,
 //   amount, selectedUnit } | { custom:true, shopId, itemName, quantity,
 //   unit, details, image, voiceUrl }]
 // Every amount is computed here — client prices and fees are ignored.
@@ -87,7 +91,7 @@ const createOrder = async (req, res) => {
   let quote;
 
   try {
-    quote = await buildQuote(readQuoteInput(req.body));
+    quote = await buildQuote(readQuoteInput(req.body, customerId));
   } catch (error) {
     console.error('❌ createOrder quote error:', error.message);
 
@@ -100,6 +104,16 @@ const createOrder = async (req, res) => {
       code: 'ORDER_ISSUES',
       message: quote.issues[0].message,
       issues: quote.issues,
+      quote,
+    });
+  }
+
+  // A code the customer entered must still apply; never drop it silently
+  if (quote.promo && !quote.promo.applied) {
+    return res.status(400).json({
+      success: false,
+      code: 'PROMO_INVALID',
+      message: quote.promo.message,
       quote,
     });
   }
@@ -128,6 +142,33 @@ const createOrder = async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    // Re-check the code with its row locked so a limited code
+    // can't be used twice by orders placed at the same moment
+    let promo = null;
+
+    if (quote.promo) {
+      promo = await evaluatePromo({
+        code: quote.promo.code,
+        customerId,
+        itemsTotal: quote.itemsTotal,
+        deliveryFee: quote.deliveryFee,
+        fastDeliveryFee: quote.fastDeliveryFee,
+        client,
+        lock: true,
+      });
+
+      if (!promo?.applied || promo.discount !== quote.discount) {
+        await client.query('ROLLBACK');
+
+        return res.status(409).json({
+          success: false,
+          code: 'PROMO_INVALID',
+          message: promo?.message || 'This promo code can no longer be used',
+          quote,
+        });
+      }
+    }
+
     const orderResult = await client.query(
       `
       INSERT INTO orders (
@@ -138,9 +179,10 @@ const createOrder = async (req, res) => {
         distance_km,
         scheduled_date, scheduled_start_time, scheduled_end_time,
         estimated_delivery_minutes, estimated_delivery_max_minutes,
+        tip_amount, promo_code, discount_amount,
         status
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'pending_shopper_search')
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,'pending_shopper_search')
       RETURNING *
       `,
       [
@@ -162,10 +204,23 @@ const createOrder = async (req, res) => {
         quote.slot?.end || null,
         quote.deliveryOption === 'fast' ? quote.estimatedMinutes.min : null,
         quote.deliveryOption === 'fast' ? quote.estimatedMinutes.max : null,
+        quote.tipAmount,
+        promo ? promo.code : null,
+        quote.discount,
       ]
     );
 
     const order = orderResult.rows[0];
+
+    if (promo) {
+      await client.query(
+        `
+        INSERT INTO promo_redemptions (promo_id, order_id, customer_id, discount_amount)
+        VALUES ($1, $2, $3, $4)
+        `,
+        [promo.promoId, order.id, customerId, promo.discount]
+      );
+    }
 
     for (const shop of quote.shops) {
       await client.query(
@@ -250,6 +305,9 @@ const createOrder = async (req, res) => {
       deliveryFee: Number(order.delivery_fee),
       fastDeliveryFee: Number(order.fast_delivery_fee),
       serviceFee: Number(order.service_fee),
+      tipAmount: Number(order.tip_amount),
+      promoCode: order.promo_code,
+      discountAmount: Number(order.discount_amount),
       distanceKm: order.distance_km != null ? Number(order.distance_km) : null,
       hasCustomItems: quote.hasCustomItems,
       shop: shopObjects.find((shop) => shop.id === primaryShop.id),

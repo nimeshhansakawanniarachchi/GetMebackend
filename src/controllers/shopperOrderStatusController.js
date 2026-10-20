@@ -3,6 +3,12 @@ const db = require('../config/db');
 
 const { shopperPayForOrder } = require('./shopperPay');
 
+const {
+  shopperHoldsOffer,
+  getOfferHolders,
+  notifyOffersWithdrawn,
+} = require('./shopperDispatch');
+
 const { broadcastOrderChange } = require('../realtime');
 
 const {
@@ -169,6 +175,21 @@ const acceptOrder = async (req, res) => {
       });
     }
 
+    // Only shoppers the batch is currently offered to (closest first)
+    if (!(await shopperHoldsOffer({ client, orderId, shopperId }))) {
+      await client.query('ROLLBACK');
+
+      return res.status(409).json({
+        success: false,
+        message: 'This batch is no longer offered to you',
+      });
+    }
+
+    // Anyone else holding the offer loses it once this commits
+    const otherHolders = (await getOfferHolders(orderId, client)).filter(
+      (holderId) => holderId !== Number(shopperId)
+    );
+
     const updateResult = await client.query(
       `
       UPDATE orders
@@ -222,6 +243,8 @@ const acceptOrder = async (req, res) => {
     );
 
     await client.query('COMMIT');
+
+    notifyOffersWithdrawn(req.app.get('io'), orderId, otherHolders, 'accepted');
 
     const acceptedOrder = updateResult.rows[0];
 

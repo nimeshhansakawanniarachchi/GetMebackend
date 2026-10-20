@@ -284,9 +284,37 @@ const sendMessage = async (req, res) => {
       ]
     );
 
+    const savedMessage = result.rows[0];
+
+    // ==================================================
+    // REALTIME: deliver to both sides of the order
+    // ==================================================
+
+    try {
+      const io = req.app.get('io');
+
+      if (io) {
+        const orderResult = await db.query(
+          'SELECT customer_id, shopper_id FROM orders WHERE id = $1',
+          [orderId]
+        );
+        const order = orderResult.rows[0];
+
+        if (order?.customer_id) {
+          io.to(`customer:${order.customer_id}`).emit('chat-message', savedMessage);
+        }
+
+        if (order?.shopper_id) {
+          io.to(`shopper:${order.shopper_id}`).emit('chat-message', savedMessage);
+        }
+      }
+    } catch (emitError) {
+      console.error('❌ CHAT EMIT ERROR:', emitError.message);
+    }
+
     return res.status(201).json({
       success: true,
-      message: result.rows[0],
+      message: savedMessage,
     });
 
   } catch (error) {

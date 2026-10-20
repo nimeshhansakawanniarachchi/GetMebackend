@@ -13,6 +13,11 @@ const { SHOPPER_PAY_SQL } = require('../shopperPay');
 const { broadcastOrderChange } = require('../../realtime');
 
 const {
+  getOfferHolders,
+  notifyOffersWithdrawn,
+} = require('../shopperDispatch');
+
+const {
   createShopperNotification,
 } = require('../shopperNotificationController');
 
@@ -415,6 +420,9 @@ const cancelOrder = async (req, res) => {
     }
 
     broadcastOrderChange(io, orderId, { event: 'order-status-changed', status: 'cancelled' });
+
+    // Shoppers still holding the offer see it vanish at once
+    notifyOffersWithdrawn(io, orderId, await getOfferHolders(orderId), 'cancelled');
 
     if (order.shopper_id) {
       createShopperNotification({

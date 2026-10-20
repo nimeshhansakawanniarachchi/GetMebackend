@@ -57,6 +57,13 @@ var io = new Server(server, {
 app.set('io', io);
 
 /**
+ * Shopper dispatch: every second, forward waiting orders to the next
+ * closest shopper when due (5 s steps, 10 s per shopper).
+ */
+
+require('../src/controllers/shopperDispatch').startDispatchLoop(io);
+
+/**
  * Socket.IO authentication.
  */
 

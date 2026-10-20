@@ -10,6 +10,7 @@ const people = require('../controllers/admin/adminPeopleController');
 const catalog = require('../controllers/admin/adminCatalogController');
 const finance = require('../controllers/admin/adminFinanceController');
 const settings = require('../controllers/admin/adminSettingsController');
+const promos = require('../controllers/admin/adminPromoController');
 
 const router = express.Router();
 
@@ -62,5 +63,10 @@ router.get('/reports', finance.getReports);
 router.get('/settings/pricing', settings.getPricing);
 router.put('/settings/pricing', settings.updatePricing);
 router.post('/settings/pricing/preview', settings.previewPricing);
+
+// Promo codes (GetMe pays the discount)
+router.get('/promos', promos.listPromos);
+router.post('/promos', promos.createPromo);
+router.patch('/promos/:id', promos.updatePromo);
 
 module.exports = router;

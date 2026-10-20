@@ -4,6 +4,7 @@ const { distanceKm } = require('../controllers/shopperPay');
 
 const { getPricingSettings } = require('./settings');
 const { findSlot } = require('./slots');
+const { evaluatePromo, normalizePromoCode } = require('./promos');
 const {
   round2,
   deliveryFee,
@@ -43,6 +44,10 @@ const MAX_PACKS_PER_LINE = 99;
 const PAYMENT_METHODS = ['cash', 'card', 'wallet', 'payhere', 'lankaqr', 'card_on_delivery'];
 
 const issue = (code, message, extra = {}) => ({ code, message, ...extra });
+
+// Shopper tip: quick picks shown at checkout, and the most one order can carry
+const TIP_OPTIONS = [0, 100, 200, 300, 500];
+const MAX_TIP = 10000;
 
 const REPLACEMENT_PREFERENCES = ['best_match', 'specific', 'refund'];
 
@@ -106,9 +111,20 @@ const buildQuote = async ({
   scheduledDate = null,
   scheduledStartTime = null,
   items = [],
+  tipAmount = 0,
+  promoCode = null,
+  customerId = null,
 }) => {
   const settings = await getPricingSettings();
   const issues = [];
+
+  const tip = tipAmount == null || tipAmount === '' ? 0 : Number(tipAmount);
+
+  if (!Number.isFinite(tip) || tip < 0 || tip > MAX_TIP) {
+    issues.push(issue('invalid_tip', `Tip must be between Rs 0 and Rs ${MAX_TIP}`));
+  }
+
+  const safeTip = Number.isFinite(tip) ? round2(Math.min(Math.max(tip, 0), MAX_TIP)) : 0;
 
   const latitude = Number(deliveryLatitude);
   const longitude = Number(deliveryLongitude);
@@ -335,6 +351,19 @@ const buildQuote = async ({
   const fast = option === 'fast' ? settings.fastFee : 0;
   const service = serviceFee(settings, itemsTotal);
 
+  // Invalid codes don't block the quote; the app shows promo.message
+  const promo = normalizePromoCode(promoCode)
+    ? await evaluatePromo({
+        code: promoCode,
+        customerId,
+        itemsTotal,
+        deliveryFee: delivery,
+        fastDeliveryFee: fast,
+      })
+    : null;
+
+  const discount = promo?.applied ? promo.discount : 0;
+
   const totalPacks = lines.reduce(
     (sum, line) => sum + (Number.isFinite(line.quantity) ? Math.ceil(line.quantity) : 1),
     0
@@ -350,7 +379,12 @@ const buildQuote = async ({
     deliveryFee: delivery,
     fastDeliveryFee: fast,
     serviceFee: service,
-    totalAmount: round2(itemsTotal + delivery + fast + service),
+    tipAmount: safeTip,
+    tipOptions: TIP_OPTIONS,
+    promo,
+    discount,
+    savings: discount,
+    totalAmount: round2(Math.max(0, itemsTotal + delivery + fast + service + safeTip - discount)),
     distanceKm: farthestKm,
     estimatedMinutes: estimateMinutes(farthestKm, totalPacks, Math.max(1, shopSummaries.length)),
     issues,
@@ -361,4 +395,5 @@ module.exports = {
   buildQuote,
   PAYMENT_METHODS,
   PACK_RULES,
+  MAX_TIP,
 };

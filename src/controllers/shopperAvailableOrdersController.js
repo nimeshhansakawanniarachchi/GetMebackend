@@ -7,6 +7,12 @@ const {
   shopperPayForOrder,
 } = require('./shopperPay');
 
+const {
+  VEHICLE_FALLBACK_SECONDS,
+  dispatchOrder,
+  dispatchWaitingOrders,
+} = require('./shopperDispatch');
+
 // =====================================================
 // GET SHOPPER ID
 // =====================================================
@@ -87,6 +93,14 @@ const getAvailableOrders = async (req, res) => {
     }
 
     // ===================================================
+    // MOVE EXPIRED / HIDDEN OFFERS ON TO THE NEXT SHOPPER
+    // Each waiting order is offered to one shopper at a time,
+    // closest to the shop first (see shopperDispatch.js).
+    // ===================================================
+
+    await dispatchWaitingOrders({ io: req.app.get('io') });
+
+    // ===================================================
     // GET AVAILABLE ORDERS + SHOPS
     // ===================================================
 
@@ -108,11 +122,19 @@ const getAvailableOrders = async (req, res) => {
         o.delivery_option,
         o.payment_method,
 
+        -- Preferred vehicle, unless the search has fallen back to any
+        CASE
+          WHEN o.shopper_search_started_at <= NOW() - make_interval(secs => $5)
+            THEN NULL
+          ELSE o.preferred_vehicle_type
+        END AS preferred_vehicle_type,
+
         o.items_total,
         o.delivery_fee,
         o.fast_delivery_fee,
         o.service_fee,
         o.total_amount,
+        o.tip_amount,
 
         o.distance_km AS customer_distance_km,
 
@@ -123,6 +145,7 @@ const getAvailableOrders = async (req, res) => {
         o.shopper_search_started_at,
 
         EXTRACT(EPOCH FROM (NOW() - so.first_seen_at)) AS offer_age_seconds,
+        so.first_seen_at AS offer_started_at,
 
         s.shop_name,
         s.image_url AS shop_image,
@@ -166,10 +189,12 @@ const getAvailableOrders = async (req, res) => {
       INNER JOIN shops s
         ON s.id = os.shop_id
 
-      -- This shopper's countdown for the batch
-      LEFT JOIN shopper_order_offers so
+      -- Only batches currently offered to THIS shopper
+      INNER JOIN shopper_order_offers so
         ON so.order_id = o.id
         AND so.shopper_id = $3
+        AND so.dismissed_at IS NULL
+        AND so.first_seen_at > NOW() - make_interval(secs => $4)
 
       WHERE
         o.status = 'waiting_for_shopper'
@@ -179,20 +204,17 @@ const getAvailableOrders = async (req, res) => {
         AND s.latitude IS NOT NULL
         AND s.longitude IS NOT NULL
 
-        -- Hide batches this shopper hid or let expire
-        AND (
-          so.order_id IS NULL
-          OR (
-            so.dismissed_at IS NULL
-            AND so.first_seen_at > NOW() - make_interval(secs => $4)
-          )
-        )
-
       ORDER BY
         o.created_at ASC,
         shop_distance_km ASC
       `,
-      [shopperLatitude, shopperLongitude, shopperId, OFFER_SECONDS]
+      [
+        shopperLatitude,
+        shopperLongitude,
+        shopperId,
+        OFFER_SECONDS,
+        VEHICLE_FALLBACK_SECONDS,
+      ]
     );
 
     console.log('🟢 SHOPPER ID:', shopperId);
@@ -460,7 +482,7 @@ const getAvailableOrders = async (req, res) => {
 
       const shopDistances = group.shopDistances;
 
-      const allShopsWithin10Km =
+      const allShopsInRange =
         shopDistances.length === group.shops.length &&
         shopDistances.every(
           (distance) =>
@@ -468,9 +490,9 @@ const getAvailableOrders = async (req, res) => {
             distance <= OFFER_RADIUS_KM
         );
 
-      if (!allShopsWithin10Km) {
+      if (!allShopsInRange) {
         console.log(
-          '⚠️ ORDER SKIPPED - SHOP OUTSIDE 10 KM:',
+          `⚠️ ORDER SKIPPED - SHOP OUTSIDE ${OFFER_RADIUS_KM} KM:`,
           order.id
         );
 
@@ -574,6 +596,10 @@ const getAvailableOrders = async (req, res) => {
         deliveryOption: order.delivery_option,
         paymentMethod: order.payment_method,
 
+        // Customer's preferred vehicle (null = any). Batches are only
+        // offered to shoppers with this vehicle.
+        preferredVehicleType: order.preferred_vehicle_type || null,
+
         status: order.status,
         createdAt: order.created_at,
         updatedAt: order.updated_at,
@@ -599,6 +625,10 @@ const getAvailableOrders = async (req, res) => {
         // BATCH COUNTDOWN
         offerSeconds: OFFER_SECONDS,
         offerSecondsLeft,
+
+        // Identifies this offer: the same batch can be re-offered to
+        // the same shopper in a later round (new countdown, unhidden)
+        offerStartedAt: order.offer_started_at,
         waitingSince:
           order.shopper_search_started_at ||
           order.created_at,
@@ -671,6 +701,7 @@ const getAvailableOrders = async (req, res) => {
       shopperEarnings: order.shopperEarnings,
       offerSeconds: order.offerSeconds,
       offerSecondsLeft: order.offerSecondsLeft,
+      offerStartedAt: order.offerStartedAt,
       waitingSince: order.waitingSince,
 
       batchDistanceKm: order.batchDistanceKm,
@@ -685,21 +716,6 @@ const getAvailableOrders = async (req, res) => {
       orderItems: order.orderItems,
       items: order.items,
     }));
-
-    // ===================================================
-    // START THIS SHOPPER'S COUNTDOWN FOR NEW BATCHES
-    // ===================================================
-
-    if (orders.length > 0) {
-      await db.query(
-        `
-        INSERT INTO shopper_order_offers (shopper_id, order_id)
-        SELECT $1, UNNEST($2::int[])
-        ON CONFLICT (shopper_id, order_id) DO NOTHING
-        `,
-        [shopperId, orders.map((order) => Number(order.id))]
-      );
-    }
 
     // ===================================================
     // NO CACHE
@@ -775,6 +791,9 @@ const dismissOrderOffer = async (req, res) => {
       `,
       [shopperId, orderId]
     );
+
+    // Hand the batch to the next closest shopper right away
+    await dispatchOrder({ io: req.app.get('io'), orderId });
 
     return res.json({ success: true });
   } catch (error) {

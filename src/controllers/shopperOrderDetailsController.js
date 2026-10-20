@@ -1065,10 +1065,13 @@ const getMyOrderById = async (req, res) => {
       `
       SELECT
         oi.*,
-        s.shop_name
+        s.shop_name,
+        p.category AS product_category
       FROM order_items oi
       LEFT JOIN shops s
         ON s.id = oi.shop_id
+      LEFT JOIN products p
+        ON p.id = oi.product_id
       WHERE oi.order_id = $1
       ORDER BY oi.id ASC
       `,
@@ -1189,6 +1192,9 @@ const getMyOrderById = async (req, res) => {
 
           barcode_scanned:
             Boolean(item.barcode_scanned),
+
+          // Product category for aisle grouping (null for custom items)
+          category: item.product_category ?? null,
         };
       }
     );
