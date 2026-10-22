@@ -1,2 +1,11 @@
 node_modules/
 .env
+
+# User uploads (bills, order photos, product photos) stay out of git;
+# only the empty folders are kept
+/uploads/**
+/src/uploads/**
+!/uploads/**/
+!/src/uploads/**/
+!/uploads/**/.gitkeep
+!/src/uploads/**/.gitkeep

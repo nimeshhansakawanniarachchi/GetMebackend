@@ -104,10 +104,18 @@ const getMyOrders = async (req, res) => {
         COALESCE(
           (
             SELECT json_agg(
-              to_jsonb(oi)
+              -- Barcodes the ShopperApp verifies scans against
+              to_jsonb(oi) || jsonb_build_object(
+                'product_barcode', p.barcode,
+                'replacement_product_barcode', rp.barcode
+              )
               ORDER BY oi.id
             )
             FROM order_items oi
+            LEFT JOIN products p
+              ON p.id = oi.product_id
+            LEFT JOIN products rp
+              ON rp.id = oi.replacement_product_id
             WHERE oi.order_id = o.id
           ),
           '[]'::json

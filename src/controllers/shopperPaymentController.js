@@ -234,8 +234,28 @@ const updateOrderPayment = async (req, res) => {
 // UPLOAD BILL
 // =====================================================
 
+// Uploaded file path -> "/uploads/bills/..." (null if outside uploads)
+const toUploadUrl = (file) => {
+  const uploadedPath = file?.path ? file.path.replace(/\\/g, '/') : '';
+  const uploadsIndex = uploadedPath.indexOf('uploads/');
+
+  return uploadsIndex !== -1 ? `/${uploadedPath.substring(uploadsIndex)}` : null;
+};
+
 const uploadBill = async (req, res) => {
   const shopperId = getShopperId(req);
+
+  // One or more photos of the receipt (field "bill"). The first is the
+  // main bill photo (bill_url); all are kept in bill_urls.
+  const billFiles = Array.isArray(req.files) && req.files.length > 0
+    ? req.files
+    : req.file
+    ? [req.file]
+    : [];
+
+  if (!req.file && billFiles.length > 0) {
+    req.file = billFiles[0];
+  }
 
   const orderId = Number(
     req.params.orderId ||
@@ -421,6 +441,9 @@ const uploadBill = async (req, res) => {
       });
     }
 
+    // Every photo, in the order taken (first = billUrl)
+    const billUrls = billFiles.map(toUploadUrl).filter(Boolean);
+
     // ================================================
     // FIND EXISTING BILL FOR THIS ORDER AND SHOP
     // ================================================
@@ -453,6 +476,7 @@ const uploadBill = async (req, res) => {
         UPDATE order_shop_bills
         SET
           bill_url = $1,
+          bill_urls = $3::jsonb,
           bill_uploaded_at = NOW(),
           updated_at = NOW()
         WHERE id = $2
@@ -461,6 +485,7 @@ const uploadBill = async (req, res) => {
         [
           billUrl,
           existingBillId,
+          JSON.stringify(billUrls),
         ]
       );
 
@@ -476,6 +501,7 @@ const uploadBill = async (req, res) => {
           order_id,
           shop_id,
           bill_url,
+          bill_urls,
           bill_uploaded_at,
           created_at,
           updated_at
@@ -484,6 +510,7 @@ const uploadBill = async (req, res) => {
           $1,
           $2,
           $3,
+          $4::jsonb,
           NOW(),
           NOW(),
           NOW()
@@ -494,6 +521,7 @@ const uploadBill = async (req, res) => {
           orderId,
           shopId,
           billUrl,
+          JSON.stringify(billUrls),
         ]
       );
 

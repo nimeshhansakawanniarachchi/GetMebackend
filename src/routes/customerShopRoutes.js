@@ -4,6 +4,7 @@ const express = require('express');
 const {
   getCustomerShops,
   getCustomerShopProducts,
+  getOftenBoughtWith,
   placeAutocomplete,
   placeDetails,
 } = require('../controllers/customerShopController');
@@ -28,6 +29,16 @@ router.get(
 router.get(
   '/shops/:shopId/products',
   getCustomerShopProducts
+);
+
+
+// ==================================================
+// PRODUCTS OFTEN BOUGHT WITH ONE PRODUCT
+// ==================================================
+
+router.get(
+  '/shops/:shopId/products/:productId/often-bought-with',
+  getOftenBoughtWith
 );
 
 

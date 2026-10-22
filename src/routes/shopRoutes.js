@@ -17,7 +17,13 @@ const {
   updateProduct,
   patchProduct,
   deleteProduct,
+  lookupBarcode,
 } = require('../controllers/shop/shopProductController');
+
+const {
+  importProducts,
+  getImportTemplate,
+} = require('../controllers/shop/shopProductImportController');
 
 const {
   getDashboard,
@@ -66,6 +72,19 @@ const uploader = (folder, prefix) =>
 const uploadProduct = uploader('products', 'product');
 const uploadShop = uploader('shops', 'shop');
 
+// Product spreadsheets (.xlsx / .csv, max 20MB with photos) stay in memory
+const uploadSheet = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (req, file, cb) => {
+    if (/\.(xlsx|csv)$/i.test(file.originalname)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only .xlsx and .csv files can be imported. In Excel, use Save As > Excel Workbook (.xlsx)'));
+    }
+  },
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
+
 
 // ==================================================
 // ACCOUNT
@@ -93,11 +112,14 @@ router.get('/orders/:id', shopAuthMiddleware, getOrder);
 // ==================================================
 
 router.get('/products', shopAuthMiddleware, getProducts);
+router.get('/products/import/template', shopAuthMiddleware, getImportTemplate);
+router.post('/products/import', shopAuthMiddleware, uploadSheet.single('file'), importProducts);
 router.get('/products/:id', shopAuthMiddleware, getProduct);
 router.post('/products', shopAuthMiddleware, uploadProduct.single('image'), addProduct);
 router.put('/products/:id', shopAuthMiddleware, uploadProduct.single('image'), updateProduct);
 router.patch('/products/:id', shopAuthMiddleware, patchProduct);
 router.delete('/products/:id', shopAuthMiddleware, deleteProduct);
+router.get('/catalog/:barcode', shopAuthMiddleware, lookupBarcode);
 
 
 // ==================================================
@@ -114,12 +136,14 @@ router.use((error, req, res, next) => {
       success: false,
       message:
         error.code === 'LIMIT_FILE_SIZE'
-          ? 'Image is too large. Maximum size is 5MB.'
+          ? error.field === 'file'
+            ? 'File is too large. Maximum size is 20MB. Use smaller photos or split the file.'
+            : 'Image is too large. Maximum size is 5MB.'
           : error.message,
     });
   }
 
-  if (error?.message?.startsWith('Only JPG')) {
+  if (error?.message?.startsWith('Only JPG') || error?.message?.startsWith('Only .xlsx')) {
     return res.status(400).json({ success: false, message: error.message });
   }
 

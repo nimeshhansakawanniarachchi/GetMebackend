@@ -45,6 +45,11 @@ const PAYMENT_METHODS = ['cash', 'card', 'wallet', 'payhere', 'lankaqr', 'card_o
 
 const issue = (code, message, extra = {}) => ({ code, message, ...extra });
 
+const DELIVERY_OPTIONS = ['fast', 'standard', 'scheduled'];
+
+// "Leave at the door" / "Meet at the door"
+const DROPOFF_OPTIONS = ['leave_at_door', 'meet_at_door'];
+
 // Shopper tip: quick picks shown at checkout, and the most one order can carry
 const TIP_OPTIONS = [0, 100, 200, 300, 500];
 const MAX_TIP = 10000;
@@ -110,6 +115,7 @@ const buildQuote = async ({
   deliveryOption = 'fast',
   scheduledDate = null,
   scheduledStartTime = null,
+  scheduledEndTime = null,
   items = [],
   tipAmount = 0,
   promoCode = null,
@@ -140,11 +146,13 @@ const buildQuote = async ({
     issues.push(issue('empty_cart', 'Your cart is empty'));
   }
 
-  const option = deliveryOption === 'scheduled' ? 'scheduled' : 'fast';
+  // fast = Priority (extra fee, soonest), standard = ASAP at the
+  // base delivery fee, scheduled = a chosen window
+  const option = DELIVERY_OPTIONS.includes(deliveryOption) ? deliveryOption : 'fast';
   let slot = null;
 
   if (option === 'scheduled') {
-    slot = findSlot(settings, scheduledDate, scheduledStartTime);
+    slot = findSlot(settings, scheduledDate, scheduledStartTime, scheduledEndTime);
 
     if (!slot) {
       issues.push(issue('invalid_slot', 'That delivery time is no longer available. Pick another slot.'));
@@ -364,10 +372,22 @@ const buildQuote = async ({
 
   const discount = promo?.applied ? promo.discount : 0;
 
+  const beforeWindow = itemsTotal + delivery + fast + service + safeTip - discount;
+
+  // Flexible scheduled window saving; separate from the promo
+  // discount (order creation checks that one against the promo)
+  const windowDiscount = round2(
+    Math.min(Number(slot?.discount) || 0, Math.max(0, beforeWindow))
+  );
+
   const totalPacks = lines.reduce(
     (sum, line) => sum + (Number.isFinite(line.quantity) ? Math.ceil(line.quantity) : 1),
     0
   );
+
+  const priorityEta = estimateMinutes(farthestKm, totalPacks, Math.max(1, shopSummaries.length));
+  const extraMinutes = Number(settings.standardExtraMinutes) || 0;
+  const standardEta = { min: priorityEta.min + extraMinutes, max: priorityEta.max + extraMinutes };
 
   return {
     deliveryOption: option,
@@ -383,16 +403,24 @@ const buildQuote = async ({
     tipOptions: TIP_OPTIONS,
     promo,
     discount,
-    savings: discount,
-    totalAmount: round2(Math.max(0, itemsTotal + delivery + fast + service + safeTip - discount)),
+    windowDiscount,
+    savings: round2(discount + windowDiscount),
+    totalAmount: round2(Math.max(0, beforeWindow - windowDiscount)),
     distanceKm: farthestKm,
-    estimatedMinutes: estimateMinutes(farthestKm, totalPacks, Math.max(1, shopSummaries.length)),
+    estimatedMinutes: option === 'standard' ? standardEta : priorityEta,
+    // What the checkout shows on each option card
+    options: {
+      fast: { fee: settings.fastFee, estimatedMinutes: priorityEta },
+      standard: { fee: 0, estimatedMinutes: standardEta },
+      scheduled: { fee: 0, flexibleWindowDiscount: Number(settings.flexibleWindowDiscount) || 0 },
+    },
     issues,
   };
 };
 
 module.exports = {
   buildQuote,
+  DROPOFF_OPTIONS,
   PAYMENT_METHODS,
   PACK_RULES,
   MAX_TIP,

@@ -18,9 +18,23 @@ const DEFAULT_PRICING = {
     maxKm: 10,
   },
   fastFee: 100,
+  // Standard (no priority fee) arrives this much later than Priority
+  standardExtraMinutes: 45,
+  // LKR off the order for a flexible window (one hour longer
+  // than slotHours); 0 turns flexible windows off
+  flexibleWindowDiscount: 100,
   serviceFee: { percent: 5, min: 50, max: 400 },
   slots: { days: 4, startHour: 8, endHour: 20, slotHours: 2, leadMinutes: 60 },
 };
+
+// Settings saved before a key existed get its default
+const withDefaults = (stored) => ({
+  ...DEFAULT_PRICING,
+  ...stored,
+  delivery: { ...DEFAULT_PRICING.delivery, ...stored?.delivery },
+  serviceFee: { ...DEFAULT_PRICING.serviceFee, ...stored?.serviceFee },
+  slots: { ...DEFAULT_PRICING.slots, ...stored?.slots },
+});
 
 let cache = null;
 let cachedAt = 0;
@@ -34,7 +48,7 @@ const getPricingSettings = async () => {
     "SELECT value FROM platform_settings WHERE key = 'pricing'"
   );
 
-  cache = result.rows[0]?.value || DEFAULT_PRICING;
+  cache = withDefaults(result.rows[0]?.value);
   cachedAt = Date.now();
 
   return cache;
@@ -70,6 +84,8 @@ const validatePricing = (input) => {
         : [],
     },
     fastFee: money(input?.fastFee),
+    standardExtraMinutes: Number(input?.standardExtraMinutes),
+    flexibleWindowDiscount: money(input?.flexibleWindowDiscount, 5000),
     serviceFee: {
       percent: money(input?.serviceFee?.percent, 100),
       min: money(input?.serviceFee?.min),
@@ -88,6 +104,17 @@ const validatePricing = (input) => {
 
   if ([d.baseFee, d.baseKm, d.extraShopFee, d.maxKm, value.fastFee].includes(null)) {
     errors.push('Delivery fees, distances and fast fee must be numbers of 0 or more');
+  }
+
+  if (
+    !Number.isInteger(value.standardExtraMinutes) ||
+    value.standardExtraMinutes < 0 || value.standardExtraMinutes > 600
+  ) {
+    errors.push('Standard delivery: extra minutes must be a whole number from 0 to 600');
+  }
+
+  if (value.flexibleWindowDiscount === null) {
+    errors.push('Flexible window discount must be between LKR 0 and LKR 5,000');
   }
 
   if (d.maxKm !== null && d.maxKm < 1) {

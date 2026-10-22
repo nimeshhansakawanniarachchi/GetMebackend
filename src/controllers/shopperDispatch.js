@@ -5,7 +5,6 @@ const db = require('../config/db');
 const { FINISHED_STATUSES } = require('../utils/orderStatus');
 
 const {
-  OFFER_SECONDS,
   OFFER_RADIUS_KM,
   shopperPayForOrder,
   distanceKm,
@@ -17,15 +16,16 @@ const {
 
 // =====================================================
 // SHOPPER DISPATCH
-// A waiting order is offered to shoppers one by one, closest to the
-// shop first (only shoppers with the customer's chosen vehicle, if
-// any). Each shopper has OFFER_SECONDS (10 s) to accept. Every
-// FORWARD_SECONDS (5 s) the next closest shopper is ALSO offered it,
-// so at most two shoppers hold it at once and the first to accept
-// wins. If nobody holds it (e.g. the only holder hid it), the next
+// A waiting order is offered to shoppers closest to the shop first
+// (only shoppers with the customer's chosen vehicle, if any). Every
+// FORWARD_SECONDS (5 s) the next closest shopper is ALSO offered it.
+// Offers never expire: a shopper keeps the batch until someone
+// accepts it (the first to accept wins and it is withdrawn from
+// everyone else), they hide it, or they can no longer take it
+// (offline, out of range or busy). If nobody holds it, the next
 // shopper gets it straight away. When everyone in range has been
-// asked, a new round starts from the closest again - including
-// shoppers who hid it - until someone accepts.
+// asked, shoppers who hid it are offered it again, until someone
+// accepts.
 //
 // startDispatchLoop() runs dispatchWaitingOrders() every second, so
 // forwarding happens on time without any app polling. Shopper /
@@ -260,7 +260,7 @@ const alertOfferedShopper = async ({ io, orderId, shopperId }) => {
       title: 'New batch available',
       body: `${order.shop_names || 'New order'} · Earn LKR ${shopperPayForOrder(
         order
-      ).toFixed(2)}. Accept it before it's gone.`,
+      ).toFixed(2)}. Open the app to accept it.`,
       orderId,
     });
   } catch (error) {
@@ -324,12 +324,11 @@ const dispatchOrder = async ({ io = null, orderId }) => {
       [orderId]
     );
 
+    // An offer runs until the shopper hides it (no time limit)
     const offers = offersResult.rows.map((offer) => ({
       shopperId: Number(offer.shopper_id),
       ageSeconds: Number(offer.age_seconds),
-      running:
-        offer.dismissed_at === null &&
-        Number(offer.age_seconds) < OFFER_SECONDS,
+      running: offer.dismissed_at === null,
     }));
 
     // -------------------------------------------------
@@ -479,10 +478,8 @@ const startDispatchLoop = (io) =>
 
 // =====================================================
 // DOES THIS SHOPPER HOLD THE OFFER?
-// A little grace covers a tap right as the countdown ends.
+// Any offer they haven't hidden (offers don't expire).
 // =====================================================
-
-const ACCEPT_GRACE_SECONDS = 2;
 
 const shopperHoldsOffer = async ({ client = db, orderId, shopperId }) => {
   const result = await client.query(
@@ -492,10 +489,9 @@ const shopperHoldsOffer = async ({ client = db, orderId, shopperId }) => {
     WHERE order_id = $1
       AND shopper_id = $2
       AND dismissed_at IS NULL
-      AND first_seen_at > NOW() - make_interval(secs => $3)
     LIMIT 1
     `,
-    [orderId, shopperId, OFFER_SECONDS + ACCEPT_GRACE_SECONDS]
+    [orderId, shopperId]
   );
 
   return result.rows.length > 0;
@@ -516,9 +512,8 @@ const getOfferHolders = async (orderId, client = db) => {
     FROM shopper_order_offers
     WHERE order_id = $1
       AND dismissed_at IS NULL
-      AND first_seen_at > NOW() - make_interval(secs => $2)
     `,
-    [orderId, OFFER_SECONDS + ACCEPT_GRACE_SECONDS]
+    [orderId]
   );
 
   return result.rows.map((row) => Number(row.shopper_id));

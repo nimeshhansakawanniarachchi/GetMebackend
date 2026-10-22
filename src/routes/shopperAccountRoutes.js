@@ -21,6 +21,19 @@ const {
   updateProfile,
 } = require('../controllers/shopperProfileController');
 
+const {
+  getNearbyShops,
+} = require('../controllers/shopperNearbyShopsController');
+
+const {
+  getLastFound,
+} = require('../controllers/shopperItemHistoryController');
+
+const {
+  getProductDetails,
+  getProductByBarcode,
+} = require('../controllers/shopperProductController');
+
 const router = express.Router();
 
 // Every route here needs a shopper token that carries shopperId
@@ -69,5 +82,32 @@ router.get('/earnings', requireShopper, getEarnings);
 router.get('/me', requireShopper, getProfile);
 
 router.put('/me', requireShopper, updateProfile);
+
+
+// =====================================================
+// NEARBY SHOPS (Home map)
+// =====================================================
+
+router.get('/nearby-shops', requireShopper, getNearbyShops);
+
+
+// =====================================================
+// ITEM LAST FOUND ("Item might still be here")
+// =====================================================
+
+router.get('/products/:productId/last-found', requireShopper, getLastFound);
+
+
+// =====================================================
+// PRODUCT LOOKUPS (replacement scan flow)
+// =====================================================
+
+router.get('/products/:productId', requireShopper, getProductDetails);
+
+router.get(
+  '/shops/:shopId/products/by-barcode/:barcode',
+  requireShopper,
+  getProductByBarcode
+);
 
 module.exports = router;

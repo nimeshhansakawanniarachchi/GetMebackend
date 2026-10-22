@@ -52,6 +52,7 @@ router.patch('/shoppers/:id/approval', people.setShopperApproval);
 // Shops + products
 router.get('/shops', catalog.listShops);
 router.patch('/shops/:id/status', catalog.setShopStatus);
+router.patch('/shops/:id/brand-color', catalog.setShopBrandColor);
 router.get('/products', catalog.listProducts);
 router.patch('/products/:id/availability', catalog.setProductAvailability);
 

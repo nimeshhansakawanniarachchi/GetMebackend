@@ -322,6 +322,9 @@ const getOrder = async (req, res) => {
           scheduledDate: order.scheduled_date,
           scheduledStartTime: order.scheduled_start_time,
           scheduledEndTime: order.scheduled_end_time,
+          dropoff: order.delivery_dropoff,
+          instructions: order.delivery_instructions,
+          contactPhone: order.contact_phone,
         },
         money: {
           itemsTotal: Number(order.items_total || 0),
@@ -329,6 +332,7 @@ const getOrder = async (req, res) => {
           deliveryFee: Number(order.delivery_fee || 0),
           fastDeliveryFee: Number(order.fast_delivery_fee || 0),
           serviceFee: Number(order.service_fee || 0),
+          windowDiscount: Number(order.window_discount || 0),
           totalAmount: Number(order.total_amount || 0),
           shopperPay: Number(order.shopper_pay || 0),
         },

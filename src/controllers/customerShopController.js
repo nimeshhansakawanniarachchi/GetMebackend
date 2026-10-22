@@ -180,6 +180,7 @@ const getCustomerShops = async (req, res) => {
             shop_name,
             address,
             image_url,
+            brand_color,
             status,
             created_at,
             latitude,
@@ -321,6 +322,7 @@ const getCustomerShopProducts = async (
           shop_name,
           address,
           image_url,
+          brand_color,
           status
         FROM shops
         WHERE id = $1
@@ -358,6 +360,8 @@ const getCustomerShopProducts = async (
           description,
           is_available,
           image_url,
+          brand,
+          size,
           created_at,
           updated_at
         FROM products
@@ -386,6 +390,129 @@ const getCustomerShopProducts = async (
 
     console.error(
       'Get customer shop products error:',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
+
+  }
+
+};
+
+
+// ==================================================
+// OFTEN BOUGHT WITH (cart suggestions)
+// Products from the same store ranked by how many
+// delivered orders they shared with this product.
+// With no order history yet, other categories come
+// first (yogurt with berries, not more fruit).
+// ==================================================
+
+const getOftenBoughtWith = async (
+  req,
+  res
+) => {
+
+  try {
+
+    const shopId =
+      Number(req.params.shopId);
+
+    const productId =
+      Number(req.params.productId);
+
+    const limit = Math.min(
+      Math.max(Number(req.query.limit) || 10, 1),
+      20
+    );
+
+
+    if (
+      !Number.isInteger(shopId) ||
+      !Number.isInteger(productId)
+    ) {
+
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid shop or product',
+      });
+
+    }
+
+
+    const productResult =
+      await pool.query(
+        `
+        WITH anchor AS (
+          SELECT id, category
+          FROM products
+          WHERE id = $2
+          AND shop_id = $1
+        ),
+        together AS (
+          SELECT
+            other.product_id,
+            COUNT(DISTINCT other.order_id)::int AS orders_together
+          FROM order_items mine
+          JOIN orders o
+            ON o.id = mine.order_id
+            AND o.status = 'delivered'
+          JOIN order_items other
+            ON other.order_id = mine.order_id
+            AND other.product_id <> mine.product_id
+          WHERE mine.product_id = $2
+          GROUP BY other.product_id
+        )
+        SELECT
+          p.id,
+          p.shop_id,
+          p.product_name,
+          p.category,
+          p.price,
+          p.unit,
+          p.stock_quantity,
+          p.image_url,
+          p.brand,
+          p.size,
+          COALESCE(t.orders_together, 0) AS orders_together
+        FROM products p
+        CROSS JOIN anchor a
+        JOIN shops s
+          ON s.id = p.shop_id
+          AND s.status = 'approved'
+          AND s.is_open = true
+        LEFT JOIN together t
+          ON t.product_id = p.id
+        WHERE p.shop_id = $1
+        AND p.id <> $2
+        AND p.is_available = true
+        AND p.stock_quantity > 0
+        ORDER BY
+          orders_together DESC,
+          (p.category IS DISTINCT FROM a.category) DESC,
+          p.product_name ASC
+        LIMIT $3
+        `,
+        [shopId, productId, limit]
+      );
+
+
+    return res.json({
+
+      success: true,
+
+      products:
+        productResult.rows,
+
+    });
+
+  } catch (error) {
+
+    console.error(
+      'Often bought with error:',
       error
     );
 
@@ -781,6 +908,7 @@ const placeDetails = async (
 module.exports = {
   getCustomerShops,
   getCustomerShopProducts,
+  getOftenBoughtWith,
   placeAutocomplete,
   placeDetails,
 };

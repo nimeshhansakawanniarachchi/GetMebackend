@@ -16,6 +16,7 @@ const {
 const { VEHICLE_TYPES } = require('../utils/vehicleTypes');
 
 const { broadcastOrderChange } = require('../realtime');
+const { postChatEvent } = require('../utils/chatEvents');
 
 const {
   createShopperNotification,
@@ -722,6 +723,7 @@ const getCustomerOrders = async (
                   osb.order_id,
                   osb.shop_id,
                   osb.bill_url,
+                  osb.bill_urls,
                   osb.bill_uploaded_at,
                   osb.shopping_status,
                   osb.created_at,
@@ -775,6 +777,11 @@ const getCustomerOrders = async (
 
                   billUrl:
                     bill.bill_url || null,
+                  // Every receipt photo (first = billUrl)
+                  billUrls:
+                    Array.isArray(bill.bill_urls) && bill.bill_urls.length > 0
+                      ? bill.bill_urls
+                      : bill.bill_url ? [bill.bill_url] : [],
 
                   bill_uploaded_at:
                     bill.bill_uploaded_at || null,
@@ -993,6 +1000,8 @@ const getCustomerOrders = async (
                   oi.found_weight,
                   oi.found_weight_unit,
                   oi.barcode_scanned,
+                  oi.refund_amount,
+                  oi.refunded_at,
                   oi.replacement_preference,
                   oi.replacement_product_id,
                   oi.replacement_product_name,
@@ -1183,6 +1192,19 @@ const getCustomerOrders = async (
 
                   barcodeScanned:
                     item.barcode_scanned === true,
+
+                  // Refunded instead of replaced (shopping_status 'refunded')
+                  refund_amount:
+                    item.refund_amount != null ? Number(item.refund_amount) : null,
+
+                  refundAmount:
+                    item.refund_amount != null ? Number(item.refund_amount) : null,
+
+                  refunded_at:
+                    item.refunded_at || null,
+
+                  refundedAt:
+                    item.refunded_at || null,
 
                   shopper_photo_url:
                     item.shopper_photo_url ||
@@ -1694,6 +1716,7 @@ const getCustomerOrderById =
             osb.order_id,
             osb.shop_id,
             osb.bill_url,
+            osb.bill_urls,
             osb.bill_uploaded_at,
             osb.shopping_status,
             osb.created_at,
@@ -1747,6 +1770,11 @@ const getCustomerOrderById =
 
             billUrl:
               bill.bill_url || null,
+            // Every receipt photo (first = billUrl)
+            billUrls:
+              Array.isArray(bill.bill_urls) && bill.bill_urls.length > 0
+                ? bill.bill_urls
+                : bill.bill_url ? [bill.bill_url] : [],
 
             bill_uploaded_at:
               bill.bill_uploaded_at || null,
@@ -1959,6 +1987,8 @@ const getCustomerOrderById =
             oi.found_weight,
             oi.found_weight_unit,
             oi.barcode_scanned,
+            oi.refund_amount,
+            oi.refunded_at,
             oi.replacement_preference,
             oi.replacement_product_id,
             oi.replacement_product_name,
@@ -2153,6 +2183,19 @@ const getCustomerOrderById =
 
             barcodeScanned:
               item.barcode_scanned === true,
+
+            // Refunded instead of replaced (shopping_status 'refunded')
+            refund_amount:
+              item.refund_amount != null ? Number(item.refund_amount) : null,
+
+            refundAmount:
+              item.refund_amount != null ? Number(item.refund_amount) : null,
+
+            refunded_at:
+              item.refunded_at || null,
+
+            refundedAt:
+              item.refunded_at || null,
 
             shopper_photo_url:
               item.shopper_photo_url ||
@@ -3178,6 +3221,18 @@ const updateReplacementStatus =
             : `Customer rejected the replacement for ${updatedOriginalItem.item_name}. Don't add it.`,
         orderId,
       });
+
+      // Chat timeline: "<customer> has approved your <item>
+      // replacement"
+      if (finalStatus === 'accepted') {
+        await postChatEvent({
+          io: req.app.get('io'),
+          orderId,
+          eventType: 'replacement_approved',
+          data: { itemName: updatedOriginalItem.item_name },
+          onceKey: `item:${updatedOriginalItem.id}`,
+        });
+      }
 
       emitOrderSocketEvent({
         req,

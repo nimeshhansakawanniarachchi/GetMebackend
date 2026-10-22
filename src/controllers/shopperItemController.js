@@ -4,6 +4,16 @@ const fs = require('fs');
 const path = require('path');
 
 const { broadcastOrderChange } = require('../realtime');
+const { postChatEvent } = require('../utils/chatEvents');
+
+// Barcodes compare without spaces or leading zeros (UPC-A and
+// EAN-13 encode the same code with an extra 0); empty -> null.
+// Same rule as the ShopperApp.
+const normalizeBarcode = (value) => {
+  const code = String(value ?? '').replace(/\s+/g, '').replace(/^0+/, '');
+
+  return code ? code : null;
+};
 
 // =====================================================
 // GET SHOPPER ID
@@ -256,6 +266,7 @@ const uploadReplacementPhoto = async (req, res) => {
         oi.id,
         oi.order_id,
         oi.shop_id,
+        oi.item_name,
         oi.replacement_preference,
         o.customer_id
       FROM order_items oi
@@ -429,6 +440,16 @@ RETURNING *
       },
     });
 
+    // Chat timeline: "We let <customer> know that <item> is
+    // unavailable" (once per item)
+    await postChatEvent({
+      io: req.app.get('io'),
+      orderId: item.order_id,
+      eventType: 'item_unavailable',
+      data: { itemName: item.item_name },
+      onceKey: `item:${item.id}`,
+    });
+
     // -------------------------------------------------
     // RESPONSE
     // -------------------------------------------------
@@ -449,6 +470,131 @@ RETURNING *
       success: false,
       message: 'Failed to upload replacement photo',
       error: error.message,
+    });
+  }
+};
+
+// =====================================================
+// VERIFY A SCANNED BARCODE
+// POST /api/shopper/orders/:orderId/items/:itemId/verify-barcode
+// { barcode, target?: 'found' | 'replacement' }
+// Checks the scan against the barcode stored for the ordered
+// product (or the customer's approved replacement). Read-only:
+// confirming still goes through the status update, which checks
+// again.
+// =====================================================
+
+const ALREADY_FOUND_STATUSES = ['found', 'replaced', 'refunded', 'done', 'completed'];
+
+const verifyItemBarcode = async (req, res) => {
+  const shopperId = getShopperId(req);
+  const orderId = Number(req.params.orderId);
+  const itemId = Number(req.params.itemId);
+  const target = req.body?.target === 'replacement' ? 'replacement' : 'found';
+  const rawBarcode = String(req.body?.barcode ?? '').replace(/\s+/g, '');
+  const scannedBarcode = normalizeBarcode(rawBarcode);
+
+  if (!shopperId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Shopper authentication required',
+    });
+  }
+
+  if (
+    !Number.isInteger(orderId) || orderId <= 0 ||
+    !Number.isInteger(itemId) || itemId <= 0
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid order or item ID',
+    });
+  }
+
+  if (!scannedBarcode || rawBarcode.length > 64) {
+    return res.status(400).json({
+      success: false,
+      message: 'Scan or enter a barcode',
+    });
+  }
+
+  try {
+    const result = await db.query(
+      `
+      SELECT
+        oi.id,
+        oi.shopping_status,
+        p.barcode AS product_barcode,
+        rp.barcode AS replacement_barcode
+      FROM order_items oi
+      INNER JOIN orders o
+        ON o.id = oi.order_id
+      LEFT JOIN products p
+        ON p.id = oi.product_id
+      LEFT JOIN products rp
+        ON rp.id = oi.replacement_product_id
+      WHERE
+        oi.id = $1
+        AND oi.order_id = $2
+        AND o.shopper_id = $3
+      LIMIT 1
+      `,
+      [itemId, orderId, shopperId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order item not found for this shopper',
+      });
+    }
+
+    const item = result.rows[0];
+    const expectedBarcode = normalizeBarcode(
+      target === 'replacement'
+        ? item.replacement_barcode
+        : item.product_barcode
+    );
+
+    const base = {
+      success: true,
+      itemId,
+      target,
+      barcode: rawBarcode,
+      hasBarcode: Boolean(expectedBarcode),
+      alreadyFound: ALREADY_FOUND_STATUSES.includes(item.shopping_status),
+    };
+
+    if (!expectedBarcode) {
+      return res.json({
+        ...base,
+        verified: false,
+        code: 'no_barcode',
+        message: 'Barcode verification is unavailable for this item',
+      });
+    }
+
+    if (expectedBarcode !== scannedBarcode) {
+      return res.json({
+        ...base,
+        verified: false,
+        code: 'barcode_mismatch',
+        message: 'Barcode does not match',
+      });
+    }
+
+    return res.json({
+      ...base,
+      verified: true,
+      code: 'verified',
+      message: 'Item verified successfully',
+    });
+  } catch (error) {
+    console.error('❌ verifyItemBarcode error:', error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Unable to verify barcode',
     });
   }
 };
@@ -476,6 +622,8 @@ const updateItemShoppingStatus = async (req, res) => {
     foundWeightUnit,
     barcode_scanned,
     barcodeScanned,
+    // What the shopper scanned / typed; checked against the product
+    barcode,
   } = req.body || {};
 
   const nextStatus =
@@ -483,11 +631,15 @@ const updateItemShoppingStatus = async (req, res) => {
     shoppingStatus ||
     status;
 
+  const scannedBarcode = normalizeBarcode(barcode);
+
   const allowedStatuses = [
     'pending',
     'found',
     'not_found',
     'replaced',
+    // Unavailable and refunded instead of replaced (final)
+    'refunded',
     'completed',
     'done',
   ];
@@ -532,10 +684,18 @@ const updateItemShoppingStatus = async (req, res) => {
         oi.id,
         oi.order_id,
         oi.shop_id,
-        o.customer_id
+        oi.item_name,
+        oi.replacement_product_name,
+        o.customer_id,
+        p.barcode AS product_barcode,
+        rp.barcode AS replacement_barcode
       FROM order_items oi
       INNER JOIN orders o
         ON o.id = oi.order_id
+      LEFT JOIN products p
+        ON p.id = oi.product_id
+      LEFT JOIN products rp
+        ON rp.id = oi.replacement_product_id
       WHERE
         oi.id = $1
         AND o.shopper_id = $2
@@ -554,6 +714,54 @@ const updateItemShoppingStatus = async (req, res) => {
     }
 
     const item = itemResult.rows[0];
+
+    // -------------------------------------------------
+    // BARCODE VERIFICATION
+    // A scanned barcode must match the product being confirmed:
+    // the ordered product when found, the customer's approved
+    // replacement when replaced. Products without a stored
+    // barcode can't be checked and are accepted.
+    // Found / replaced: a product with a barcode on file must be
+    // scanned (or its number typed) before it can be confirmed.
+    // -------------------------------------------------
+
+    const requiredBarcode = normalizeBarcode(
+      nextStatus === 'found'
+        ? item.product_barcode
+        : nextStatus === 'replaced'
+        ? item.replacement_barcode
+        : null
+    );
+
+    if (requiredBarcode && !scannedBarcode) {
+      return res.status(409).json({
+        success: false,
+        code: 'barcode_required',
+        message: nextStatus === 'replaced'
+          ? 'Scan the replacement\'s barcode to confirm it\'s the right product.'
+          : 'Scan the item\'s barcode to confirm it\'s the right product.',
+        itemId,
+      });
+    }
+
+    if (scannedBarcode) {
+      const expectedBarcode = normalizeBarcode(
+        nextStatus === 'replaced'
+          ? item.replacement_barcode
+          : ['found', 'done', 'completed'].includes(nextStatus)
+          ? item.product_barcode
+          : null
+      );
+
+      if (expectedBarcode && expectedBarcode !== scannedBarcode) {
+        return res.status(409).json({
+          success: false,
+          code: 'barcode_mismatch',
+          message: 'Wrong item scanned. This barcode does not match the item.',
+          itemId,
+        });
+      }
+    }
 
     // -------------------------------------------------
     // NORMALIZE OPTIONAL VALUES
@@ -581,10 +789,24 @@ const updateItemShoppingStatus = async (req, res) => {
       SET
         shopping_status = $1::varchar,
 
-        found_quantity = COALESCE(
-          $2,
-          found_quantity
-        ),
+        -- Refunded: nothing was found
+        found_quantity = CASE
+          WHEN $1::varchar = 'refunded' THEN 0
+          ELSE COALESCE($2, found_quantity)
+        END,
+
+        -- Refunded: what the customer gets back for it (the item's
+        -- line total, as shown in the app: price x quantity)
+        refund_amount = CASE
+          WHEN $1::varchar = 'refunded'
+          THEN ROUND(COALESCE(price, 0) * COALESCE(quantity, 1), 2)
+          ELSE refund_amount
+        END,
+
+        refunded_at = CASE
+          WHEN $1::varchar = 'refunded' THEN NOW()
+          ELSE refunded_at
+        END,
 
         found_weight = COALESCE(
           $3,
@@ -606,6 +828,7 @@ const updateItemShoppingStatus = async (req, res) => {
             'found',
             'not_found',
             'replaced',
+            'refunded',
             'completed',
              'done'
           )
@@ -616,6 +839,22 @@ const updateItemShoppingStatus = async (req, res) => {
       WHERE
         id = $6
         AND order_id = $7
+        -- Found / replaced / refunded once only: a repeated scan or
+        -- double tap can't confirm the same item again, and an item
+        -- that was found or replaced can't be refunded
+        AND NOT (
+          $1::varchar IN ('found', 'replaced', 'refunded')
+          AND COALESCE(shopping_status, 'pending') IN ('found', 'replaced', 'done', 'completed', 'refunded')
+        )
+        -- A refund is final: nothing changes the item afterwards
+        AND COALESCE(shopping_status, 'pending') <> 'refunded'
+        -- 'done' / 'completed' only finish an item that was already
+        -- found (barcode-verified) or replaced, so they can't skip
+        -- the barcode check
+        AND NOT (
+          $1::varchar IN ('done', 'completed')
+          AND COALESCE(shopping_status, 'pending') NOT IN ('found', 'replaced', 'done', 'completed')
+        )
 
       RETURNING *
       `,
@@ -629,6 +868,58 @@ const updateItemShoppingStatus = async (req, res) => {
         item.order_id,
       ]
     );
+
+    if (
+      updateResult.rows.length === 0 &&
+      (nextStatus === 'found' || nextStatus === 'replaced' || nextStatus === 'refunded')
+    ) {
+      // What the item is now decides the answer
+      const current = await db.query(
+        'SELECT shopping_status FROM order_items WHERE id = $1',
+        [itemId]
+      );
+
+      const currentStatus = String(current.rows[0]?.shopping_status || '');
+
+      if (currentStatus === 'refunded') {
+        return res.status(409).json({
+          success: false,
+          code: 'already_refunded',
+          message: 'This item has already been refunded.',
+          itemId,
+        });
+      }
+
+      if (nextStatus === 'refunded') {
+        return res.status(409).json({
+          success: false,
+          code: 'already_completed',
+          message: 'This item was already found or replaced, so it can\'t be refunded.',
+          itemId,
+        });
+      }
+
+      return res.status(409).json({
+        success: false,
+        code: nextStatus === 'replaced' ? 'already_replaced' : 'already_found',
+        message: nextStatus === 'replaced'
+          ? 'This item is already replaced.'
+          : 'This item is already marked as found.',
+        itemId,
+      });
+    }
+
+    if (
+      updateResult.rows.length === 0 &&
+      (nextStatus === 'done' || nextStatus === 'completed')
+    ) {
+      return res.status(409).json({
+        success: false,
+        code: 'not_found_yet',
+        message: 'Mark the item as found (scan its barcode) before finishing it.',
+        itemId,
+      });
+    }
 
     if (updateResult.rows.length === 0) {
       return res.status(404).json({
@@ -658,6 +949,49 @@ const updateItemShoppingStatus = async (req, res) => {
         item: updatedItem,
       },
     });
+
+    // -------------------------------------------------
+    // CHAT TIMELINE
+    // -------------------------------------------------
+
+    const io = req.app.get('io');
+    const itemName = item.item_name;
+    const itemKey = `item:${item.id}`;
+
+    if (
+      nextStatus === 'not_found' ||
+      nextStatus === 'replaced' ||
+      nextStatus === 'refunded'
+    ) {
+      await postChatEvent({
+        io,
+        orderId: item.order_id,
+        eventType: 'item_unavailable',
+        data: { itemName },
+        onceKey: itemKey,
+      });
+    }
+
+    if (nextStatus === 'replaced') {
+      const replacementName = item.replacement_product_name || null;
+
+      await postChatEvent({
+        io,
+        orderId: item.order_id,
+        eventType: 'item_replaced',
+        data: { itemName, replacementName },
+        onceKey: itemKey,
+      });
+
+      // The customer chose this replacement when ordering
+      await postChatEvent({
+        io,
+        orderId: item.order_id,
+        eventType: 'replacement_approved',
+        data: { itemName, replacementName, preApproved: true },
+        onceKey: itemKey,
+      });
+    }
 
     // -------------------------------------------------
     // RESPONSE
@@ -690,4 +1024,5 @@ module.exports = {
   uploadItemPhoto,
   uploadReplacementPhoto,
   updateItemShoppingStatus,
+  verifyItemBarcode,
 };

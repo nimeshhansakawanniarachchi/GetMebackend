@@ -4,6 +4,12 @@ const { readPage, pageMeta } = require('../../utils/pagination');
 
 const { emitToAdmins } = require('../../realtime');
 
+const {
+  MIN_WHITE_CONTRAST,
+  normalizeBrandColor,
+  whiteContrast,
+} = require('../../utils/brandColor');
+
 const SHOP_STATUSES = ['pending', 'approved', 'rejected', 'suspended'];
 
 
@@ -43,7 +49,7 @@ const listShops = async (req, res) => {
       `
       SELECT
         s.id, s.shop_name, s.email, s.mobile, s.address, s.area, s.status, s.is_open,
-        s.image_url, s.latitude, s.longitude, s.created_at,
+        s.image_url, s.brand_color, s.latitude, s.longitude, s.created_at,
         (SELECT COUNT(*)::int FROM products p WHERE p.shop_id = s.id) AS product_count,
         (SELECT COUNT(*)::int FROM order_shops os WHERE os.shop_id = s.id) AS order_count,
         (
@@ -75,6 +81,7 @@ const listShops = async (req, res) => {
         status: row.status,
         isOpen: row.is_open,
         imageUrl: row.image_url,
+        brandColor: row.brand_color,
         latitude: row.latitude,
         longitude: row.longitude,
         productCount: row.product_count,
@@ -126,6 +133,57 @@ const setShopStatus = async (req, res) => {
     return res.json({ success: true, shop: result.rows[0] });
   } catch (error) {
     console.error('❌ admin setShopStatus error:', error.message);
+
+    return res.status(500).json({ success: false, message: 'Unable to update shop' });
+  }
+};
+
+
+// =====================================================
+// SHOP BRAND COLOR
+// PATCH /api/admin/shops/:id/brand-color { brandColor: "#RRGGBB" | null }
+// null clears it (the customer app picks a color).
+// =====================================================
+
+const setShopBrandColor = async (req, res) => {
+  try {
+    const shopId = Number(req.params.id);
+    const raw = req.body?.brandColor;
+    const clearing = raw === null || raw === '';
+    const brandColor = clearing ? null : normalizeBrandColor(raw);
+
+    if (!Number.isInteger(shopId) || (!clearing && !brandColor)) {
+      return res.status(400).json({ success: false, message: 'Enter a color like #0060A9.' });
+    }
+
+    if (brandColor && whiteContrast(brandColor) < MIN_WHITE_CONTRAST) {
+      return res.status(400).json({
+        success: false,
+        message: 'This color is too light for white text. Pick a darker shade.',
+      });
+    }
+
+    const result = await pool.query(
+      `
+      UPDATE shops SET brand_color = $1, updated_at = NOW()
+      WHERE id = $2
+      RETURNING id, brand_color
+      `,
+      [brandColor, shopId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Shop not found' });
+    }
+
+    emitToAdmins(req.app.get('io'), 'admin:shops-updated', { shopId, reason: 'brand-color' });
+
+    return res.json({
+      success: true,
+      shop: { id: result.rows[0].id, brandColor: result.rows[0].brand_color },
+    });
+  } catch (error) {
+    console.error('❌ admin setShopBrandColor error:', error.message);
 
     return res.status(500).json({ success: false, message: 'Unable to update shop' });
   }
@@ -256,6 +314,7 @@ const setProductAvailability = async (req, res) => {
 module.exports = {
   listShops,
   setShopStatus,
+  setShopBrandColor,
   listProducts,
   setProductAvailability,
 };

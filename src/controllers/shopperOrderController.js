@@ -38,6 +38,7 @@ const {
   uploadItemPhoto,
   uploadReplacementPhoto,
   updateItemShoppingStatus,
+  verifyItemBarcode,
 } = require('./shopperItemController');
 
 // Payment and bills
@@ -64,6 +65,7 @@ module.exports = {
   uploadItemPhoto,
   uploadReplacementPhoto,
   updateItemShoppingStatus,
+  verifyItemBarcode,
 
   updateOrderPayment,
   uploadBill,

@@ -994,7 +994,7 @@ const getMyOrderById = async (req, res) => {
       SELECT
         o.*,
         c.full_name AS customer_name,
-        c.mobile AS customer_phone
+        COALESCE(o.contact_phone, c.mobile) AS customer_phone
       FROM orders o
       LEFT JOIN customers c
         ON c.id = o.customer_id
@@ -1066,12 +1066,17 @@ const getMyOrderById = async (req, res) => {
       SELECT
         oi.*,
         s.shop_name,
-        p.category AS product_category
+        p.category AS product_category,
+        -- Barcodes the ShopperApp verifies scans against
+        p.barcode AS product_barcode,
+        rp.barcode AS replacement_product_barcode
       FROM order_items oi
       LEFT JOIN shops s
         ON s.id = oi.shop_id
       LEFT JOIN products p
         ON p.id = oi.product_id
+      LEFT JOIN products rp
+        ON rp.id = oi.replacement_product_id
       WHERE oi.order_id = $1
       ORDER BY oi.id ASC
       `,
@@ -1286,8 +1291,10 @@ const getMyOrderById = async (req, res) => {
             replacement.original_shop_id === shopId
         );
 
+      // Latest bill for the shop (bills are ordered by id), the
+      // same one start-delivery checks
       const shopBill =
-        billsResult.rows.find(
+        [...billsResult.rows].reverse().find(
           (bill) =>
             toNumberOrNull(bill.shop_id) ===
             shopId
@@ -1295,10 +1302,14 @@ const getMyOrderById = async (req, res) => {
 
       let shoppingStatus = 'shopping';
 
+      // order_shop_bills keeps this in shopping_status
       if (
         shopBill &&
-        String(shopBill.status || '').toLowerCase() ===
-          'completed'
+        String(
+          shopBill.shopping_status ||
+          shopBill.status ||
+          ''
+        ).toLowerCase() === 'completed'
       ) {
         shoppingStatus = 'completed';
       } else if (
@@ -1312,6 +1323,7 @@ const getMyOrderById = async (req, res) => {
             'found',
             'not_found',
             'replaced',
+            'refunded',
             'completed',
             'done',
           ].includes(status);

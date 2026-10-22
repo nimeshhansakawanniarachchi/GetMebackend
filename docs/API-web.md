@@ -36,8 +36,9 @@ Every route except login needs an admin token.
 | GET | `/customers/:id` | | `{ customer: { id, fullName, mobile, email, createdAt, orderCount, totalSpent }, addresses: [{ id, label, address }], orders: [{ id, status, statusLabel, shopNames, totalAmount, createdAt }] }` |
 | GET | `/shoppers` | `approval=pending\|approved\|rejected\|suspended, online=true, search, page` | `{ shoppers: [{ id, fullName, mobile, email, online, approvalStatus, vehicleType, vehicleNumber, latitude, longitude, deliveries, earnings, activeJobs, createdAt, lastSeenAt }] }` (pending first) |
 | PATCH | `/shoppers/:id/approval` | `{ approvalStatus: approved\|rejected\|suspended\|pending }` | `{ shopper: { id, approvalStatus, online } }` (non-approved → forced offline) |
-| GET | `/shops` | `status=pending\|approved\|rejected\|suspended, search, page` | `{ shops: [{ id, shopName, email, mobile, address, area, status, isOpen, imageUrl, latitude, longitude, productCount, orderCount, sales, createdAt }] }` (pending first) |
+| GET | `/shops` | `status=pending\|approved\|rejected\|suspended, search, page` | `{ shops: [{ id, shopName, email, mobile, address, area, status, isOpen, imageUrl, brandColor, latitude, longitude, productCount, orderCount, sales, createdAt }] }` (pending first; `brandColor` is `"#RRGGBB"` or null) |
 | PATCH | `/shops/:id/status` | `{ status: approved\|rejected\|suspended\|pending }` | `{ shop: { id, status } }` |
+| PATCH | `/shops/:id/brand-color` | `{ brandColor: "#RRGGBB" \| "#RGB" \| null }` | `{ shop: { id, brandColor } }`; null clears it (the customer app picks a color). `400` if it isn't a hex color or is too light for white text (needs 3:1 contrast with white) |
 | GET | `/products` | `shopId, category, availability=available\|unavailable, search, page (default 25)` | `{ categories: [string], products: [{ id, shopId, shopName, productName, category, price, stockQuantity, isAvailable, imageUrl, createdAt }] }` |
 | PATCH | `/products/:id/availability` | `{ isAvailable: boolean }` | `{ product: { id, isAvailable } }` |
 | GET | `/payments` | `method, paymentStatus, page` | `{ summary: { collected, cash, nonCash, shopperPay, serviceFees }, payments: [{ orderId, status, statusLabel, customerName, shopperName, method, paymentStatus, reference, paidAt, itemsTotal, actualItemsTotal, deliveryFee, fastDeliveryFee, serviceFee, totalAmount, shopperPay, reimbursementStatus, reimbursementAmount, billCount, createdAt }] }` |
@@ -65,7 +66,7 @@ Every route except login needs an admin token.
 ## Shop API — `/api/shop`
 Every route except register/login needs a shop token. Shop `status`: `pending` (can set up store, hidden from customers — show an "Awaiting GetMe approval" banner), `approved`, `rejected`/`suspended` (login and all calls return 403 with a message).
 
-Shop object: `{ id, shopName, email, mobile, address, area, latitude, longitude, status, isOpen, imageUrl, createdAt, updatedAt }`
+Shop object: `{ id, shopName, email, mobile, address, area, latitude, longitude, status, isOpen, imageUrl, brandColor, createdAt, updatedAt }` (`brandColor` is `"#RRGGBB"` or null = automatic)
 Product object: `{ id, shopId, productName, category, price, stockQuantity, description, imageUrl, isAvailable, createdAt, updatedAt }`
 
 | Method | Path | Body / query | Response |
@@ -73,16 +74,19 @@ Product object: `{ id, shopId, productName, category, price, stockQuantity, desc
 | POST | `/register` | JSON `{ shopName, email, mobile, password (min 8), address?, latitude?, longitude? }` | `201 { message, token, shop }` (status `pending`) |
 | POST | `/login` | `{ email, password }` | `{ token, shop }` |
 | GET | `/me` | | `{ shop }` |
-| PUT | `/profile` | multipart: `shopName, mobile, address, latitude, longitude, image?` (jpg/png/webp ≤5MB) | `{ shop }` |
+| PUT | `/profile` | multipart: `shopName, mobile, address, latitude, longitude, image?` (jpg/png/webp ≤5MB), `brandColor?` (`#RRGGBB` sets, `""` clears, omitted keeps) | `{ shop }`; `400` if `brandColor` isn't a hex color or is too light for white text |
 | PATCH | `/open` | `{ isOpen: boolean }` | `{ shop }` (closed = hidden from customers, no new orders) |
 | GET | `/dashboard` | | `{ stats: { ordersToday, activeOrders, salesToday, salesThisWeek, totalProducts, liveProducts, unavailableProducts, lowStockProducts }, recentOrders: [{ id, status, statusLabel, customerName, itemCount, shopTotal, createdAt }] }` |
 | GET | `/orders` | `status=active\|delivery\|delivered\|cancelled, page` | `{ orders: [{ id, status, statusLabel, customerName (first name), shopperName, deliveryOption, itemCount, shopTotal, hasBill, createdAt, deliveredAt }] }` |
 | GET | `/orders/:id` | | `{ order: { id, status, statusLabel, customerName, deliveryOption, scheduledDate, scheduledStartTime, scheduledEndTime, createdAt, updatedAt, deliveredAt, shopper: { name, mobile, vehicleType, vehicleNumber } \| null, items: [{ id, productId, name, quantity, unit, price, lineTotal, custom, details, image, shoppingStatus, foundQuantity, foundWeight, foundWeightUnit, shopperPhotoUrl, replacements: [{ id, optionNumber, photoUrl, status }] }], shopTotal, bill: { url, uploadedAt, status } \| null } }` (only this shop's items) |
 | GET | `/products` | | `{ products: [product] }` |
 | GET | `/products/:id` | | `{ product }` |
-| POST | `/products` | multipart: `productName, category, price, stockQuantity (int ≥0), description?, isAvailable ('true'/'false'), image?` | `201 { product }` |
+| POST | `/products` | multipart: `productName, category, price, stockQuantity (int ≥0), description?, isAvailable ('true'/'false'), unit?, barcode?, brand?, size?, image?` | `201 { product }`; `409 { code: 'duplicate_barcode', productId }` if the shop already lists the barcode. An 8/12/13-digit number with a wrong EAN/UPC check digit is saved as a shop-only code (warn the user; the form does); manufacturer codes link the product to the shared catalogue (`product.catalogId`) and reuse its image when none is uploaded |
 | PUT | `/products/:id` | same multipart as POST (image optional; omitted keeps current) | `{ product }` |
 | PATCH | `/products/:id` | JSON `{ isAvailable?: boolean, stockQuantity?: int }` | `{ product }` (quick toggle / stock edit) |
+| GET | `/products/import/template` | | `.xlsx` download: columns `Product name *, Category *, Price (Rs) *, Stock *, Sold as (Each/Per kg/Per litre), Barcode (text), Brand, Size, Description, Available (Yes/No)` plus a "How to fill" sheet |
+| POST | `/products/import` | multipart: `file` (.xlsx or .csv, ≤20MB, ≤2000 rows; JPG/PNG/WEBP pictures placed in (Excel 365 "Place in Cell", WPS `DISPIMG` cell images) or over a `Photo` / `Product Image` cell become that row's photo, `product.hasPhoto`), `mode` (`preview` checks only, `import` saves), `updateExisting` (`'true'` updates matches, otherwise they are skipped) | `{ imported, summary: { total, create\|created, update\|updated, skip, error }, rows: [{ row, status: create\|update\|created\|updated\|skip\|error, message, product: { productName, category, price, stockQuantity, unit, barcode } }] }`; `400 { message }` if the file can't be read or has no heading row. Rows are validated like POST `/products`. Existing products match by barcode (UPC-A/EAN-13 forms alike), or by name when the row has no barcode; updates replace price/stock and keep fields left blank. New products with a manufacturer barcode get the catalogue image. Headings are matched loosely, so exports from other systems (e.g. UltimatePOS `NAME`, `SELLING PRICE`, `OPENING STOCK`) also work |
+| GET | `/catalog/:barcode` | | `{ validCheckDigit, shopProduct: { id, productName } | null, catalogProduct: { id, barcode, productName, brand, size, category, imageUrl } | null }` — after a scan: already listed by this shop? known to the shared catalogue? |
 | DELETE | `/products/:id` | | `{ hidden: boolean, message }` — products used in past orders are hidden instead of deleted (show the message) |
 
 Item `shoppingStatus` values seen: `pending`, `found`/`done`, `unavailable`, `replaced`, `waiting_customer` (display generically: unknown → title-case).

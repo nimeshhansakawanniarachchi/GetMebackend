@@ -104,6 +104,8 @@ const getMessages = async (req, res) => {
         sender_type,
         sender_id,
         message,
+        event_type,
+        event_data,
         created_at
       FROM chat_messages
       WHERE order_id = $1

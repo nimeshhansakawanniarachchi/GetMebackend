@@ -10,6 +10,7 @@ const {
 } = require('./shopperDispatch');
 
 const { broadcastOrderChange } = require('../realtime');
+const { postChatEvent } = require('../utils/chatEvents');
 
 const {
   createShopperNotification,
@@ -234,10 +235,18 @@ const acceptOrder = async (req, res) => {
 
     const itemsResult = await client.query(
       `
-      SELECT *
-      FROM order_items
-      WHERE order_id = $1
-      ORDER BY id ASC
+      SELECT
+        oi.*,
+        -- Barcodes the ShopperApp verifies scans against
+        p.barcode AS product_barcode,
+        rp.barcode AS replacement_product_barcode
+      FROM order_items oi
+      LEFT JOIN products p
+        ON p.id = oi.product_id
+      LEFT JOIN products rp
+        ON rp.id = oi.replacement_product_id
+      WHERE oi.order_id = $1
+      ORDER BY oi.id ASC
       `,
       [orderId]
     );
@@ -409,10 +418,18 @@ const startShopping = async (req, res) => {
 
     const itemsResult = await db.query(
       `
-      SELECT *
-      FROM order_items
-      WHERE order_id = $1 AND shop_id = $2
-      ORDER BY id ASC
+      SELECT
+        oi.*,
+        -- Barcodes the ShopperApp verifies scans against
+        p.barcode AS product_barcode,
+        rp.barcode AS replacement_product_barcode
+      FROM order_items oi
+      LEFT JOIN products p
+        ON p.id = oi.product_id
+      LEFT JOIN products rp
+        ON rp.id = oi.replacement_product_id
+      WHERE oi.order_id = $1 AND oi.shop_id = $2
+      ORDER BY oi.id ASC
       `,
       [orderId, shopId]
     );
@@ -456,6 +473,8 @@ const startShopping = async (req, res) => {
           WHEN status = 'shopper_accepted' THEN 'shopping'
           ELSE status
         END,
+        -- First start only (multi-shop orders start each shop)
+        shopping_started_at = COALESCE(shopping_started_at, NOW()),
         updated_at = NOW()
       WHERE id = $1 AND shopper_id = $2
       RETURNING *
@@ -473,6 +492,14 @@ const startShopping = async (req, res) => {
         status: updateResult.rows[0]?.status || order.status,
         shopId,
       },
+    });
+
+    // Chat timeline: once per order, even with several shops
+    await postChatEvent({
+      io: req.app.get('io'),
+      orderId,
+      eventType: 'shopping_started',
+      onceKey: 'order',
     });
 
     return res.status(200).json({

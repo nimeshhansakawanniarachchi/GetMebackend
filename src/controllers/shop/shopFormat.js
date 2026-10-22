@@ -14,6 +14,8 @@ const toShop = (row) => ({
   status: row.status,
   isOpen: row.is_open !== false,
   imageUrl: row.image_url || null,
+  // Store page header color in the customer app; null = automatic
+  brandColor: row.brand_color || null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -25,6 +27,11 @@ const toProduct = (row) => ({
   category: row.category,
   price: Number(row.price || 0),
   unit: row.unit || 'item',
+  barcode: row.barcode || '',
+  brand: row.brand || '',
+  size: row.size || '',
+  // Linked to the shared catalogue (manufacturer barcode)
+  catalogId: row.catalog_id || null,
   stockQuantity: Number(row.stock_quantity || 0),
   description: row.description || '',
   imageUrl: row.image_url || null,

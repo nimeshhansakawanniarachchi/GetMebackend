@@ -9,6 +9,12 @@ const { emitToAdmins } = require('../../realtime');
 
 const { normalizeSriLankanPhone } = require('../../utils/phone');
 
+const {
+  MIN_WHITE_CONTRAST,
+  normalizeBrandColor,
+  whiteContrast,
+} = require('../../utils/brandColor');
+
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const signShopToken = (shop) =>
@@ -204,6 +210,8 @@ const getShopProfile = async (req, res) => {
 // =====================================================
 // UPDATE PROFILE
 // PUT /api/shop/profile (multipart, optional `image`)
+// Optional `brandColor`: "#RRGGBB" sets it, "" clears it
+// (automatic), left out keeps the current one.
 // =====================================================
 
 const updateShopProfile = async (req, res) => {
@@ -213,6 +221,21 @@ const updateShopProfile = async (req, res) => {
     const address = clean(req.body?.address);
     const latitude = parseCoordinate(req.body?.latitude, 90);
     const longitude = parseCoordinate(req.body?.longitude, 180);
+
+    const hasBrandColor = req.body?.brandColor !== undefined;
+    const brandColorText = String(req.body?.brandColor ?? '').trim();
+    const brandColor = brandColorText ? normalizeBrandColor(brandColorText) : null;
+
+    if (hasBrandColor && brandColorText && !brandColor) {
+      return res.status(400).json({ success: false, message: 'Enter a brand color like #0060A9.' });
+    }
+
+    if (brandColor && whiteContrast(brandColor) < MIN_WHITE_CONTRAST) {
+      return res.status(400).json({
+        success: false,
+        message: 'That brand color is too light for white text. Pick a darker shade.',
+      });
+    }
 
     if (!shopName || shopName.length < 2) {
       return res.status(400).json({ success: false, message: 'Shop name is required' });
@@ -240,16 +263,23 @@ const updateShopProfile = async (req, res) => {
         latitude = $4,
         longitude = $5,
         image_url = COALESCE($6, image_url),
+        brand_color = CASE WHEN $8::boolean THEN $9::varchar ELSE brand_color END,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = $7
       RETURNING *
       `,
-      [shopName, mobile, address, latitude, longitude, imageUrl, req.shop.shopId]
+      [shopName, mobile, address, latitude, longitude, imageUrl, req.shop.shopId, hasBrandColor, brandColor]
     );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Shop not found' });
     }
+
+    // Admin panel shop cards show the brand color
+    emitToAdmins(req.app.get('io'), 'admin:shops-updated', {
+      shopId: req.shop.shopId,
+      reason: 'profile',
+    });
 
     return res.json({
       success: true,

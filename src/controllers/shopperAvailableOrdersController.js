@@ -2,7 +2,6 @@
 const db = require('../config/db');
 
 const {
-  OFFER_SECONDS,
   OFFER_RADIUS_KM,
   shopperPayForOrder,
 } = require('./shopperPay');
@@ -111,7 +110,7 @@ const getAvailableOrders = async (req, res) => {
         o.customer_id,
 
         c.full_name AS customer_name,
-        c.mobile AS customer_phone,
+        COALESCE(o.contact_phone, c.mobile) AS customer_phone,
 
         os.shop_id,
 
@@ -124,7 +123,7 @@ const getAvailableOrders = async (req, res) => {
 
         -- Preferred vehicle, unless the search has fallen back to any
         CASE
-          WHEN o.shopper_search_started_at <= NOW() - make_interval(secs => $5)
+          WHEN o.shopper_search_started_at <= NOW() - make_interval(secs => $4)
             THEN NULL
           ELSE o.preferred_vehicle_type
         END AS preferred_vehicle_type,
@@ -135,6 +134,7 @@ const getAvailableOrders = async (req, res) => {
         o.service_fee,
         o.total_amount,
         o.tip_amount,
+        o.estimated_delivery_minutes,
 
         o.distance_km AS customer_distance_km,
 
@@ -144,7 +144,6 @@ const getAvailableOrders = async (req, res) => {
         o.shopper_id,
         o.shopper_search_started_at,
 
-        EXTRACT(EPOCH FROM (NOW() - so.first_seen_at)) AS offer_age_seconds,
         so.first_seen_at AS offer_started_at,
 
         s.shop_name,
@@ -189,12 +188,13 @@ const getAvailableOrders = async (req, res) => {
       INNER JOIN shops s
         ON s.id = os.shop_id
 
-      -- Only batches currently offered to THIS shopper
+      -- Only batches currently offered to THIS shopper. Offers don't
+      -- expire: they stay until the batch is accepted (by anyone) or
+      -- this shopper hides it
       INNER JOIN shopper_order_offers so
         ON so.order_id = o.id
         AND so.shopper_id = $3
         AND so.dismissed_at IS NULL
-        AND so.first_seen_at > NOW() - make_interval(secs => $4)
 
       WHERE
         o.status = 'waiting_for_shopper'
@@ -212,7 +212,6 @@ const getAvailableOrders = async (req, res) => {
         shopperLatitude,
         shopperLongitude,
         shopperId,
-        OFFER_SECONDS,
         VEHICLE_FALLBACK_SECONDS,
       ]
     );
@@ -520,13 +519,6 @@ const getAvailableOrders = async (req, res) => {
 
       const shopperEarnings = shopperPayForOrder(order);
 
-      // First time this shopper sees the batch, the full countdown starts
-      const offerAgeSeconds = Number(order.offer_age_seconds);
-
-      const offerSecondsLeft = Number.isFinite(offerAgeSeconds)
-        ? Math.max(0, Math.round(OFFER_SECONDS - offerAgeSeconds))
-        : OFFER_SECONDS;
-
       const finalOrder = {
         id: order.id,
         orderId: order.id,
@@ -618,16 +610,21 @@ const getAvailableOrders = async (req, res) => {
         shopNames: group.shopNames,
         shops: group.shops,
 
-        // SHOPPER PAY (delivery fee + fast delivery fee)
+        // SHOPPER PAY (delivery fee + fast delivery fee + tip)
         shopperEarnings,
         fastDeliveryFee: Number(order.fast_delivery_fee || 0),
+        // Part of shopperEarnings, for "Includes LKR X tip"
+        tipAmount: Number(order.tip_amount || 0),
 
-        // BATCH COUNTDOWN
-        offerSeconds: OFFER_SECONDS,
-        offerSecondsLeft,
+        // Customer's delivery estimate (minutes after the order was
+        // placed), for "Deliver by 3:45 PM"
+        estimatedDeliveryMinutes:
+          order.estimated_delivery_minutes != null
+            ? Number(order.estimated_delivery_minutes)
+            : null,
 
-        // Identifies this offer: the same batch can be re-offered to
-        // the same shopper in a later round (new countdown, unhidden)
+        // Identifies this offer: a batch the shopper hid can be
+        // offered to them again in a later round (shown again)
         offerStartedAt: order.offer_started_at,
         waitingSince:
           order.shopper_search_started_at ||
@@ -699,8 +696,8 @@ const getAvailableOrders = async (req, res) => {
       batchTotalAmount: order.batchTotalAmount,
 
       shopperEarnings: order.shopperEarnings,
-      offerSeconds: order.offerSeconds,
-      offerSecondsLeft: order.offerSecondsLeft,
+      tipAmount: order.tipAmount,
+      estimatedDeliveryMinutes: order.estimatedDeliveryMinutes,
       offerStartedAt: order.offerStartedAt,
       waitingSince: order.waitingSince,
 

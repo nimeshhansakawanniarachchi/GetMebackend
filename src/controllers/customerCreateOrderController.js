@@ -2,8 +2,11 @@ const pool = require('../config/db');
 
 const {
   buildQuote,
+  DROPOFF_OPTIONS,
   PAYMENT_METHODS,
 } = require('../pricing/quote');
+
+const { normalizeSriLankanMobile } = require('../utils/phone');
 
 const { buildSlots } = require('../pricing/slots');
 const { evaluatePromo } = require('../pricing/promos');
@@ -12,6 +15,7 @@ const { getPricingSettings } = require('../pricing/settings');
 const { broadcastOrderChange } = require('../realtime');
 
 const MAX_ADDRESS_LENGTH = 500;
+const MAX_INSTRUCTIONS_LENGTH = 500;
 
 const readQuoteInput = (body, customerId) => ({
   customerId,
@@ -22,6 +26,7 @@ const readQuoteInput = (body, customerId) => ({
   deliveryOption: body?.deliveryOption,
   scheduledDate: body?.scheduledDate || null,
   scheduledStartTime: body?.scheduledStartTime || null,
+  scheduledEndTime: body?.scheduledEndTime || null,
   items: body?.items,
 });
 
@@ -67,7 +72,10 @@ const getDeliverySlots = async (req, res) => {
 // CREATE ORDER
 // POST /api/customer/orders
 // Body: deliveryAddress, deliveryLatitude, deliveryLongitude,
-//   deliveryOption ('fast'|'scheduled'), scheduledDate, scheduledStartTime,
+//   deliveryOption ('fast'|'standard'|'scheduled'), scheduledDate,
+//   scheduledStartTime, scheduledEndTime,
+//   deliveryDropoff ('leave_at_door'|'meet_at_door'), deliveryInstructions,
+//   contactPhone (shopper calls it; empty = account mobile),
 //   paymentMethod, expectedTotal, tipAmount, promoCode, items[{ productId, shopId, quantity,
 //   amount, selectedUnit } | { custom:true, shopId, itemName, quantity,
 //   unit, details, image, voiceUrl }]
@@ -86,6 +94,20 @@ const createOrder = async (req, res) => {
 
   if (!PAYMENT_METHODS.includes(paymentMethod)) {
     return res.status(400).json({ success: false, message: 'Choose a valid payment method' });
+  }
+
+  const deliveryDropoff = DROPOFF_OPTIONS.includes(req.body?.deliveryDropoff)
+    ? req.body.deliveryDropoff
+    : 'leave_at_door';
+
+  const deliveryInstructions =
+    String(req.body?.deliveryInstructions || '').trim().slice(0, MAX_INSTRUCTIONS_LENGTH) || null;
+
+  const rawContactPhone = String(req.body?.contactPhone || '').trim();
+  const contactPhone = rawContactPhone ? normalizeSriLankanMobile(rawContactPhone) : null;
+
+  if (rawContactPhone && !contactPhone) {
+    return res.status(400).json({ success: false, message: 'Enter a valid Sri Lankan mobile number' });
   }
 
   let quote;
@@ -180,9 +202,10 @@ const createOrder = async (req, res) => {
         scheduled_date, scheduled_start_time, scheduled_end_time,
         estimated_delivery_minutes, estimated_delivery_max_minutes,
         tip_amount, promo_code, discount_amount,
+        window_discount, delivery_dropoff, delivery_instructions, contact_phone,
         status
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,'pending_shopper_search')
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,'pending_shopper_search')
       RETURNING *
       `,
       [
@@ -202,11 +225,15 @@ const createOrder = async (req, res) => {
         quote.slot?.date || null,
         quote.slot?.start || null,
         quote.slot?.end || null,
-        quote.deliveryOption === 'fast' ? quote.estimatedMinutes.min : null,
-        quote.deliveryOption === 'fast' ? quote.estimatedMinutes.max : null,
+        quote.deliveryOption !== 'scheduled' ? quote.estimatedMinutes.min : null,
+        quote.deliveryOption !== 'scheduled' ? quote.estimatedMinutes.max : null,
         quote.tipAmount,
         promo ? promo.code : null,
         quote.discount,
+        quote.windowDiscount,
+        deliveryDropoff,
+        deliveryInstructions,
+        contactPhone,
       ]
     );
 
@@ -308,6 +335,10 @@ const createOrder = async (req, res) => {
       tipAmount: Number(order.tip_amount),
       promoCode: order.promo_code,
       discountAmount: Number(order.discount_amount),
+      windowDiscount: Number(order.window_discount),
+      deliveryDropoff: order.delivery_dropoff,
+      deliveryInstructions: order.delivery_instructions,
+      contactPhone: order.contact_phone,
       distanceKm: order.distance_km != null ? Number(order.distance_km) : null,
       hasCustomItems: quote.hasCustomItems,
       shop: shopObjects.find((shop) => shop.id === primaryShop.id),

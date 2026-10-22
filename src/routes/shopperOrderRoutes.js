@@ -26,6 +26,7 @@ const {
   uploadItemPhoto,
   uploadReplacementPhoto,
   updateItemShoppingStatus,
+  verifyItemBarcode,
 
   updateOrderPayment,
   uploadBill: uploadBillController,
@@ -376,6 +377,17 @@ router.patch(
 );
 
 // =====================================================
+// VERIFY SCANNED BARCODE (read-only)
+// POST /api/shopper/orders/:orderId/items/:itemId/verify-barcode
+// =====================================================
+
+router.post(
+  '/orders/:orderId/items/:itemId/verify-barcode',
+  authMiddleware,
+  verifyItemBarcode
+);
+
+// =====================================================
 // UPLOAD ITEM PHOTO
 // POST /api/shopper/orders/:orderId/items/:itemId/photo
 // FormData field: photo
@@ -423,7 +435,8 @@ router.patch(
 router.post(
   '/orders/:orderId/bill',
   authMiddleware,
-  uploadBillFile.single('bill'),
+  // Up to 5 photos of one receipt (long receipts in parts)
+  uploadBillFile.array('bill', 5),
   uploadBillController
 );
 
