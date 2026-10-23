@@ -9,6 +9,7 @@ const {
   deliveryFee,
   serviceFee,
 } = require('../../pricing/fees');
+const { DEFAULT_VEHICLE, vehicleFeesFor } = require('../../pricing/vehicles');
 
 
 // =====================================================
@@ -83,7 +84,9 @@ const previewPricing = async (req, res) => {
     const shopCount = Math.max(1, Math.min(10, Number.parseInt(req.body?.shopCount, 10) || 1));
     const fast = req.body?.fast !== false;
 
-    const delivery = deliveryFee(pricing, distanceKm, shopCount);
+    // Same as checkout: priced for Bike, with every vehicle's fee
+    const vehicleFees = vehicleFeesFor(pricing, deliveryFee(pricing, distanceKm, shopCount) ?? 0);
+    const delivery = vehicleFees[DEFAULT_VEHICLE];
     const fastFee = fast ? Number(pricing.fastFee || 0) : 0;
     const service = serviceFee(pricing, itemsTotal);
 
@@ -92,6 +95,7 @@ const previewPricing = async (req, res) => {
       preview: {
         itemsTotal,
         deliveryFee: delivery,
+        vehicleFees,
         fastDeliveryFee: fastFee,
         serviceFee: service,
         customerTotal: itemsTotal + delivery + fastFee + service,

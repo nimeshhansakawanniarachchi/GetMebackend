@@ -34,8 +34,9 @@ const {
 
 const FORWARD_SECONDS = 5;
 
-// No shopper with the chosen vehicle accepted in this long: offer
-// the order to any vehicle (the customer's screen says so)
+// No shopper with the chosen vehicle accepted in this long: also
+// offer it to vehicles that cost the same or less (the customer's
+// screen says so); accepting re-prices it to that vehicle's fee
 const VEHICLE_FALLBACK_SECONDS = 180;
 
 const DISPATCH_TICK_MS = 1000;
@@ -44,8 +45,9 @@ const DISPATCH_TICK_MS = 1000;
 // ELIGIBLE SHOPPERS
 // Online + approved shoppers who aren't busy with another order,
 // with EVERY shop of the order within OFFER_RADIUS_KM and the
-// customer's preferred vehicle (if any; any vehicle once the search
-// has run VEHICLE_FALLBACK_SECONDS), sorted by distance to the
+// customer's preferred vehicle (if any; once the search has run
+// VEHICLE_FALLBACK_SECONDS, also vehicles whose fee in
+// orders.vehicle_fees is no higher), sorted by distance to the
 // nearest shop.
 // anyVehicle: ignore the preference (nearby vehicles on the map).
 // =====================================================
@@ -88,12 +90,30 @@ const getEligibleShoppers = async (
             AND busy.status <> ALL($3::text[])
         )
         -- NULL preference = any vehicle. After
-        -- VEHICLE_FALLBACK_SECONDS of searching, any vehicle too.
+        -- VEHICLE_FALLBACK_SECONDS of searching, vehicles that cost
+        -- the same or less too (any vehicle on orders without
+        -- vehicle_fees). Unbookable types are priced like a Bike
+        -- (pricing/vehicles.js priceClass).
         AND (
           $2
           OR o.preferred_vehicle_type IS NULL
           OR sh.vehicle_type = o.preferred_vehicle_type
-          OR o.shopper_search_started_at <= NOW() - make_interval(secs => $4)
+          OR (
+            o.shopper_search_started_at <= NOW() - make_interval(secs => $4)
+            AND (
+              o.vehicle_fees IS NULL
+              OR COALESCE(
+                (o.vehicle_fees ->> (
+                  CASE
+                    WHEN sh.vehicle_type IN ('motorbike', 'three-wheeler', 'car')
+                      THEN sh.vehicle_type
+                    ELSE 'motorbike'
+                  END
+                ))::numeric,
+                o.delivery_fee
+              ) <= o.delivery_fee
+            )
+          )
         )
       `,
       [orderId, anyVehicle, FINISHED_STATUSES, VEHICLE_FALLBACK_SECONDS]
@@ -168,10 +188,14 @@ const fuzzPosition = (shopperId, latitude, longitude) => {
   };
 };
 
-const getNearbyVehicles = async (orderId) => {
-  const shoppers = await getEligibleShoppers(orderId, db, {
-    anyVehicle: true,
-  });
+// shoppers: getEligibleShoppers(orderId, db, { anyVehicle: true })
+// when the caller already has it
+const getNearbyVehicles = async (orderId, shoppers = null) => {
+  shoppers =
+    shoppers ||
+    (await getEligibleShoppers(orderId, db, {
+      anyVehicle: true,
+    }));
 
   return (
     shoppers
@@ -208,8 +232,10 @@ const alertOfferedShopper = async ({ io, orderId, shopperId }) => {
       `
       SELECT
         o.delivery_fee,
+        o.vehicle_fees,
         o.fast_delivery_fee,
         o.tip_amount,
+        (SELECT vehicle_type FROM shoppers WHERE id = $2) AS shopper_vehicle_type,
         STRING_AGG(s.shop_name, ' + ' ORDER BY os.shop_id) AS shop_names
       FROM orders o
       LEFT JOIN order_shops os ON os.order_id = o.id
@@ -217,7 +243,7 @@ const alertOfferedShopper = async ({ io, orderId, shopperId }) => {
       WHERE o.id = $1
       GROUP BY o.id
       `,
-      [orderId]
+      [orderId, shopperId]
     );
 
     const order = orderResult.rows[0];
@@ -259,7 +285,8 @@ const alertOfferedShopper = async ({ io, orderId, shopperId }) => {
       type: 'new_batch',
       title: 'New batch available',
       body: `${order.shop_names || 'New order'} · Earn LKR ${shopperPayForOrder(
-        order
+        order,
+        order.shopper_vehicle_type
       ).toFixed(2)}. Open the app to accept it.`,
       orderId,
     });

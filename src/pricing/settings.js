@@ -18,6 +18,9 @@ const DEFAULT_PRICING = {
     maxKm: 10,
   },
   fastFee: 100,
+  // Delivery fee x this for the vehicle the customer books
+  // (keys = bookable vehicle types, see pricing/vehicles.js)
+  vehicleMultipliers: { motorbike: 1, 'three-wheeler': 1.3, car: 1.6 },
   // Standard (no priority fee) arrives this much later than Priority
   standardExtraMinutes: 45,
   // LKR off the order for a flexible window (one hour longer
@@ -34,6 +37,7 @@ const withDefaults = (stored) => ({
   delivery: { ...DEFAULT_PRICING.delivery, ...stored?.delivery },
   serviceFee: { ...DEFAULT_PRICING.serviceFee, ...stored?.serviceFee },
   slots: { ...DEFAULT_PRICING.slots, ...stored?.slots },
+  vehicleMultipliers: { ...DEFAULT_PRICING.vehicleMultipliers, ...stored?.vehicleMultipliers },
 });
 
 let cache = null;
@@ -84,6 +88,18 @@ const validatePricing = (input) => {
         : [],
     },
     fastFee: money(input?.fastFee),
+    vehicleMultipliers: Object.fromEntries(
+      Object.keys(DEFAULT_PRICING.vehicleMultipliers).map((vehicle) => {
+        const multiplier = Number(input?.vehicleMultipliers?.[vehicle]);
+
+        return [
+          vehicle,
+          Number.isFinite(multiplier) && multiplier >= 0.5 && multiplier <= 5
+            ? Math.round(multiplier * 100) / 100
+            : null,
+        ];
+      })
+    ),
     standardExtraMinutes: Number(input?.standardExtraMinutes),
     flexibleWindowDiscount: money(input?.flexibleWindowDiscount, 5000),
     serviceFee: {
@@ -111,6 +127,10 @@ const validatePricing = (input) => {
     value.standardExtraMinutes < 0 || value.standardExtraMinutes > 600
   ) {
     errors.push('Standard delivery: extra minutes must be a whole number from 0 to 600');
+  }
+
+  if (Object.values(value.vehicleMultipliers).includes(null)) {
+    errors.push('Vehicle price multipliers must be between 0.5 and 5');
   }
 
   if (value.flexibleWindowDiscount === null) {

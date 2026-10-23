@@ -203,9 +203,10 @@ const createOrder = async (req, res) => {
         estimated_delivery_minutes, estimated_delivery_max_minutes,
         tip_amount, promo_code, discount_amount,
         window_discount, delivery_dropoff, delivery_instructions, contact_phone,
+        vehicle_fees, offer_savings,
         status
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,'pending_shopper_search')
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,'pending_shopper_search')
       RETURNING *
       `,
       [
@@ -234,6 +235,10 @@ const createOrder = async (req, res) => {
         deliveryDropoff,
         deliveryInstructions,
         contactPhone,
+        // Fee per vehicle, fixed now (pricing/vehicles.js)
+        quote.vehicleFees,
+        // Shop offers (pricing/offers.js)
+        quote.offerSavings || 0,
       ]
     );
 
@@ -268,9 +273,10 @@ const createOrder = async (req, res) => {
           custom, details, image, voice_url,
           replacement_preference, replacement_product_id,
           replacement_product_name, replacement_product_image,
-          replacement_product_price, replacement_note
+          replacement_product_price, replacement_note,
+          original_unit_price, offer_id, offer_label
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
         `,
         [
           order.id,
@@ -293,6 +299,10 @@ const createOrder = async (req, res) => {
           line.replacementProductImage,
           line.replacementProductPrice,
           line.replacementNote,
+          // Shelf price + offer the line was priced with (else null)
+          line.custom ? null : line.originalUnitPrice ?? null,
+          line.custom ? null : line.offerId ?? null,
+          line.custom ? null : line.offerLabel ?? null,
         ]
       );
     }

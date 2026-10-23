@@ -5,6 +5,8 @@ const { distanceKm } = require('../controllers/shopperPay');
 const { getPricingSettings } = require('./settings');
 const { findSlot } = require('./slots');
 const { evaluatePromo, normalizePromoCode } = require('./promos');
+const { DEFAULT_VEHICLE, vehicleFeesFor } = require('./vehicles');
+const { applyOffersToProducts } = require('./offers');
 const {
   round2,
   deliveryFee,
@@ -181,13 +183,25 @@ const buildQuote = async ({
 
   const productsResult = productIds.length
     ? await pool.query(
-        `SELECT id, shop_id, product_name, price, unit, stock_quantity, is_available, image_url
+        `SELECT id, shop_id, product_name, category, price, unit, stock_quantity, is_available, image_url
          FROM products WHERE id = ANY($1::int[])`,
         [productIds]
       )
     : { rows: [] };
 
-  const products = new Map(productsResult.rows.map((row) => [row.id, row]));
+  // Shop offers (pricing/offers.js): price = offer price,
+  // original_price = shelf price. A scheduled order only gets an
+  // offer that is still running when its slot starts.
+  const slotStart =
+    slot && scheduledDate && scheduledStartTime
+      ? new Date(`${scheduledDate}T${String(scheduledStartTime).slice(0, 5)}:00`)
+      : null;
+
+  const pricedProducts = await applyOffersToProducts(productsResult.rows, {
+    until: slotStart && !Number.isNaN(slotStart.getTime()) ? slotStart : null,
+  });
+
+  const products = new Map(pricedProducts.map((row) => [row.id, row]));
 
   const shopIds = [
     ...new Set(
@@ -279,8 +293,13 @@ const buildQuote = async ({
       unit: packUnit,
       productUnit,
       unitPrice: Number(product.price),
+      // Shelf price + offer when one applies (else null)
+      originalUnitPrice: product.original_price != null ? Number(product.original_price) : null,
+      offerId: product.offer?.id || null,
+      offerLabel: product.offer?.label || null,
       packPrice: 0,
       lineTotal: 0,
+      savings: 0,
       ...buildReplacement(item, product.shop_id, product.id, products),
     };
 
@@ -310,6 +329,12 @@ const buildQuote = async ({
 
     line.packPrice = round2(line.unitPrice * amount * rule.factor);
     line.lineTotal = round2(line.packPrice * quantity);
+
+    if (line.originalUnitPrice != null) {
+      line.savings = round2(
+        round2(line.originalUnitPrice * amount * rule.factor) * quantity - line.lineTotal
+      );
+    }
 
     return line;
   });
@@ -352,10 +377,17 @@ const buildQuote = async ({
 
   const itemsTotal = round2(lines.reduce((sum, line) => sum + (line.lineTotal || 0), 0));
 
+  // Saved through shop offers; itemsTotal already has it taken off
+  const offerSavings = round2(lines.reduce((sum, line) => sum + (line.savings || 0), 0));
+
   const distances = shopSummaries.map((shop) => shop.distanceKm).filter(Number.isFinite);
   const farthestKm = distances.length ? Math.max(...distances) : null;
 
-  const delivery = deliveryFee(settings, farthestKm, Math.max(1, shopSummaries.length)) ?? 0;
+  // Priced for the default vehicle (Bike); the customer picks the
+  // vehicle on Find a shopper, which re-prices from vehicleFees
+  const baseDelivery = deliveryFee(settings, farthestKm, Math.max(1, shopSummaries.length)) ?? 0;
+  const vehicleFees = vehicleFeesFor(settings, baseDelivery);
+  const delivery = vehicleFees[DEFAULT_VEHICLE];
   const fast = option === 'fast' ? settings.fastFee : 0;
   const service = serviceFee(settings, itemsTotal);
 
@@ -395,8 +427,10 @@ const buildQuote = async ({
     lines,
     shops: shopSummaries,
     itemsTotal,
+    offerSavings,
     hasCustomItems: lines.some((line) => line.custom),
     deliveryFee: delivery,
+    vehicleFees,
     fastDeliveryFee: fast,
     serviceFee: service,
     tipAmount: safeTip,

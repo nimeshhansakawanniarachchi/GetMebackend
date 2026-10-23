@@ -5,6 +5,7 @@ const db = require('./config/db');
 // Rooms (joined in bin/www after socket auth):
 //   admins          - every signed-in admin
 //   shop:{shopId}   - a shop's website
+//   customers       - every customer app (catalog changes)
 //   shopper:{id}, customer:{id}, order:{id} - mobile apps
 // None of these throw: realtime must never break a request.
 // =====================================================
@@ -50,8 +51,29 @@ const broadcastOrderChange = (io, orderId, payload = {}) => {
   emitToOrderShops(io, orderId, 'shop:order-updated', data);
 };
 
+// A shop's catalog changed (products, prices, stock, offers, or
+// the shop itself: open/closed, approved, name, logo). Customer
+// apps refetch what they show for that shop - the event carries
+// no prices, so the app always gets them from the same server
+// pricing as checkout. kind: 'products' | 'offers' | 'shop'.
+const broadcastCatalogChange = (io, shopId, kind = 'products') => {
+  try {
+    const id = Number(shopId);
+
+    if (io && Number.isInteger(id) && id > 0) {
+      const payload = { shopId: id, kind, at: Date.now() };
+
+      io.to('customers').emit('catalog-updated', payload);
+      emitToAdmins(io, 'admin:catalog-updated', payload);
+    }
+  } catch (error) {
+    console.error('❌ broadcastCatalogChange error:', error.message);
+  }
+};
+
 module.exports = {
   emitToAdmins,
   emitToOrderShops,
   broadcastOrderChange,
+  broadcastCatalogChange,
 };

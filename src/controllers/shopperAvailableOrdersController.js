@@ -5,6 +5,7 @@ const {
   OFFER_RADIUS_KM,
   shopperPayForOrder,
 } = require('./shopperPay');
+const { deliveryFeeForShopper } = require('../pricing/vehicles');
 
 const {
   VEHICLE_FALLBACK_SECONDS,
@@ -53,7 +54,8 @@ const getAvailableOrders = async (req, res) => {
         latitude,
         longitude,
         status,
-        approval_status
+        approval_status,
+        vehicle_type
       FROM shoppers
       WHERE id = $1
       LIMIT 1
@@ -130,6 +132,7 @@ const getAvailableOrders = async (req, res) => {
 
         o.items_total,
         o.delivery_fee,
+        o.vehicle_fees,
         o.fast_delivery_fee,
         o.service_fee,
         o.total_amount,
@@ -445,7 +448,7 @@ const getAvailableOrders = async (req, res) => {
           : 'Unknown',
 
         itemsTotal: Number(order.items_total || 0),
-        deliveryFee: Number(order.delivery_fee || 0),
+        deliveryFee: deliveryFeeForShopper(order, shopper.vehicle_type),
         serviceFee: Number(order.service_fee || 0),
         totalAmount: Number(order.total_amount || 0),
 
@@ -517,7 +520,8 @@ const getAvailableOrders = async (req, res) => {
 
       const primaryShop = group.shops[0] || null;
 
-      const shopperEarnings = shopperPayForOrder(order);
+      // For this shopper's vehicle (pricing/vehicles.js)
+      const shopperEarnings = shopperPayForOrder(order, shopper.vehicle_type);
 
       const finalOrder = {
         id: order.id,
@@ -559,7 +563,7 @@ const getAvailableOrders = async (req, res) => {
 
         // MONEY
         itemsTotal: Number(order.items_total || 0),
-        deliveryFee: Number(order.delivery_fee || 0),
+        deliveryFee: deliveryFeeForShopper(order, shopper.vehicle_type),
         serviceFee: Number(order.service_fee || 0),
         totalAmount: Number(order.total_amount || 0),
 

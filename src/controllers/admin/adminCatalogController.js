@@ -2,7 +2,7 @@ const pool = require('../../config/db');
 
 const { readPage, pageMeta } = require('../../utils/pagination');
 
-const { emitToAdmins } = require('../../realtime');
+const { emitToAdmins, broadcastCatalogChange } = require('../../realtime');
 
 const {
   MIN_WHITE_CONTRAST,
@@ -129,6 +129,8 @@ const setShopStatus = async (req, res) => {
 
     io?.to(`shop:${shopId}`).emit('shop:status-changed', { status });
     emitToAdmins(io, 'admin:shops-updated', { shopId, reason: 'status' });
+    // Approved / suspended changes what customers can see
+    broadcastCatalogChange(io, shopId, 'shop');
 
     return res.json({ success: true, shop: result.rows[0] });
   } catch (error) {
@@ -177,6 +179,7 @@ const setShopBrandColor = async (req, res) => {
     }
 
     emitToAdmins(req.app.get('io'), 'admin:shops-updated', { shopId, reason: 'brand-color' });
+    broadcastCatalogChange(req.app.get('io'), shopId, 'shop');
 
     return res.json({
       success: true,
@@ -291,7 +294,7 @@ const setProductAvailability = async (req, res) => {
       `
       UPDATE products SET is_available = $1, updated_at = NOW()
       WHERE id = $2
-      RETURNING id, is_available
+      RETURNING id, shop_id, is_available
       `,
       [req.body.isAvailable, productId]
     );
@@ -299,6 +302,8 @@ const setProductAvailability = async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Product not found' });
     }
+
+    broadcastCatalogChange(req.app.get('io'), result.rows[0].shop_id, 'products');
 
     return res.json({
       success: true,

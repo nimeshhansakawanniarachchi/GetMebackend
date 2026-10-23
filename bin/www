@@ -64,6 +64,12 @@ app.set('io', io);
 require('../src/controllers/shopperDispatch').startDispatchLoop(io);
 
 /**
+ * Offers that start / end on their own: tell customer apps to refetch.
+ */
+
+require('../src/utils/offerClock').startOfferClock(io);
+
+/**
  * Socket.IO authentication.
  */
 
@@ -155,6 +161,8 @@ io.on('connection', function (socket) {
   if (socket.userType === 'customer' && customerId != null) {
     const room = `customer:${customerId}`;
     socket.join(room);
+    // Shop catalog changes (realtime.broadcastCatalogChange)
+    socket.join('customers');
     console.log('🏠 Joined customer room:', room);
   }
 

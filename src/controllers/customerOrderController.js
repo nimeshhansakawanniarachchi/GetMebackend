@@ -9,14 +9,27 @@ const {
 const {
   dispatchOrder,
   getNearbyVehicles,
+  getEligibleShoppers,
   getOfferHolders,
   notifyOffersWithdrawn,
 } = require('./shopperDispatch');
 
 const { VEHICLE_TYPES } = require('../utils/vehicleTypes');
+const {
+  BOOKABLE_VEHICLES,
+  orderFeeFor,
+  repriceOrder,
+  hasFreeDeliveryPromo,
+  applyVehiclePrice,
+} = require('../pricing/vehicles');
 
 const { broadcastOrderChange } = require('../realtime');
 const { postChatEvent } = require('../utils/chatEvents');
+const { vehicleEtasToShop } = require('../utils/vehicleEta');
+const {
+  CUSTOMER_CANCELLABLE_STATUSES,
+  FINISHED_STATUSES,
+} = require('../utils/orderStatus');
 
 const {
   createShopperNotification,
@@ -342,25 +355,46 @@ const startShopperSearch = async (req, res) => {
         ? requestedVehicle
         : null;
 
-    const result = await pool.query(
-      `
-      UPDATE orders
-      SET
-        status = 'waiting_for_shopper',
-        preferred_vehicle_type = $3,
-        shopper_search_started_at = CURRENT_TIMESTAMP,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE
-        id = $1
-        AND customer_id = $2
-        -- shopper_search_cancelled: stopped before customers could
-        -- book again; those orders can be booked again too
-        AND status IN ('pending_shopper_search', 'shopper_search_cancelled')
-        AND shopper_id IS NULL
-      RETURNING *
-      `,
-      [orderId, customerId, preferredVehicle]
-    );
+    // Status change + delivery fee for the booked vehicle together
+    const client = await pool.connect();
+    let result;
+
+    try {
+      await client.query('BEGIN');
+
+      result = await client.query(
+        `
+        UPDATE orders
+        SET
+          status = 'waiting_for_shopper',
+          preferred_vehicle_type = $3,
+          shopper_search_started_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE
+          id = $1
+          AND customer_id = $2
+          -- shopper_search_cancelled: stopped before customers could
+          -- book again; those orders can be booked again too
+          AND status IN ('pending_shopper_search', 'shopper_search_cancelled')
+          AND shopper_id IS NULL
+        RETURNING *
+        `,
+        [orderId, customerId, preferredVehicle]
+      );
+
+      if (result.rows.length > 0 && preferredVehicle) {
+        result = {
+          rows: [await applyVehiclePrice(client, result.rows[0], preferredVehicle)],
+        };
+      }
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
 
     if (result.rows.length === 0) {
       const existing = await pool.query(
@@ -2793,7 +2827,8 @@ const cancelCustomerOrder =
           `
           SELECT
             id,
-            status
+            status,
+            shopper_id
 
           FROM orders
 
@@ -2823,15 +2858,20 @@ const cancelCustomerOrder =
       const order =
         orderResult.rows[0];
 
+      // Until a shopper accepts (placed, searching, or the search
+      // was stopped)
       if (
-        order.status !==
-        'waiting_for_shopper'
+        order.shopper_id ||
+        !CUSTOMER_CANCELLABLE_STATUSES.includes(order.status)
       ) {
         return res.status(400).json({
           success: false,
 
+          // Shopper on it (not finished): say why; otherwise generic
           message:
-            'This order cannot be cancelled now',
+            order.shopper_id && !FINISHED_STATUSES.includes(order.status)
+              ? 'Your shopper has already accepted this order'
+              : 'This order cannot be cancelled now',
         });
       }
 
@@ -2847,14 +2887,27 @@ const cancelCustomerOrder =
           WHERE
             id = $1
             AND customer_id = $2
+            -- Re-checked here: a shopper may accept in between
+            AND status = ANY($3::text[])
+            AND shopper_id IS NULL
 
           RETURNING *
           `,
           [
             orderId,
             customerId,
+            CUSTOMER_CANCELLABLE_STATUSES,
           ]
         );
+
+      if (updateResult.rows.length === 0) {
+        return res.status(409).json({
+          success: false,
+
+          message:
+            'A shopper just accepted this order, so it can no longer be cancelled',
+        });
+      }
 
       // Shoppers holding the offer see it vanish at once
       notifyOffersWithdrawn(
@@ -3572,6 +3625,9 @@ const updateReplacementStatus =
 // PickMe-style vehicle icons: type + approximate position only
 // (no ids / names; positions shifted 200-300 m, see
 // shopperDispatch.getNearbyVehicles). Only until a shopper accepts.
+// Also one option per bookable vehicle for the cards: its delivery
+// fee and order total (orders.vehicle_fees, pricing/vehicles.js) and
+// the nearest free shopper's road ETA to the shop.
 // ==================================================
 
 const getNearbyVehiclesForOrder = async (req, res) => {
@@ -3588,9 +3644,14 @@ const getNearbyVehiclesForOrder = async (req, res) => {
 
     const orderResult = await pool.query(
       `
-      SELECT status, shopper_id
-      FROM orders
-      WHERE id = $1 AND customer_id = $2
+      SELECT
+        o.id, o.status, o.shopper_id, o.promo_code,
+        o.delivery_fee, o.vehicle_fees, o.discount_amount, o.total_amount,
+        s.latitude AS shop_latitude,
+        s.longitude AS shop_longitude
+      FROM orders o
+      LEFT JOIN shops s ON s.id = o.shop_id
+      WHERE o.id = $1 AND o.customer_id = $2
       LIMIT 1
       `,
       [orderId, customerId]
@@ -3611,9 +3672,43 @@ const getNearbyVehiclesForOrder = async (req, res) => {
         order.status === 'waiting_for_shopper' ||
         order.status === 'shopper_search_cancelled');
 
+    if (!searching) {
+      return res.status(200).json({ success: true, vehicles: [], options: [] });
+    }
+
+    const shoppers = await getEligibleShoppers(orderId, pool, {
+      anyVehicle: true,
+    });
+
+    const [vehicles, etas, freeDelivery] = await Promise.all([
+      getNearbyVehicles(orderId, shoppers),
+      vehicleEtasToShop({
+        cacheId: orderId,
+        shoppers,
+        shop: { latitude: order.shop_latitude, longitude: order.shop_longitude },
+        types: BOOKABLE_VEHICLES,
+      }),
+      hasFreeDeliveryPromo(pool, order),
+    ]);
+
+    // Older orders (no vehicle_fees) cost the same for every vehicle
+    const options = BOOKABLE_VEHICLES.map((type) => {
+      const price = repriceOrder(order, type, { freeDelivery });
+
+      return {
+        type,
+        deliveryFee: price.deliveryFee,
+        totalAmount: price.totalAmount,
+        perVehiclePrice: orderFeeFor(order, type) !== null,
+        etaSeconds: etas[type]?.seconds ?? null,
+        etaEstimated: Boolean(etas[type]?.estimated),
+      };
+    });
+
     return res.status(200).json({
       success: true,
-      vehicles: searching ? await getNearbyVehicles(orderId) : [],
+      vehicles,
+      options,
     });
   } catch (error) {
     console.error('❌ GET NEARBY VEHICLES ERROR:', error);

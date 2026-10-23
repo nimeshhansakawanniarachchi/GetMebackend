@@ -31,10 +31,49 @@ const {
   getOrder,
 } = require('../controllers/shop/shopOrderController');
 
+const {
+  getOffers,
+  createOffer,
+  updateOffer,
+  deleteOffer,
+} = require('../controllers/shop/shopOfferController');
+
 const shopAuthMiddleware = require('../middleware/shopAuthMiddleware');
+const { broadcastCatalogChange } = require('../realtime');
 const loginRateLimit = require('../middleware/loginRateLimit');
 
 const router = express.Router();
+
+
+// ==================================================
+// REALTIME: any successful change to the shop's products,
+// offers or profile/open state tells customer apps to refetch
+// that shop (runs after the response, never delays it)
+// ==================================================
+
+const CATALOG_KINDS = [
+  [/^\/products/, 'products'],
+  [/^\/offers/, 'offers'],
+  [/^\/(profile|open)$/, 'shop'],
+];
+
+router.use((req, res, next) => {
+  if (req.method === 'GET') {
+    return next();
+  }
+
+  const match = CATALOG_KINDS.find(([pattern]) => pattern.test(req.path));
+
+  if (match) {
+    res.on('finish', () => {
+      if (res.statusCode < 400 && req.shop?.shopId) {
+        broadcastCatalogChange(req.app.get('io'), req.shop.shopId, match[1]);
+      }
+    });
+  }
+
+  return next();
+});
 
 
 // ==================================================
@@ -119,6 +158,12 @@ router.post('/products', shopAuthMiddleware, uploadProduct.single('image'), addP
 router.put('/products/:id', shopAuthMiddleware, uploadProduct.single('image'), updateProduct);
 router.patch('/products/:id', shopAuthMiddleware, patchProduct);
 router.delete('/products/:id', shopAuthMiddleware, deleteProduct);
+
+// Offers (the shop's own discounts, pricing/offers.js)
+router.get('/offers', shopAuthMiddleware, getOffers);
+router.post('/offers', shopAuthMiddleware, createOffer);
+router.patch('/offers/:id', shopAuthMiddleware, updateOffer);
+router.delete('/offers/:id', shopAuthMiddleware, deleteOffer);
 router.get('/catalog/:barcode', shopAuthMiddleware, lookupBarcode);
 
 

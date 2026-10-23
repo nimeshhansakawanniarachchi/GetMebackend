@@ -1,5 +1,6 @@
 
 const pool = require('../config/db');
+const { applyOffersToProducts } = require('../pricing/offers');
 
 const GOOGLE_MAPS_API_KEY =
   process.env.GOOGLE_MAPS_API_KEY;
@@ -374,6 +375,8 @@ const getCustomerShopProducts = async (
       );
 
 
+    // price = offer price, original_price = shelf price
+    // (pricing/offers.js), the same prices checkout charges
     return res.json({
 
       success: true,
@@ -382,7 +385,7 @@ const getCustomerShopProducts = async (
         shopResult.rows[0],
 
       products:
-        productResult.rows,
+        await applyOffersToProducts(productResult.rows),
 
     });
 
@@ -505,7 +508,7 @@ const getOftenBoughtWith = async (
       success: true,
 
       products:
-        productResult.rows,
+        await applyOffersToProducts(productResult.rows),
 
     });
 

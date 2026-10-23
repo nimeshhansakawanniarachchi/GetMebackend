@@ -2,6 +2,7 @@
 const db = require('../config/db');
 
 const { shopperPayForOrder } = require('./shopperPay');
+const { orderFeeFor, applyVehiclePrice } = require('../pricing/vehicles');
 
 const {
   shopperHoldsOffer,
@@ -214,6 +215,25 @@ const acceptOrder = async (req, res) => {
         success: false,
         message: 'Order has already been accepted',
       });
+    }
+
+    // A cheaper vehicle (offered after the vehicle fallback) takes
+    // the order at its own fee; never more than the booked fee
+    const shopperVehicle = (
+      await client.query('SELECT vehicle_type FROM shoppers WHERE id = $1', [shopperId])
+    ).rows[0]?.vehicle_type;
+
+    const vehicleFee = orderFeeFor(updateResult.rows[0], shopperVehicle);
+
+    if (
+      vehicleFee !== null &&
+      vehicleFee < Number(updateResult.rows[0].delivery_fee)
+    ) {
+      updateResult.rows[0] = await applyVehiclePrice(
+        client,
+        updateResult.rows[0],
+        shopperVehicle
+      );
     }
 
     const shopsResult = await client.query(

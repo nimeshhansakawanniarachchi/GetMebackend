@@ -26,6 +26,14 @@ const FINISHED_STATUSES = [
   ...ORDER_STATUS_GROUPS.cancelled,
 ];
 
+// The customer can cancel until a shopper accepts: placed (or the
+// search stopped) and searching. Keep CustomerApp
+// utils/orderCancel.js in sync.
+const CUSTOMER_CANCELLABLE_STATUSES = [
+  'pending_shopper_search',
+  'waiting_for_shopper',
+];
+
 const statusLabel = (status) =>
   ORDER_STATUS_LABELS[status] ||
   String(status || 'unknown').replace(/_/g, ' ');
@@ -34,5 +42,6 @@ module.exports = {
   ORDER_STATUS_LABELS,
   ORDER_STATUS_GROUPS,
   FINISHED_STATUSES,
+  CUSTOMER_CANCELLABLE_STATUSES,
   statusLabel,
 };

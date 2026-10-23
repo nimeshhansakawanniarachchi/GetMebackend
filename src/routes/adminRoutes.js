@@ -11,6 +11,7 @@ const catalog = require('../controllers/admin/adminCatalogController');
 const finance = require('../controllers/admin/adminFinanceController');
 const settings = require('../controllers/admin/adminSettingsController');
 const promos = require('../controllers/admin/adminPromoController');
+const offers = require('../controllers/admin/adminOfferController');
 
 const router = express.Router();
 
@@ -55,6 +56,10 @@ router.patch('/shops/:id/status', catalog.setShopStatus);
 router.patch('/shops/:id/brand-color', catalog.setShopBrandColor);
 router.get('/products', catalog.listProducts);
 router.patch('/products/:id/availability', catalog.setProductAvailability);
+
+// Shop offers (shops create them; admins can pause)
+router.get('/offers', offers.listOffers);
+router.patch('/offers/:id/pause', offers.setOfferPaused);
 
 // Money + reports
 router.get('/payments', finance.listPayments);

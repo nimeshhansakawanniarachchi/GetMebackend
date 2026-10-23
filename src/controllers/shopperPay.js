@@ -1,3 +1,5 @@
+const { deliveryFeeForShopper } = require('../pricing/vehicles');
+
 // ==================================================
 // SHOPPER PAY + BATCH OFFER SETTINGS
 // Shopper earns the order's delivery fee + fast delivery fee
@@ -11,8 +13,15 @@ const SHOPPER_PAY_SQL =
 // for the nearby shoppers a customer sees while finding a shopper.
 const OFFER_RADIUS_KM = 5;
 
-const shopperPayForOrder = (order) => {
-  const deliveryFee = Number(order?.delivery_fee || 0);
+// shopperVehicleType: pay for an OFFER to that shopper - their
+// vehicle's fee from orders.vehicle_fees (a cheaper vehicle after
+// the vehicle fallback earns its own fee; accepting re-prices the
+// order to it). Omit it for orders already taken.
+const shopperPayForOrder = (order, shopperVehicleType) => {
+  const deliveryFee =
+    shopperVehicleType === undefined
+      ? Number(order?.delivery_fee || 0)
+      : deliveryFeeForShopper(order, shopperVehicleType);
   const fastFee = Number(order?.fast_delivery_fee || 0);
   const tip = Number(order?.tip_amount || 0);
 
