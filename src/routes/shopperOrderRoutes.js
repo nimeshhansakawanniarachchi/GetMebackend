@@ -32,6 +32,10 @@ const {
   uploadBill: uploadBillController,
 } = require('../controllers/shopperOrderController');
 
+const {
+  uploadDeliveryPhoto,
+} = require('../controllers/shopperDeliveryPhotoController');
+
 // =====================================================
 // AUTH MIDDLEWARE
 // =====================================================
@@ -125,6 +129,14 @@ const billUploadDir = path.join(
   'bills'
 );
 
+// Photo of the order at the door (served at /uploads/deliveries)
+const deliveryPhotoDir = path.join(
+  __dirname,
+  '..',
+  'uploads',
+  'deliveries'
+);
+
 // =====================================================
 // CREATE DIRECTORIES
 // =====================================================
@@ -133,6 +145,7 @@ const billUploadDir = path.join(
   itemUploadDir,
   replacementUploadDir,
   billUploadDir,
+  deliveryPhotoDir,
 ].forEach((directory) => {
   if (!fs.existsSync(directory)) {
     fs.mkdirSync(directory, {
@@ -245,13 +258,17 @@ const billStorage = multer.diskStorage({
 // MULTER CONFIGURATION
 // =====================================================
 
-const createImageUpload = (storage) => {
+// One image per upload, except a bill: a long receipt is taken in
+// up to BILL_MAX_PHOTOS parts
+const BILL_MAX_PHOTOS = 5;
+
+const createImageUpload = (storage, maxFiles = 1) => {
   return multer({
     storage,
     fileFilter: imageFilter,
     limits: {
       fileSize: 8 * 1024 * 1024,
-      files: 1,
+      files: maxFiles,
     },
   });
 };
@@ -263,7 +280,23 @@ const uploadReplacement = createImageUpload(
 );
 
 const uploadBillFile = createImageUpload(
-  billStorage
+  billStorage,
+  BILL_MAX_PHOTOS
+);
+
+const uploadDeliveryPhotoFile = createImageUpload(
+  multer.diskStorage({
+    destination: (req, file, cb) => {
+      cb(null, deliveryPhotoDir);
+    },
+
+    filename: (req, file, cb) => {
+      cb(
+        null,
+        `order-${req.params.orderId}-delivery-${Date.now()}${getSafeExtension(file)}`
+      );
+    },
+  })
 );
 
 // =====================================================
@@ -436,8 +469,21 @@ router.post(
   '/orders/:orderId/bill',
   authMiddleware,
   // Up to 5 photos of one receipt (long receipts in parts)
-  uploadBillFile.array('bill', 5),
+  uploadBillFile.array('bill', BILL_MAX_PHOTOS),
   uploadBillController
+);
+
+// =====================================================
+// DELIVERY PHOTO (the order at the door)
+// POST /api/shopper/orders/:orderId/delivery-photo
+//   photo -> image file
+// =====================================================
+
+router.post(
+  '/orders/:orderId/delivery-photo',
+  authMiddleware,
+  uploadDeliveryPhotoFile.single('photo'),
+  uploadDeliveryPhoto
 );
 
 // =====================================================
@@ -463,7 +509,9 @@ router.use((error, req, res, next) => {
     if (error.code === 'LIMIT_FILE_COUNT') {
       return res.status(400).json({
         success: false,
-        message: 'Only one image can be uploaded at a time.',
+        message: req.path.endsWith('/bill')
+          ? `A receipt can have at most ${BILL_MAX_PHOTOS} photos.`
+          : 'Only one image can be uploaded at a time.',
       });
     }
 

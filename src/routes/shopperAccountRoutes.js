@@ -19,6 +19,9 @@ const {
 const {
   getProfile,
   updateProfile,
+  receivePhoto,
+  uploadProfilePhoto,
+  removeProfilePhoto,
 } = require('../controllers/shopperProfileController');
 
 const {
@@ -82,6 +85,11 @@ router.get('/earnings', requireShopper, getEarnings);
 router.get('/me', requireShopper, getProfile);
 
 router.put('/me', requireShopper, updateProfile);
+
+// Face customers see on the map pin + shopper card
+router.post('/me/photo', requireShopper, receivePhoto, uploadProfilePhoto);
+
+router.delete('/me/photo', requireShopper, removeProfilePhoto);
 
 
 // =====================================================

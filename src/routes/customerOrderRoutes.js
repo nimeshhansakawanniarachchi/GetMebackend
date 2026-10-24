@@ -28,6 +28,12 @@ const {
   getMyRatings,
 } = require('../controllers/customerRatingController');
 
+const {
+  updateDeliveryInstructions,
+  addItemsToOrder,
+  rescheduleOrder,
+} = require('../controllers/customerOrderChangesController');
+
 const router = express.Router();
 
 
@@ -175,6 +181,29 @@ router.post(
   '/orders/:orderId/rating',
   authMiddleware,
   rateOrder
+);
+
+// ==================================================
+// ORDER CHANGES (Instacart order page)
+// ==================================================
+
+router.patch(
+  '/orders/:orderId/delivery-instructions',
+  authMiddleware,
+  updateDeliveryInstructions
+);
+
+// Until shopping begins: confirm false = price only
+router.post(
+  '/orders/:orderId/add-items',
+  authMiddleware,
+  addItemsToOrder
+);
+
+router.post(
+  '/orders/:orderId/reschedule',
+  authMiddleware,
+  rescheduleOrder
 );
 
 router.get(

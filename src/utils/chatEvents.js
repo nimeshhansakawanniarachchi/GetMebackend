@@ -19,6 +19,14 @@ const FALLBACK_TEXT = {
     `${data.replacementName || 'a replacement'}`,
   replacement_approved: (data) =>
     `Replacement for ${data.itemName || 'an item'} approved`,
+  delivery_instructions_updated: (data) =>
+    `Delivery instructions updated: ${
+      data.dropoff === 'meet_at_door' ? 'Meet at the door' : 'Leave at the door'
+    }${data.instructions ? ` · "${data.instructions}"` : ''}`,
+  items_added: (data) =>
+    `The customer added ${data.count === 1 ? '1 item' : `${data.count || 'more'} items`} to the order`,
+  delivery_rescheduled: (data) =>
+    `Delivery moved to ${data.date || 'a new day'}${data.label ? `, ${data.label}` : ''}`,
 };
 
 const postChatEvent = async ({ io, orderId, eventType, data = {}, onceKey = null }) => {

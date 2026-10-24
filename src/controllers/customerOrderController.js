@@ -645,7 +645,8 @@ const getCustomerOrders = async (
           sh.latitude AS shopper_latitude,
           sh.longitude AS shopper_longitude,
           sh.vehicle_type AS shopper_vehicle_type,
-          sh.vehicle_number AS shopper_vehicle_number
+          sh.vehicle_number AS shopper_vehicle_number,
+          sh.profile_image_url AS shopper_image
 
         FROM orders o
 
@@ -1324,6 +1325,10 @@ const getCustomerOrders = async (
 
                       null,
 
+                    // Face on the map pin + shopper card
+                    image:
+                      order.shopper_image || null,
+
                     latitude:
                       order.shopper_latitude !== null
                         ? Number(
@@ -1626,7 +1631,8 @@ const getCustomerOrderById =
             sh.latitude AS shopper_latitude,
             sh.longitude AS shopper_longitude,
             sh.vehicle_type AS shopper_vehicle_type,
-            sh.vehicle_number AS shopper_vehicle_number
+            sh.vehicle_number AS shopper_vehicle_number,
+          sh.profile_image_url AS shopper_image
 
           FROM orders o
 
@@ -2314,6 +2320,10 @@ const getCustomerOrderById =
                 order.shopper_vehicle_number ||
 
                 null,
+
+              // Face on the map pin + shopper card
+              image:
+                order.shopper_image || null,
 
               latitude:
                 order.shopper_latitude !== null

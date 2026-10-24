@@ -639,6 +639,21 @@ app.use(
 );
 
 // ==================================================
+// DELIVERY PHOTOS (shopper's photo at the door)
+// ==================================================
+
+app.use(
+  '/uploads/deliveries',
+  express.static(path.join(srcUploadsPath, 'deliveries'))
+);
+
+// Shopper profile photos (customers see them on the map)
+app.use(
+  '/uploads/shoppers',
+  express.static(path.join(srcUploadsPath, 'shoppers'))
+);
+
+// ==================================================
 // OTHER ROOT UPLOADS
 // ==================================================
 

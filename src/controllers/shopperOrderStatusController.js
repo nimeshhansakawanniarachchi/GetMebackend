@@ -843,6 +843,16 @@ const verifyDeliveryPin = async (req, res) => {
       });
     }
 
+    // "Leave at the door": the photo of where it was left comes first
+    // (POST /orders/:orderId/delivery-photo)
+    if (order.delivery_dropoff === 'leave_at_door' && !order.delivery_photo_url) {
+      return res.status(400).json({
+        success: false,
+        code: 'DELIVERY_PHOTO_REQUIRED',
+        message: 'Take a photo of where you left the order before completing it',
+      });
+    }
+
     if (String(order.delivery_pin || '') !== submittedPin) {
       return res.status(400).json({
         success: false,
