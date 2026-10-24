@@ -39,11 +39,15 @@ const {
 // SOCKET.IO ORDER EVENT HELPER
 // ==================================================
 
+// shopperId (optional): also the shopper's own room - the
+// ShopperApp never joins order:{id}, so e.g. a replacement decision
+// only reached it on its next poll
 const emitOrderSocketEvent = ({
   req,
   event,
   orderId,
   customerId,
+  shopperId = null,
   payload,
 }) => {
   try {
@@ -130,6 +134,15 @@ const emitOrderSocketEvent = ({
       event,
       socketPayload
     );
+
+    if (Number.isInteger(Number(shopperId)) && Number(shopperId) > 0) {
+      io.to(
+        `shopper:${Number(shopperId)}`
+      ).emit(
+        event,
+        socketPayload
+      );
+    }
 
     // Admin panel + shop websites
     broadcastOrderChange(io, numericOrderId, {
@@ -3306,6 +3319,9 @@ const updateReplacementStatus =
         orderId,
 
         customerId,
+
+        // The shopper is waiting on this decision
+        shopperId: updatedReplacement.shopper_id,
 
         payload: {
           item: {

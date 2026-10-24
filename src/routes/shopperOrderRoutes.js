@@ -8,6 +8,47 @@ const fs = require('fs');
 const router = express.Router();
 
 // =====================================================
+// NO DELIVERY PIN FOR SHOPPERS
+// The PIN proves the customer was there: only the customer app
+// may see it. Orders here are often SELECT o.* (delivery_pin) and
+// confirm-arrival used to return it, so strip it from every reply.
+// =====================================================
+
+const PIN_KEYS = ['delivery_pin', 'deliveryPin'];
+
+const withoutPins = (value, depth = 0) => {
+  if (!value || typeof value !== 'object' || depth > 8) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => withoutPins(item, depth + 1));
+  }
+
+  if (value instanceof Date) {
+    return value;
+  }
+
+  const copy = {};
+
+  for (const [key, item] of Object.entries(value)) {
+    if (!PIN_KEYS.includes(key)) {
+      copy[key] = withoutPins(item, depth + 1);
+    }
+  }
+
+  return copy;
+};
+
+router.use((req, res, next) => {
+  const json = res.json.bind(res);
+
+  res.json = (body) => json(withoutPins(body));
+
+  next();
+});
+
+// =====================================================
 // CONTROLLERS
 // =====================================================
 
