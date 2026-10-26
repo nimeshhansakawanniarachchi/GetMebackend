@@ -32,6 +32,15 @@ const DEFAULT_PRICING = {
   // priority + service fee - discounts (tip excluded)
   getmeFeePercent: 15,
   slots: { days: 4, startHour: 8, endHour: 20, slotHours: 2, leadMinutes: 60 },
+  // Customer cancellation (src/orders/cancelPolicy.js). Before a
+  // shopper accepts it is always free. Owner's choice 2026-10-27:
+  //   afterAccept    - free cancel after a shopper accepts, until
+  //                    they start shopping (full refund)
+  //   whileShopping  - card orders may cancel during shopping and
+  //                    pay for the items already bought (+ GetMe
+  //                    fee); off = "contact support"
+  // Out for delivery / arrived: never by the customer.
+  cancellation: { afterAccept: true, whileShopping: false },
 };
 
 // Settings saved before a key existed get its default
@@ -42,6 +51,7 @@ const withDefaults = (stored) => ({
   serviceFee: { ...DEFAULT_PRICING.serviceFee, ...stored?.serviceFee },
   slots: { ...DEFAULT_PRICING.slots, ...stored?.slots },
   vehicleMultipliers: { ...DEFAULT_PRICING.vehicleMultipliers, ...stored?.vehicleMultipliers },
+  cancellation: { ...DEFAULT_PRICING.cancellation, ...stored?.cancellation },
 });
 
 let cache = null;
@@ -110,6 +120,10 @@ const validatePricing = (input) => {
       perUnit: money(input?.serviceFee?.perUnit, 10000),
     },
     getmeFeePercent: money(input?.getmeFeePercent, 100),
+    cancellation: {
+      afterAccept: input?.cancellation?.afterAccept,
+      whileShopping: input?.cancellation?.whileShopping,
+    },
     slots: {
       days: Number(input?.slots?.days),
       startHour: Number(input?.slots?.startHour),
@@ -162,6 +176,13 @@ const validatePricing = (input) => {
     errors.push('Service fee per item must be between LKR 0 and LKR 10,000');
   }
 
+  if (
+    typeof value.cancellation.afterAccept !== 'boolean' ||
+    typeof value.cancellation.whileShopping !== 'boolean'
+  ) {
+    errors.push('Cancellation rules must be on or off');
+  }
+
   if (value.getmeFeePercent === null) {
     errors.push('GetMe fee must be between 0% and 100%');
   }
@@ -180,7 +201,13 @@ const validatePricing = (input) => {
 };
 
 const updatePricingSettings = async (input, adminId) => {
-  const { value, errors } = validatePricing(input);
+  // A form that doesn't send the cancellation rules keeps the
+  // current ones (older admin pages post only the fee fields)
+  const current = await getPricingSettings();
+  const { value, errors } = validatePricing({
+    ...input,
+    cancellation: { ...current.cancellation, ...input?.cancellation },
+  });
 
   if (errors.length) {
     return { errors };

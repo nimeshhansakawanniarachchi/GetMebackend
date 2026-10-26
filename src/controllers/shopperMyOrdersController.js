@@ -4,6 +4,7 @@
 // =====================================================
 
 const pool = require('../config/db');
+const { SHOPPER_PAY_SQL } = require('./shopperPay');
 
 // =====================================================
 // GET SHOPPER ID
@@ -71,6 +72,17 @@ const getMyOrders = async (req, res) => {
         -- merge both responses don't lose the phone (call button)
         c.full_name AS customer_name,
         COALESCE(o.contact_phone, c.mobile) AS customer_phone,
+
+        -- The shopper's pay (settled earnings once recorded), so the
+        -- completed batches list never shows the customer's total.
+        -- Cancelled: only what was recorded (failed delivery fee)
+        (CASE
+          WHEN o.status = 'cancelled' THEN COALESCE(
+            (SELECT se.net_amount FROM shopper_earnings se WHERE se.order_id = o.id AND se.status <> 'void'),
+            0
+          )
+          ELSE ${SHOPPER_PAY_SQL}
+        END)::float AS shopper_earnings,
 
         COALESCE(
           (

@@ -39,7 +39,7 @@ const requireAdmin = async (req, res, next) => {
 
   try {
     const result = await db.query(
-      'SELECT id, full_name, email, is_active FROM admins WHERE id = $1',
+      'SELECT id, full_name, email, is_active, role FROM admins WHERE id = $1',
       [decoded.adminId]
     );
 
@@ -56,6 +56,8 @@ const requireAdmin = async (req, res, next) => {
       adminId: admin.id,
       fullName: admin.full_name,
       email: admin.email,
+      // owner | operations | finance | support (middleware/adminAccess.js)
+      role: admin.role || 'owner',
     };
 
     next();

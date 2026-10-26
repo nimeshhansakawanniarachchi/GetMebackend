@@ -1,4 +1,7 @@
 const pool = require('../../config/db');
+const { recordChange } = require('../../inventory/stockService');
+const { actorOf } = require('../../middleware/shopAccess');
+const { applyOffersToProducts } = require('../../pricing/offers');
 
 const { toProduct } = require('./shopFormat');
 const {
@@ -214,16 +217,115 @@ const lookupBarcode = async (req, res) => {
 // GET /api/shop/products
 // =====================================================
 
+// Whitelisted sorts for the paginated list
+const PRODUCT_SORTS = {
+  newest: 'id DESC',
+  name: 'LOWER(product_name) ASC, id DESC',
+  price_asc: 'price ASC, id DESC',
+  price_desc: 'price DESC, id DESC',
+  stock_asc: 'stock_quantity ASC, id DESC',
+  stock_desc: 'stock_quantity DESC, id DESC',
+  updated: 'updated_at DESC NULLS LAST, id DESC',
+};
+
+// Effective customer price (live shop offers, pricing/offers.js)
+const withOfferPrices = async (rows) => {
+  const priced = await applyOffersToProducts(rows);
+  return rows.map((row, i) => ({
+    ...toProduct(row),
+    customerPrice: Number(priced[i].price),
+    offer: priced[i].offer ? { id: priced[i].offer.id, label: priced[i].offer.label || priced[i].offer.title || 'Offer' } : null,
+  }));
+};
+
+// GET /api/shop/products
+//   no ?page          -> every product (original response)
+//   ?page=&pageSize=&search=&category=&availability=available|hidden|live
+//   &stock=low|out|in&sort=newest|name|price_asc|price_desc|stock_asc|stock_desc|updated
 const getProducts = async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT * FROM products WHERE shop_id = $1 ORDER BY id DESC',
-      [req.shop.shopId]
-    );
+    if (req.query.page === undefined) {
+      const result = await pool.query(
+        'SELECT * FROM products WHERE shop_id = $1 ORDER BY id DESC',
+        [req.shop.shopId]
+      );
+
+      return res.json({
+        success: true,
+        products: result.rows.map(toProduct),
+      });
+    }
+
+    const shopId = req.shop.shopId;
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(100, Math.max(5, Number.parseInt(req.query.pageSize, 10) || 25));
+    const threshold = (await pool.query('SELECT low_stock_threshold FROM shops WHERE id = $1', [shopId])).rows[0]?.low_stock_threshold ?? 5;
+    const where = ['shop_id = $1'];
+    const params = [shopId];
+
+    const search = String(req.query.search || '').trim().slice(0, 80);
+    if (search) {
+      params.push(`%${search.toLowerCase()}%`);
+      const p = `$${params.length}`;
+      where.push(`(LOWER(product_name) LIKE ${p} OR LOWER(COALESCE(brand, '')) LIKE ${p} OR COALESCE(barcode, '') LIKE ${p})`);
+    }
+
+    if (req.query.category) {
+      params.push(String(req.query.category).slice(0, 80));
+      where.push(`category = $${params.length}`);
+    }
+
+    if (req.query.availability === 'available') where.push('is_available = true');
+    if (req.query.availability === 'hidden') where.push('is_available = false');
+    // Customers can see it: switched on and in stock
+    if (req.query.availability === 'live') where.push('is_available = true AND stock_quantity > 0');
+
+    if (req.query.stock === 'out') where.push('stock_quantity <= 0');
+    if (req.query.stock === 'low' || req.query.stock === 'in') {
+      params.push(threshold);
+      where.push(req.query.stock === 'low' ? `stock_quantity BETWEEN 1 AND $${params.length}` : `stock_quantity > $${params.length}`);
+    }
+
+    const whereSql = where.join(' AND ');
+    const order = PRODUCT_SORTS[req.query.sort] || PRODUCT_SORTS.newest;
+
+    const [count, rows, summary, categories] = await Promise.all([
+      pool.query(`SELECT COUNT(*)::int AS total FROM products WHERE ${whereSql}`, params),
+      pool.query(
+        `SELECT * FROM products WHERE ${whereSql} ORDER BY ${order} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, pageSize, (page - 1) * pageSize]
+      ),
+      pool.query(
+        `
+        SELECT
+          COUNT(*)::int AS total,
+          COUNT(*) FILTER (WHERE is_available AND stock_quantity > 0)::int AS live,
+          COUNT(*) FILTER (WHERE NOT is_available)::int AS hidden,
+          COUNT(*) FILTER (WHERE stock_quantity <= 0)::int AS out_of_stock,
+          COUNT(*) FILTER (WHERE stock_quantity BETWEEN 1 AND $2)::int AS low_stock
+        FROM products WHERE shop_id = $1
+        `,
+        [shopId, threshold]
+      ),
+      pool.query(
+        "SELECT category, COUNT(*)::int AS count FROM products WHERE shop_id = $1 AND COALESCE(category, '') <> '' GROUP BY category ORDER BY category",
+        [shopId]
+      ),
+    ]);
+
+    const total = count.rows[0].total;
+    const s = summary.rows[0];
 
     return res.json({
       success: true,
-      products: result.rows.map(toProduct),
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      lowStockThreshold: threshold,
+      summary: { total: s.total, live: s.live, hidden: s.hidden, outOfStock: s.out_of_stock, lowStock: s.low_stock },
+      categories: categories.rows,
+      products: await withOfferPrices(rows.rows),
     });
   } catch (error) {
     console.error('❌ getProducts error:', error.message);
@@ -321,6 +423,15 @@ const addProduct = async (req, res) => {
         ]
       );
 
+      await recordChange(client, {
+        shopId: req.shop.shopId,
+        productId: result.rows[0].id,
+        before: 0,
+        after: value.stockQuantity,
+        reason: 'initial',
+        actor: actorOf(req),
+      });
+
       await client.query('COMMIT');
 
       return res.status(201).json({
@@ -387,6 +498,11 @@ const updateProduct = async (req, res) => {
     try {
       await client.query('BEGIN');
 
+      // Stock before the edit (stock history)
+      const before = (
+        await client.query('SELECT stock_quantity FROM products WHERE id = $1 AND shop_id = $2 FOR UPDATE', [productId, req.shop.shopId])
+      ).rows[0];
+
       // Adding / changing / removing the barcode re-links the catalogue
       const catalog = await linkCatalog(client, req.shop.shopId, value, imageUrl);
 
@@ -427,6 +543,17 @@ const updateProduct = async (req, res) => {
           catalog?.id || null,
         ]
       );
+
+      if (result.rows.length > 0 && before) {
+        await recordChange(client, {
+          shopId: req.shop.shopId,
+          productId,
+          before: before.stock_quantity,
+          after: value.stockQuantity,
+          reason: 'edit',
+          actor: actorOf(req),
+        });
+      }
 
       // Unknown product: don't leave a catalogue row it created behind
       await client.query(result.rows.length === 0 ? 'ROLLBACK' : 'COMMIT');
@@ -488,26 +615,60 @@ const patchProduct = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Stock must be a whole number (0 or more)' });
     }
 
-    const result = await pool.query(
-      `
-      UPDATE products
-      SET
-        is_available = COALESCE($1, is_available),
-        stock_quantity = COALESCE($2, stock_quantity),
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $3 AND shop_id = $4
-      RETURNING *
-      `,
-      [
-        isAvailable ?? null,
-        stockQuantity ?? null,
-        productId,
-        req.shop.shopId,
-      ]
-    );
+    if (stockQuantity !== undefined && stockQuantity > 1000000) {
+      return res.status(400).json({ success: false, message: 'Stock is too large' });
+    }
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Product not found' });
+    const client = await pool.connect();
+    let result;
+
+    try {
+      await client.query('BEGIN');
+
+      const before = (
+        await client.query('SELECT stock_quantity FROM products WHERE id = $1 AND shop_id = $2 FOR UPDATE', [productId, req.shop.shopId])
+      ).rows[0];
+
+      if (!before) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Product not found' });
+      }
+
+      result = await client.query(
+        `
+        UPDATE products
+        SET
+          is_available = COALESCE($1, is_available),
+          stock_quantity = COALESCE($2, stock_quantity),
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $3 AND shop_id = $4
+        RETURNING *
+        `,
+        [
+          isAvailable ?? null,
+          stockQuantity ?? null,
+          productId,
+          req.shop.shopId,
+        ]
+      );
+
+      if (stockQuantity !== undefined) {
+        await recordChange(client, {
+          shopId: req.shop.shopId,
+          productId,
+          before: before.stock_quantity,
+          after: stockQuantity,
+          reason: 'edit',
+          actor: actorOf(req),
+        });
+      }
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
     }
 
     return res.json({ success: true, product: toProduct(result.rows[0]) });

@@ -38,6 +38,15 @@ const {
   deleteOffer,
 } = require('../controllers/shop/shopOfferController');
 
+const staffAccount = require('../controllers/shop/shopStaffController');
+const insights = require('../controllers/shop/shopInsightsController');
+const { allowShopRoles, auditShopChanges } = require('../middleware/shopAccess');
+
+// Shop roles (middleware/shopAccess.js); owner always passes
+const MANAGER = allowShopRoles('manager');
+const STAFF = allowShopRoles('manager', 'staff');
+const OWNER = allowShopRoles();
+
 const shopAuthMiddleware = require('../middleware/shopAuthMiddleware');
 const { broadcastCatalogChange } = require('../realtime');
 const loginRateLimit = require('../middleware/loginRateLimit');
@@ -54,8 +63,11 @@ const router = express.Router();
 const CATALOG_KINDS = [
   [/^\/products/, 'products'],
   [/^\/offers/, 'offers'],
-  [/^\/(profile|open)$/, 'shop'],
+  [/^\/(profile|open|settings)$/, 'shop'],
 ];
+
+// Every successful change is written to shop_activity_log (who + what)
+router.use(auditShopChanges);
 
 router.use((req, res, next) => {
   if (req.method === 'GET') {
@@ -133,37 +145,52 @@ router.post('/register', loginRateLimit, registerShop);
 router.post('/login', loginRateLimit, loginShop);
 
 router.get('/me', shopAuthMiddleware, getShopProfile);
-router.put('/profile', shopAuthMiddleware, uploadShop.single('image'), updateShopProfile);
-router.patch('/open', shopAuthMiddleware, setShopOpen);
+router.put('/profile', shopAuthMiddleware, OWNER, uploadShop.single('image'), updateShopProfile);
+router.patch('/open', shopAuthMiddleware, MANAGER, setShopOpen);
+router.put('/settings', shopAuthMiddleware, MANAGER, staffAccount.updateSettings);
+router.put('/password', shopAuthMiddleware, staffAccount.changePassword);
+
+// Staff accounts (owner) + activity log (owner / manager)
+router.get('/staff', shopAuthMiddleware, OWNER, staffAccount.listStaff);
+router.post('/staff', shopAuthMiddleware, OWNER, staffAccount.createStaff);
+router.patch('/staff/:id', shopAuthMiddleware, OWNER, staffAccount.updateStaff);
+router.get('/activity', shopAuthMiddleware, MANAGER, staffAccount.getActivity);
 
 
 // ==================================================
-// DASHBOARD + ORDERS
+// DASHBOARD + ORDERS + BILLS + NOTIFICATIONS
 // ==================================================
 
-router.get('/dashboard', shopAuthMiddleware, getDashboard);
+router.get('/dashboard', shopAuthMiddleware, insights.getDashboard);
 router.get('/orders', shopAuthMiddleware, getOrders);
 router.get('/orders/:id', shopAuthMiddleware, getOrder);
+router.get('/bills', shopAuthMiddleware, insights.getBills);
+router.get('/notifications', shopAuthMiddleware, insights.getNotifications);
 
 
 // ==================================================
-// PRODUCTS
+// PRODUCTS + STOCK
+// Staff: stock and availability only; managers: everything else
 // ==================================================
 
 router.get('/products', shopAuthMiddleware, getProducts);
-router.get('/products/import/template', shopAuthMiddleware, getImportTemplate);
-router.post('/products/import', shopAuthMiddleware, uploadSheet.single('file'), importProducts);
+router.get('/products/import/template', shopAuthMiddleware, MANAGER, getImportTemplate);
+router.post('/products/import', shopAuthMiddleware, MANAGER, uploadSheet.single('file'), importProducts);
+router.get('/products/export', shopAuthMiddleware, MANAGER, insights.exportProducts);
+router.get('/stock/movements', shopAuthMiddleware, insights.getStockMovements);
 router.get('/products/:id', shopAuthMiddleware, getProduct);
-router.post('/products', shopAuthMiddleware, uploadProduct.single('image'), addProduct);
-router.put('/products/:id', shopAuthMiddleware, uploadProduct.single('image'), updateProduct);
-router.patch('/products/:id', shopAuthMiddleware, patchProduct);
-router.delete('/products/:id', shopAuthMiddleware, deleteProduct);
+router.get('/products/:id/stock-history', shopAuthMiddleware, insights.getProductStockHistory);
+router.post('/products/:id/stock', shopAuthMiddleware, STAFF, insights.adjustProductStock);
+router.post('/products', shopAuthMiddleware, MANAGER, uploadProduct.single('image'), addProduct);
+router.put('/products/:id', shopAuthMiddleware, MANAGER, uploadProduct.single('image'), updateProduct);
+router.patch('/products/:id', shopAuthMiddleware, STAFF, patchProduct);
+router.delete('/products/:id', shopAuthMiddleware, MANAGER, deleteProduct);
 
 // Offers (the shop's own discounts, pricing/offers.js)
 router.get('/offers', shopAuthMiddleware, getOffers);
-router.post('/offers', shopAuthMiddleware, createOffer);
-router.patch('/offers/:id', shopAuthMiddleware, updateOffer);
-router.delete('/offers/:id', shopAuthMiddleware, deleteOffer);
+router.post('/offers', shopAuthMiddleware, MANAGER, createOffer);
+router.patch('/offers/:id', shopAuthMiddleware, MANAGER, updateOffer);
+router.delete('/offers/:id', shopAuthMiddleware, MANAGER, deleteOffer);
 router.get('/catalog/:barcode', shopAuthMiddleware, lookupBarcode);
 
 

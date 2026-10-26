@@ -4,7 +4,23 @@ const { readPage, pageMeta } = require('../../utils/pagination');
 
 const { statusLabel } = require('../../utils/orderStatus');
 
-const { SHOPPER_PAY_SQL, COMMISSION_SQL } = require('../shopperPay');
+const { SHOPPER_PAY_SQL, COMMISSION_SQL, SERVICE_EARNED_SQL } = require('../shopperPay');
+
+// What the customer really paid for an order: card charges less
+// refunds, and the cash the shopper collected at the door (order
+// total less refunded items, settlementController)
+const NET_CARD_PAID_SQL = `(
+  SELECT COALESCE(SUM(cp.amount - cp.refunded_amount), 0)
+  FROM card_payments cp
+  WHERE cp.order_id = o.id AND cp.purpose IN ('order', 'order_extra')
+    AND cp.status IN ('paid', 'partially_refunded', 'refunded')
+)`;
+
+const CASH_COLLECTED_SQL = `(
+  SELECT COALESCE(SUM(se.cash_collected), 0)
+  FROM shopper_earnings se
+  WHERE se.order_id = o.id
+)`;
 
 
 // =====================================================
@@ -35,12 +51,14 @@ const listPayments = async (req, res) => {
       pool.query(
         `
         SELECT
-          COALESCE(SUM(o.total_amount) FILTER (WHERE o.status = 'delivered'), 0)::float AS collected,
-          COALESCE(SUM(o.total_amount) FILTER (WHERE o.status = 'delivered' AND o.payment_method = 'cash'), 0)::float AS cash,
-          COALESCE(SUM(o.total_amount) FILTER (WHERE o.status = 'delivered' AND o.payment_method <> 'cash'), 0)::float AS non_cash,
+          -- Paid by customers on delivered orders (refunds taken off)
+          COALESCE(SUM(${NET_CARD_PAID_SQL} + ${CASH_COLLECTED_SQL}) FILTER (WHERE o.status = 'delivered'), 0)::float AS collected,
+          COALESCE(SUM(${CASH_COLLECTED_SQL}) FILTER (WHERE o.status = 'delivered'), 0)::float AS cash,
+          COALESCE(SUM(${NET_CARD_PAID_SQL}) FILTER (WHERE o.status = 'delivered'), 0)::float AS non_cash,
           -- Shopper's pay (delivery + priority + service fee + tip)
           COALESCE(SUM(${SHOPPER_PAY_SQL}) FILTER (WHERE o.status = 'delivered'), 0)::float AS shopper_pay,
-          COALESCE(SUM(o.service_fee) FILTER (WHERE o.status = 'delivered'), 0)::float AS service_fees,
+          -- Service fees earned (refunded units go back to the customer)
+          COALESCE(SUM(${SERVICE_EARNED_SQL}) FILTER (WHERE o.status = 'delivered'), 0)::float AS service_fees,
           -- GetMe's income: the GetMe fee kept (delivered + cancelled)
           COALESCE(SUM(${COMMISSION_SQL}) FILTER (WHERE o.getme_fee_kept IS NOT NULL), 0)::float AS commission
         FROM orders o

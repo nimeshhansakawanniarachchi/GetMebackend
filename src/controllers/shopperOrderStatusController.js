@@ -201,6 +201,7 @@ const acceptOrder = async (req, res) => {
       SET
         shopper_id = $1,
         status = 'shopper_accepted',
+        accepted_at = NOW(),
         updated_at = NOW()
       WHERE
         id = $2
@@ -652,6 +653,7 @@ const startDelivery = async (req, res) => {
       UPDATE orders
       SET
         status = 'out_for_delivery',
+        out_for_delivery_at = NOW(),
         updated_at = NOW()
       WHERE
         id = $1

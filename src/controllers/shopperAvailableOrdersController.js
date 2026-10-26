@@ -6,6 +6,18 @@ const {
   shopperPayForOrder,
 } = require('./shopperPay');
 const { deliveryFeeForShopper } = require('../pricing/vehicles');
+const { getPricingSettings } = require('../pricing/settings');
+const { offerRoute } = require('../utils/offerRoute');
+const {
+  STORE_MINUTES,
+  MINUTES_PER_UNIT,
+  isHeavyLine,
+  isWeighedLine,
+  unitsOf,
+  deliveryAreaOf,
+  earningsBreakdown,
+  shoppingMinutesFor,
+} = require('../utils/offerDetails');
 
 const {
   VEHICLE_FALLBACK_SECONDS,
@@ -138,6 +150,14 @@ const getAvailableOrders = async (req, res) => {
         o.total_amount,
         o.tip_amount,
         o.estimated_delivery_minutes,
+        o.service_fee_per_unit,
+        o.getme_fee_percent,
+
+        o.delivery_dropoff,
+        o.delivery_instructions,
+        o.scheduled_date::text AS scheduled_date,
+        o.scheduled_start_time,
+        o.scheduled_end_time,
 
         o.distance_km AS customer_distance_km,
 
@@ -152,6 +172,8 @@ const getAvailableOrders = async (req, res) => {
         s.shop_name,
         s.image_url AS shop_image,
         s.status AS shop_status,
+        s.address AS shop_address,
+        s.area AS shop_area,
 
         s.latitude AS shop_latitude,
         s.longitude AS shop_longitude,
@@ -207,9 +229,12 @@ const getAvailableOrders = async (req, res) => {
         AND s.latitude IS NOT NULL
         AND s.longitude IS NOT NULL
 
+      -- Shops in the order the shopper visits them after accepting
+      -- (accept + the shopping flow go by shop id), so the numbered
+      -- stops on the offer match the real trip
       ORDER BY
         o.created_at ASC,
-        shop_distance_km ASC
+        os.shop_id ASC
       `,
       [
         shopperLatitude,
@@ -233,6 +258,71 @@ const getAvailableOrders = async (req, res) => {
 
     const groupedOrders = new Map();
 
+    // Service fee per unit fallback for older orders (no snapshot)
+    const pricingSettings = await getPricingSettings().catch(() => null);
+
+    // Every offered order's items in one query (this endpoint is
+    // polled every few seconds), keyed by order + shop
+    const offeredOrderIds = [...new Set(ordersResult.rows.map((row) => row.id))];
+
+    const itemRows = offeredOrderIds.length
+      ? (
+          await db.query(
+            `
+            SELECT
+              oi.id,
+              oi.order_id,
+              oi.product_id,
+              oi.item_name,
+              oi.quantity,
+              oi.amount,
+              oi.unit,
+              oi.price,
+              oi.custom,
+              oi.details,
+              oi.image,
+              oi.voice_url,
+              oi.shopper_photo_url,
+              oi.shopping_status,
+              oi.found_quantity,
+              oi.found_weight,
+              oi.found_weight_unit,
+              oi.barcode_scanned,
+              oi.completed_at,
+              oi.shop_id,
+              oi.replacement_preference,
+              oi.replacement_product_id,
+              oi.replacement_product_name,
+              oi.replacement_product_image,
+              oi.replacement_product_price,
+              oi.replacement_note,
+              p.size AS product_size,
+              p.category AS product_category
+
+            FROM order_items oi
+            LEFT JOIN products p ON p.id = oi.product_id
+
+            WHERE oi.order_id = ANY($1::int[])
+
+            ORDER BY oi.id ASC
+            `,
+            [offeredOrderIds]
+          )
+        ).rows
+      : [];
+
+    const itemsByOrderShop = new Map();
+
+    itemRows.forEach((item) => {
+      const key = `${item.order_id}-${item.shop_id}`;
+
+      if (!itemsByOrderShop.has(key)) {
+        itemsByOrderShop.set(key, []);
+      }
+
+      itemsByOrderShop.get(key).push(item);
+    });
+
     for (const order of ordersResult.rows) {
       const orderKey = String(order.id);
 
@@ -253,48 +343,9 @@ const getAvailableOrders = async (req, res) => {
       // GET ITEMS FOR THIS ORDER AND SHOP
       // =================================================
 
-      const itemsResult = await db.query(
-        `
-        SELECT
-          id,
-          order_id,
-          product_id,
-          item_name,
-          quantity,
-          amount,
-          unit,
-          price,
-          custom,
-          details,
-          image,
-          voice_url,
-          shopper_photo_url,
-          shopping_status,
-          found_quantity,
-          found_weight,
-          found_weight_unit,
-          barcode_scanned,
-          completed_at,
-          shop_id,
-          replacement_preference,
-          replacement_product_id,
-          replacement_product_name,
-          replacement_product_image,
-          replacement_product_price,
-          replacement_note
+      const shopItemRows = itemsByOrderShop.get(`${order.id}-${order.shop_id}`) || [];
 
-        FROM order_items
-
-        WHERE
-          order_id = $1
-          AND shop_id = $2
-
-        ORDER BY id ASC
-        `,
-        [order.id, order.shop_id]
-      );
-
-      const orderItems = itemsResult.rows.map((item) => ({
+      const orderItems = shopItemRows.map((item) => ({
         id: item.id,
         orderId: item.order_id,
         productId: item.product_id,
@@ -332,6 +383,18 @@ const getAvailableOrders = async (req, res) => {
         replacementProductImage: item.replacement_product_image,
         replacementProductPrice: item.replacement_product_price,
         replacementNote: item.replacement_note,
+
+        // Pack size from the product ("5kg") + handling flags
+        size: item.product_size || null,
+        category: item.product_category || null,
+        heavy: isHeavyLine({
+          quantity: item.quantity,
+          unit: item.unit,
+          custom: item.custom,
+          size: item.product_size,
+          name: item.item_name,
+        }),
+        weighed: isWeighedLine(item),
       }));
 
       if (orderItems.length === 0) {
@@ -349,6 +412,9 @@ const getAvailableOrders = async (req, res) => {
         shopId: order.shop_id,
         shopName: order.shop_name,
         shopImage: order.shop_image || null,
+        shopAddress: order.shop_address || null,
+        address: order.shop_address || null,
+        area: order.shop_area || null,
 
         pickupLatitude:
           order.shop_latitude !== null
@@ -371,6 +437,13 @@ const getAvailableOrders = async (req, res) => {
         customerDistanceKm: Number.isFinite(customerDistanceKm)
           ? customerDistanceKm
           : 0,
+
+        // Stop number in the trip (1 = first shop)
+        sequence: group.shops.length + 1,
+
+        // Different products / service-fee units from this shop
+        uniqueItems: orderItems.length,
+        totalUnits: unitsOf(orderItems),
 
         items: orderItems,
         orderItems,
@@ -523,6 +596,103 @@ const getAvailableOrders = async (req, res) => {
       // For this shopper's vehicle (pricing/vehicles.js)
       const shopperEarnings = shopperPayForOrder(order, shopper.vehicle_type);
 
+      // -------------------------------------------------
+      // OFFER SUMMARY (Batches screen): counts, pay by
+      // category, delivery, handling. The route is added below.
+      // -------------------------------------------------
+
+      const totalUnits = unitsOf(allOrderItems);
+      const heavyItems = allOrderItems
+        .filter((item) => item.heavy)
+        .map((item) => ({
+          name: item.name,
+          quantity: Number(item.quantity) || 1,
+          unit: item.unit || null,
+          size: item.size,
+          shopId: item.shopId,
+        }));
+      const weighedCount = allOrderItems.filter((item) => item.weighed).length;
+      const customCount = allOrderItems.filter((item) => item.custom && !item.productId).length;
+      const isScheduled = !!order.scheduled_date;
+      const isPriority =
+        order.delivery_option === 'fast' || Number(order.fast_delivery_fee || 0) > 0;
+      const isCash = order.payment_method === 'cash';
+
+      const placedAt = new Date(order.created_at).getTime();
+      const deliveryMinutes = Number(order.estimated_delivery_minutes);
+      const deliverBy =
+        !isScheduled && Number.isFinite(placedAt) && deliveryMinutes > 0
+          ? new Date(placedAt + deliveryMinutes * 60 * 1000).toISOString()
+          : null;
+
+      const offer = {
+        // One batch = one customer order today (see hasMultipleOrders)
+        orderCount: 1,
+        shopCount: group.shops.length,
+        uniqueItems: allOrderItems.length,
+        totalUnits,
+
+        earnings: earningsBreakdown(
+          order,
+          shopper.vehicle_type,
+          allOrderItems,
+          pricingSettings
+        ),
+
+        // Paid at the store's till by the shopper and reimbursed by
+        // GetMe (store_payments) - not earnings
+        groceryEstimate: Number(order.items_total || 0),
+
+        payment: {
+          method: order.payment_method || null,
+          // Cash orders: the customer pays the shopper at the door.
+          // The final amount can change after shopping.
+          cashToCollect: isCash ? Number(order.total_amount || 0) : null,
+        },
+
+        delivery: {
+          area: deliveryAreaOf(order.delivery_address),
+          address: order.delivery_address || null,
+          latitude: Number.isFinite(Number(order.delivery_latitude))
+            ? Number(order.delivery_latitude)
+            : null,
+          longitude: Number.isFinite(Number(order.delivery_longitude))
+            ? Number(order.delivery_longitude)
+            : null,
+          dropoff: order.delivery_dropoff || null,
+          instructions: order.delivery_instructions || null,
+          option: order.delivery_option || null,
+          priority: isPriority,
+          scheduled: isScheduled
+            ? {
+                date: order.scheduled_date,
+                start: order.scheduled_start_time || null,
+                end: order.scheduled_end_time || null,
+              }
+            : null,
+          deliverBy,
+        },
+
+        handling: {
+          heavyItems,
+          weighedCount,
+          customCount,
+          flags: [
+            heavyItems.length > 0 && 'heavy',
+            weighedCount > 0 && 'weighed',
+            customCount > 0 && 'custom',
+            isPriority && 'priority',
+            isScheduled && 'scheduled',
+            isCash && 'cash',
+            order.delivery_instructions && 'instructions',
+          ].filter(Boolean),
+        },
+
+        // Filled in after the loop (needs a routing request)
+        route: null,
+        time: null,
+      };
+
       const finalOrder = {
         id: order.id,
         orderId: order.id,
@@ -614,7 +784,8 @@ const getAvailableOrders = async (req, res) => {
         shopNames: group.shopNames,
         shops: group.shops,
 
-        // SHOPPER PAY (delivery fee + fast delivery fee + tip)
+        // SHOPPER PAY (delivery fee for their vehicle + priority fee
+        // + service fee + 100% tip; breakdown in offer.earnings)
         shopperEarnings,
         fastDeliveryFee: Number(order.fast_delivery_fee || 0),
         // Part of shopperEarnings, for "Includes LKR X tip"
@@ -654,10 +825,73 @@ const getAvailableOrders = async (req, res) => {
           : 0,
 
         batchOrders: group.batchOrders,
+
+        // Batches screen summary (see above)
+        offer,
+        uniqueItems: offer.uniqueItems,
+        totalUnits: offer.totalUnits,
+        deliveryArea: offer.delivery.area,
       };
 
       orders.push(finalOrder);
     }
+
+    // ===================================================
+    // ROUTE PER OFFER: shopper -> shops in visiting order ->
+    // customer (road distances / drive times, utils/offerRoute)
+    // ===================================================
+
+    await Promise.all(
+      orders.map(async (finalOrder) => {
+        const { offer } = finalOrder;
+        const customer = offer.delivery;
+        const hasCustomer = customer.latitude !== null && customer.longitude !== null;
+
+        const route = hasCustomer
+          ? await offerRoute({
+              cacheId: `offer-${finalOrder.id}`,
+              stops: [
+                { latitude: shopperLatitude, longitude: shopperLongitude },
+                ...finalOrder.shops.map((shop) => ({
+                  latitude: shop.pickupLatitude,
+                  longitude: shop.pickupLongitude,
+                })),
+                { latitude: customer.latitude, longitude: customer.longitude },
+              ],
+              vehicleType: shopper.vehicle_type,
+            }).catch((error) => {
+              console.log('⚠️ offer route error:', error?.message);
+              return null;
+            })
+          : null;
+
+        if (!route) {
+          return;
+        }
+
+        const shoppingMinutes = shoppingMinutesFor(offer.totalUnits, offer.shopCount);
+
+        offer.route = {
+          ...route,
+          // Leg 0 is shopper -> first shop
+          toFirstShopKm: route.legs[0]?.distanceKm ?? null,
+          toFirstShopMinutes: route.legs[0]?.driveMinutes ?? null,
+          // Shops -> customer (what the delivery fee pays for)
+          tripKm:
+            Math.round(
+              route.legs.slice(1).reduce((sum, leg) => sum + leg.distanceKm, 0) * 10
+            ) / 10,
+        };
+
+        offer.time = {
+          estimated: true,
+          driveMinutes: route.driveMinutes,
+          shoppingMinutes,
+          totalMinutes: route.driveMinutes + shoppingMinutes,
+          basis: `${STORE_MINUTES} min per shop + ${MINUTES_PER_UNIT} min per unit`,
+        };
+      })
+    );
 
     // ===================================================
     // SORT BY SHOP DISTANCE
@@ -712,6 +946,8 @@ const getAvailableOrders = async (req, res) => {
       totalCustomerDistanceKm: order.totalCustomerDistanceKm,
 
       batchOrders: order.batchOrders,
+
+      offer: order.offer,
 
       shoppingList: order.shoppingList,
       orderItems: order.orderItems,

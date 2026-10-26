@@ -7,6 +7,10 @@ const { toShop } = require('./shopFormat');
 
 const { emitToAdmins } = require('../../realtime');
 
+const { permissionsFor, recordShopActivity, ROLE_LABELS } = require('../../middleware/shopAccess');
+
+const { nextChange } = require('../../utils/shopHours');
+
 const { normalizeSriLankanPhone } = require('../../utils/phone');
 
 const {
@@ -23,6 +27,23 @@ const signShopToken = (shop) =>
     process.env.JWT_SECRET,
     { expiresIn: '7d' }
   );
+
+// Staff log in on the same page; their token carries staffId
+const signStaffToken = (staff) =>
+  jwt.sign(
+    { shopId: staff.shop_id, staffId: staff.id },
+    process.env.JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+
+// Who is signed in (owner = the shop's own login)
+const userOf = (req) => ({
+  type: req.shop?.staffId ? 'staff' : 'owner',
+  id: req.shop?.staffId || null,
+  name: req.shop?.actorName || 'Owner',
+  role: req.shop?.role || 'owner',
+  roleLabel: ROLE_LABELS[req.shop?.role || 'owner'],
+});
 
 const parseCoordinate = (value, max) => {
   if (value === undefined || value === null || value === '') {
@@ -149,8 +170,56 @@ const loginShop = async (req, res) => {
 
     const shop = result.rows[0];
 
-    const passwordMatch =
-      shop && (await bcrypt.compare(password, shop.password_hash));
+    // Not a shop's own login: maybe a staff account (phase 27)
+    if (!shop) {
+      const staff = (
+        await pool.query(
+          `
+          SELECT st.*, s.status AS shop_status
+          FROM shop_staff st JOIN shops s ON s.id = st.shop_id
+          WHERE LOWER(st.email) = $1
+          `,
+          [email]
+        )
+      ).rows[0];
+
+      const staffMatch = staff && (await bcrypt.compare(password, staff.password_hash));
+
+      if (!staffMatch || !staff.is_active) {
+        return res.status(401).json({ success: false, message: 'Invalid email or password' });
+      }
+
+      if (staff.shop_status === 'rejected' || staff.shop_status === 'suspended') {
+        return res.status(403).json({
+          success: false,
+          message: staff.shop_status === 'rejected'
+            ? 'This shop\'s application was not approved.'
+            : 'This shop is suspended. Please contact GetMe support.',
+        });
+      }
+
+      await pool.query('UPDATE shop_staff SET last_login_at = NOW() WHERE id = $1', [staff.id]);
+      const staffShop = (await pool.query('SELECT * FROM shops WHERE id = $1', [staff.shop_id])).rows[0];
+
+      recordShopActivity({
+        shopId: staff.shop_id,
+        actor: { type: 'staff', id: staff.id, name: staff.full_name, role: staff.role },
+        action: 'account.login',
+        entityType: 'staff',
+        entityId: staff.id,
+        summary: 'Signed in',
+      });
+
+      return res.json({
+        success: true,
+        token: signStaffToken(staff),
+        shop: toShop(staffShop),
+        user: { type: 'staff', id: staff.id, name: staff.full_name, role: staff.role, roleLabel: ROLE_LABELS[staff.role] },
+        permissions: permissionsFor(staff.role),
+      });
+    }
+
+    const passwordMatch = await bcrypt.compare(password, shop.password_hash);
 
     if (!passwordMatch) {
       return res.status(401).json({
@@ -169,10 +238,21 @@ const loginShop = async (req, res) => {
       });
     }
 
+    recordShopActivity({
+      shopId: shop.id,
+      actor: { type: 'owner', name: 'Owner', role: 'owner' },
+      action: 'account.login',
+      entityType: 'shop',
+      entityId: shop.id,
+      summary: 'Signed in',
+    });
+
     return res.json({
       success: true,
       token: signShopToken(shop),
       shop: toShop(shop),
+      user: { type: 'owner', id: null, name: 'Owner', role: 'owner', roleLabel: ROLE_LABELS.owner },
+      permissions: permissionsFor('owner'),
     });
   } catch (error) {
     console.error('❌ loginShop error:', error.message);
@@ -198,7 +278,15 @@ const getShopProfile = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Shop not found' });
     }
 
-    return res.json({ success: true, shop: toShop(result.rows[0]) });
+    const user = userOf(req);
+
+    return res.json({
+      success: true,
+      shop: toShop(result.rows[0]),
+      // Who is signed in and what they may do (phase 27)
+      user,
+      permissions: permissionsFor(user.role),
+    });
   } catch (error) {
     console.error('❌ getShopProfile error:', error.message);
 
@@ -306,14 +394,22 @@ const setShopOpen = async (req, res) => {
       return res.status(400).json({ success: false, message: 'isOpen must be true or false' });
     }
 
+    const current = (
+      await pool.query('SELECT auto_open, opening_hours FROM shops WHERE id = $1', [req.shop.shopId])
+    ).rows[0];
+
+    const holdUntil = current?.auto_open && current.opening_hours
+      ? nextChange(current.opening_hours, new Date())
+      : null;
+
     const result = await pool.query(
       `
       UPDATE shops
-      SET is_open = $1, updated_at = CURRENT_TIMESTAMP
+      SET is_open = $1, open_override_until = $3, updated_at = CURRENT_TIMESTAMP
       WHERE id = $2
       RETURNING *
       `,
-      [req.body.isOpen, req.shop.shopId]
+      [req.body.isOpen, req.shop.shopId, holdUntil]
     );
 
     emitToAdmins(req.app.get('io'), 'admin:shops-updated', {

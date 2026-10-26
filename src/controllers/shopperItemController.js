@@ -7,6 +7,7 @@ const { broadcastOrderChange } = require('../realtime');
 const { postChatEvent } = require('../utils/chatEvents');
 const { reconcileInBackground } = require('../payments/paymentService');
 const { serviceUnitsSql } = require('../pricing/fees');
+const { deductForOrderItem } = require('../inventory/stockService');
 
 // Barcodes compare without spaces or leading zeros (UPC-A and
 // EAN-13 encode the same code with an extra 0); empty -> null.
@@ -20,6 +21,33 @@ const normalizeBarcode = (value) => {
 // =====================================================
 // GET SHOPPER ID
 // =====================================================
+
+// Item actions only while the order is being worked on. A
+// cancelled (or finished) order answers 409 ORDER_NOT_ACTIVE so the
+// app can stop - nothing is marked, deducted or charged.
+const ACTIVE_ORDER_STATUSES = ['shopper_accepted', 'shopping'];
+
+const rejectInactiveOrder = async (res, orderId) => {
+  const order = (
+    await db.query('SELECT status FROM orders WHERE id = $1', [orderId])
+  ).rows[0];
+
+  if (order && ACTIVE_ORDER_STATUSES.includes(order.status)) {
+    return false;
+  }
+
+  res.status(409).json({
+    success: false,
+    code: 'ORDER_NOT_ACTIVE',
+    status: order?.status || null,
+    message:
+      order?.status === 'cancelled'
+        ? 'This order was cancelled. Stop shopping for it.'
+        : 'This order is not being shopped any more.',
+  });
+
+  return true;
+};
 
 const getShopperId = (req) => {
   return (
@@ -149,6 +177,10 @@ const uploadItemPhoto = async (req, res) => {
     }
 
     const item = itemResult.rows[0];
+
+    if (await rejectInactiveOrder(res, item.order_id)) {
+      return undefined;
+    }
 
     const uploadedPath = req.file.path
       ? req.file.path
@@ -293,6 +325,10 @@ const uploadReplacementPhoto = async (req, res) => {
     }
 
     const item = itemResult.rows[0];
+
+    if (await rejectInactiveOrder(res, item.order_id)) {
+      return undefined;
+    }
 
     // -------------------------------------------------
     // CUSTOMER ASKED FOR A REFUND, NOT A REPLACEMENT
@@ -552,6 +588,10 @@ const verifyItemBarcode = async (req, res) => {
     }
 
     const item = result.rows[0];
+
+    if (await rejectInactiveOrder(res, orderId)) {
+      return undefined;
+    }
     const expectedBarcode = normalizeBarcode(
       target === 'replacement'
         ? item.replacement_barcode
@@ -716,6 +756,10 @@ const updateItemShoppingStatus = async (req, res) => {
     }
 
     const item = itemResult.rows[0];
+
+    if (await rejectInactiveOrder(res, item.order_id)) {
+      return undefined;
+    }
 
     // -------------------------------------------------
     // BARCODE VERIFICATION
@@ -1001,6 +1045,13 @@ const updateItemShoppingStatus = async (req, res) => {
         data: { itemName, replacementName, preApproved: true },
         onceKey: itemKey,
       });
+    }
+
+    // Bought: the shop's listed stock goes down (once per item,
+    // inventory/stockService.js); not awaited so the shopper's
+    // screen never waits on it
+    if (nextStatus === 'found' || nextStatus === 'replaced') {
+      deductForOrderItem(updatedItem.id, io);
     }
 
     // Paid by saved card: the item's price goes back to the card

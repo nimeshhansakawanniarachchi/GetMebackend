@@ -25,6 +25,25 @@ const SHOP_ITEMS_TOTAL_SQL = `
 
 const STATUS_FILTERS = ORDER_STATUS_GROUPS;
 
+// What was bought for one item at GetMe prices: found quantity (or
+// weight x price per kg), the replacement's price when replaced,
+// nothing when refunded; null while still pending
+const WEIGHT_FACTORS = { g: 0.001, ml: 0.001, kg: 1, l: 1 };
+const boughtOf = (item) => {
+  const status = String(item.shopping_status || 'pending').toLowerCase();
+  if (['refunded', 'not_found', 'unavailable'].includes(status)) return { boughtQuantity: 0, boughtTotal: 0 };
+  if (!['found', 'replaced', 'done', 'completed'].includes(status)) return { boughtQuantity: null, boughtTotal: null };
+  const weight = Number(item.found_weight);
+  const unitPrice = item.unit_price != null ? Number(item.unit_price) : null;
+  if (weight > 0 && unitPrice !== null) {
+    const factor = WEIGHT_FACTORS[String(item.found_weight_unit || 'kg').toLowerCase()] ?? 1;
+    return { boughtQuantity: weight, boughtTotal: Math.round(unitPrice * weight * factor * 100) / 100 };
+  }
+  const pack = status === 'replaced' && item.replacement_product_price != null ? Number(item.replacement_product_price) : Number(item.price || 0);
+  const quantity = Number(item.found_quantity) > 0 ? Number(item.found_quantity) : Number(item.quantity || 1);
+  return { boughtQuantity: quantity, boughtTotal: Math.round(pack * quantity * 100) / 100 };
+};
+
 
 // =====================================================
 // DASHBOARD
@@ -141,6 +160,8 @@ const getDashboard = async (req, res) => {
 // =====================================================
 // ORDERS LIST
 // GET /api/shop/orders?status=active|delivery|delivered|cancelled&page=1
+//   &search= (order number or one of this shop's product names)
+//   &from=YYYY-MM-DD&to=YYYY-MM-DD
 // =====================================================
 
 const getOrders = async (req, res) => {
@@ -155,6 +176,28 @@ const getOrders = async (req, res) => {
     if (statuses) {
       params.push(statuses);
       statusClause = `AND o.status = ANY($${params.length})`;
+    }
+
+    const search = String(req.query.search || '').trim().slice(0, 80);
+    if (search) {
+      const orderNumber = Number(search.replace(/^#/, ''));
+      params.push(Number.isInteger(orderNumber) && orderNumber > 0 ? orderNumber : -1);
+      const idParam = `$${params.length}`;
+      params.push(`%${search.toLowerCase()}%`);
+      const like = `$${params.length}`;
+      statusClause += ` AND (o.id = ${idParam} OR EXISTS (
+        SELECT 1 FROM order_items si WHERE si.order_id = o.id AND si.shop_id = os.shop_id AND LOWER(si.item_name) LIKE ${like}
+      ))`;
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(req.query.from || '')) {
+      params.push(req.query.from);
+      statusClause += ` AND o.created_at >= $${params.length}::date`;
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(req.query.to || '')) {
+      params.push(req.query.to);
+      statusClause += ` AND o.created_at < $${params.length}::date + INTERVAL '1 day'`;
     }
 
     const countResult = await pool.query(
@@ -263,7 +306,7 @@ const getOrder = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
-    const [itemsResult, replacementsResult, billResult] = await Promise.all([
+    const [itemsResult, replacementsResult, billResult, paymentResult, otherShopsResult] = await Promise.all([
       pool.query(
         `
         SELECT oi.*, p.image_url AS product_image
@@ -286,7 +329,7 @@ const getOrder = async (req, res) => {
       ),
       pool.query(
         `
-        SELECT bill_url, bill_uploaded_at, shopping_status
+        SELECT bill_url, bill_urls, bill_uploaded_at, shopping_status
         FROM order_shop_bills
         WHERE order_id = $1 AND shop_id = $2
         ORDER BY id DESC
@@ -294,6 +337,16 @@ const getOrder = async (req, res) => {
         `,
         [orderId, shopId]
       ),
+      // What the shopper recorded paying at this shop's till
+      pool.query(
+        `
+        SELECT method, amount_paid, expected_amount, variance, review_status, locked_at, created_at
+        FROM store_payments WHERE order_id = $1 AND shop_id = $2
+        `,
+        [orderId, shopId]
+      ),
+      // How many other shops are on this order (their items stay hidden)
+      pool.query('SELECT COUNT(*)::int AS n FROM order_shops WHERE order_id = $1 AND shop_id <> $2', [orderId, shopId]),
     ]);
 
     const replacementsByItem = new Map();
@@ -326,6 +379,8 @@ const getOrder = async (req, res) => {
       foundWeightUnit: item.found_weight_unit || null,
       shopperPhotoUrl: item.shopper_photo_url || null,
       replacements: replacementsByItem.get(item.id) || [],
+      replacementName: item.replacement_product_name || null,
+      ...boughtOf(item),
     }));
 
     const bill = billResult.rows[0];
@@ -352,11 +407,30 @@ const getOrder = async (req, res) => {
               vehicleNumber: order.vehicle_number,
             }
           : null,
+        otherShops: otherShopsResult.rows[0].n,
         items,
         shopTotal: items.reduce((total, item) => total + item.lineTotal, 0),
+        // Value of what was actually bought at GetMe prices (refunded
+        // items count 0; null while still being shopped)
+        boughtTotal: items.every((item) => item.boughtTotal !== null)
+          ? Math.round(items.reduce((total, item) => total + item.boughtTotal, 0) * 100) / 100
+          : null,
+        tillPayment: paymentResult.rows[0]
+          ? {
+              method: paymentResult.rows[0].method,
+              amountPaid: Number(paymentResult.rows[0].amount_paid),
+              expectedAmount: Number(paymentResult.rows[0].expected_amount),
+              difference: Number(paymentResult.rows[0].variance),
+              billState: !paymentResult.rows[0].locked_at
+                ? 'awaiting_bill'
+                : ['ok', 'approved'].includes(paymentResult.rows[0].review_status) ? 'verified' : 'under_review',
+              recordedAt: paymentResult.rows[0].created_at,
+            }
+          : null,
         bill: bill?.bill_url
           ? {
               url: bill.bill_url,
+              photos: Array.isArray(bill.bill_urls) && bill.bill_urls.length ? bill.bill_urls : [bill.bill_url],
               uploadedAt: bill.bill_uploaded_at,
               status: bill.shopping_status,
             }

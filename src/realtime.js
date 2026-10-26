@@ -20,6 +20,18 @@ const emitToAdmins = (io, event, payload = {}) => {
   }
 };
 
+// Live operations map only (admins with owner / operations /
+// support role join 'admins:live' in bin/www)
+const emitToLiveOps = (io, event, payload = {}) => {
+  try {
+    if (io) {
+      io.to('admins:live').emit(event, payload);
+    }
+  } catch (error) {
+    console.error('❌ emitToLiveOps error:', error.message);
+  }
+};
+
 // Sends an event to every shop that has items in the order
 const emitToOrderShops = async (io, orderId, event, payload = {}) => {
   try {
@@ -73,6 +85,7 @@ const broadcastCatalogChange = (io, shopId, kind = 'products') => {
 
 module.exports = {
   emitToAdmins,
+  emitToLiveOps,
   emitToOrderShops,
   broadcastOrderChange,
   broadcastCatalogChange,

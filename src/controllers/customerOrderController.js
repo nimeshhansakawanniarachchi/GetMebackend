@@ -46,6 +46,14 @@ const {
 const {
   createShopperNotification,
 } = require('./shopperNotificationController');
+const { getPricingSettings } = require('../pricing/settings');
+const {
+  REASONS: CANCEL_REASONS,
+  customerCancelDecision,
+  cancelMoney,
+  readReason: readCancelReason,
+} = require('../orders/cancelPolicy');
+const { refreshOrderSettlement } = require('./settlementController');
 
 // ==================================================
 // SOCKET.IO ORDER EVENT HELPER
@@ -2931,192 +2939,250 @@ const getNearbyShoppersForOrder =
 // CANCEL CUSTOMER ORDER
 // ==================================================
 
-const cancelCustomerOrder =
-  async (
-    req,
-    res
-  ) => {
-    try {
-      const customerId =
-        req.customer.customerId;
+// ==================================================
+// ORDER CANCELLATION (customer)
+// Policy: src/orders/cancelPolicy.js (free until shopping starts;
+// rules in pricing settings). The server decides - the app's
+// button / preview only reflect this.
+//   GET   /api/customer/orders/cancel-policy        rules + reasons
+//   GET   /api/customer/orders/:orderId/cancel-preview
+//   PATCH /api/customer/orders/:orderId/cancel  { reasonCode, reasonText }
+// ==================================================
 
-      const orderId =
-        Number(
-          req.params.orderId
-        );
-
-      if (
-        !Number.isInteger(orderId)
-      ) {
-        return res.status(400).json({
-          success: false,
-
-          message:
-            'Invalid order ID',
-        });
+const toCancellation = (row) =>
+  row
+    ? {
+        cancelledBy: row.cancelled_by,
+        reasonCode: row.reason_code,
+        reason: row.reason_text,
+        fromStatus: row.from_status,
+        cancelledAt: row.created_at,
+        itemsBought: Number(row.items_bought || 0),
+        paymentMethod: row.payment_method,
+        amountHeld: row.amount_held === null ? null : Number(row.amount_held),
+        amountOwed: row.amount_owed === null ? null : Number(row.amount_owed),
       }
+    : null;
 
-      const orderResult =
-        await pool.query(
-          `
-          SELECT
-            id,
-            status,
-            shopper_id
+const getCancelPolicy = async (req, res) => {
+  try {
+    const settings = await getPricingSettings();
 
-          FROM orders
+    return res.json({
+      success: true,
+      policy: {
+        beforeAccept: true,
+        afterAccept: !!settings.cancellation?.afterAccept,
+        whileShopping: !!settings.cancellation?.whileShopping,
+      },
+      reasons: CANCEL_REASONS,
+    });
+  } catch (error) {
+    console.error('❌ CANCEL POLICY ERROR:', error.message);
+    return res.status(500).json({ success: false, message: 'Could not load the cancellation rules' });
+  }
+};
 
-          WHERE
-            id = $1
-            AND customer_id = $2
+const getCancelPreview = async (req, res) => {
+  try {
+    const customerId = req.customer.customerId;
+    const orderId = Number(req.params.orderId);
 
-          LIMIT 1
-          `,
-          [
-            orderId,
-            customerId,
-          ]
-        );
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid order ID' });
+    }
 
-      if (
-        orderResult.rows.length === 0
-      ) {
-        return res.status(404).json({
-          success: false,
+    const order = (
+      await pool.query('SELECT * FROM orders WHERE id = $1 AND customer_id = $2', [orderId, customerId])
+    ).rows[0];
 
-          message:
-            'Order not found',
-        });
-      }
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
 
-      const order =
-        orderResult.rows[0];
+    const settings = await getPricingSettings();
+    const decision = customerCancelDecision(order, settings);
+    const money = decision.allowed ? await cancelMoney(pool, order) : null;
 
-      // Until a shopper accepts (placed, searching, or the search
-      // was stopped)
-      if (
-        order.shopper_id ||
-        !CUSTOMER_CANCELLABLE_STATUSES.includes(order.status)
-      ) {
-        return res.status(400).json({
-          success: false,
+    return res.json({
+      success: true,
+      orderId,
+      status: order.status,
+      ...decision,
+      money,
+      reasons: CANCEL_REASONS,
+    });
+  } catch (error) {
+    console.error('❌ CANCEL PREVIEW ERROR:', error.message);
+    return res.status(500).json({ success: false, message: 'Could not check this order' });
+  }
+};
 
-          // Shopper on it (not finished): say why; otherwise generic
-          message:
-            order.shopper_id && !FINISHED_STATUSES.includes(order.status)
-              ? 'Your shopper has already accepted this order'
-              : 'This order cannot be cancelled now',
-        });
-      }
+const cancelCustomerOrder = async (req, res) => {
+  const customerId = req.customer.customerId;
+  const orderId = Number(req.params.orderId);
 
-      const updateResult =
-        await pool.query(
-          `
-          UPDATE orders
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    return res.status(400).json({ success: false, message: 'Invalid order ID' });
+  }
 
-          SET
-            status = 'cancelled',
-            updated_at = CURRENT_TIMESTAMP
+  const reason = readCancelReason(req.body);
 
-          WHERE
-            id = $1
-            AND customer_id = $2
-            -- Re-checked here: a shopper may accept in between
-            AND status = ANY($3::text[])
-            AND shopper_id IS NULL
+  if (reason.error) {
+    return res.status(400).json({ success: false, code: 'REASON_REQUIRED', message: reason.error });
+  }
 
-          RETURNING *
-          `,
-          [
-            orderId,
-            customerId,
-            CUSTOMER_CANCELLABLE_STATUSES,
-          ]
-        );
+  const settings = await getPricingSettings();
+  const client = await pool.connect();
+  let order = null;
+  let cancelled = null;
+  let cancellation = null;
+  let offerHolders = [];
 
-      if (updateResult.rows.length === 0) {
-        return res.status(409).json({
-          success: false,
+  try {
+    await client.query('BEGIN');
 
-          message:
-            'A shopper just accepted this order, so it can no longer be cancelled',
-        });
-      }
+    // Locked: accept / start shopping / another cancel wait for us
+    order = (
+      await client.query(
+        'SELECT * FROM orders WHERE id = $1 AND customer_id = $2 FOR UPDATE',
+        [orderId, customerId]
+      )
+    ).rows[0];
 
-      // Shoppers holding the offer see it vanish at once
-      notifyOffersWithdrawn(
-        req.app.get('io'),
-        orderId,
-        await getOfferHolders(orderId),
-        'cancelled'
-      );
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
 
-      emitOrderSocketEvent({
-        req,
+    const decision = customerCancelDecision(order, settings);
 
-        event:
-          'order-status-changed',
+    if (!decision.allowed) {
+      await client.query('ROLLBACK');
 
-        orderId,
-
-        customerId,
-
-        payload: {
-          status:
-            'cancelled',
-
-          order: {
-            ...updateResult.rows[0],
-
-            id:
-              Number(
-                updateResult.rows[0].id
-              ),
-
-            orderId:
-              Number(
-                updateResult.rows[0].id
-              ),
-
-            status:
-              'cancelled',
-          },
-        },
-      });
-
-      // Paid by saved card: everything goes back to the card
-      reconcileInBackground(orderId, {
-        io: req.app.get('io'),
-        reason: 'Order cancelled',
-      });
-
-      return res.status(200).json({
-        success: true,
-
-        message:
-          'Order cancelled successfully',
-
-        order:
-          updateResult.rows[0],
-      });
-
-    } catch (error) {
-      console.error(
-        '❌ CANCEL ORDER ERROR:',
-        error
-      );
-
-      return res.status(500).json({
+      return res.status(409).json({
         success: false,
-
-        message:
-          'Failed to cancel order',
-
-        error:
-          error.message,
+        code: decision.code,
+        stage: decision.stage,
+        message: decision.message,
+        // Already cancelled: the app shows the real state
+        order: decision.code === 'ALREADY_CANCELLED' ? order : undefined,
       });
     }
-  };
+
+    const money = await cancelMoney(client, order);
+    offerHolders = await getOfferHolders(orderId, client);
+
+    cancelled = (
+      await client.query(
+        `
+        UPDATE orders
+        SET
+          status = 'cancelled',
+          cancelled_by = 'customer',
+          cancel_reason = $3,
+          cancel_reason_code = $4,
+          cancelled_at = NOW(),
+          cancelled_from_status = $5,
+          delivery_pin = NULL,
+          updated_at = NOW()
+        WHERE id = $1 AND customer_id = $2 AND status = $5
+        RETURNING *
+        `,
+        [orderId, customerId, reason.text, reason.code, order.status]
+      )
+    ).rows[0];
+
+    if (!cancelled) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, code: 'ORDER_CHANGED', message: 'This order just changed. Please check it again.' });
+    }
+
+    // One row per order (unique): the audit record of this cancel
+    cancellation = (
+      await client.query(
+        `
+        INSERT INTO order_cancellations
+          (order_id, cancelled_by, actor_id, reason_code, reason_text, from_status,
+           shopper_id, items_bought, payment_method, amount_held, amount_owed)
+        VALUES ($1, 'customer', $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (order_id) DO NOTHING
+        RETURNING *
+        `,
+        [
+          orderId,
+          customerId,
+          reason.code,
+          reason.text,
+          order.status,
+          order.shopper_id,
+          money.itemsBought,
+          order.payment_method,
+          money.held,
+          money.owedAfterCancel,
+        ]
+      )
+    ).rows[0];
+
+    if (!cancellation) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, code: 'ALREADY_CANCELLED', message: 'This order is already cancelled.' });
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('❌ CANCEL ORDER ERROR:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to cancel order' });
+  } finally {
+    client.release();
+  }
+
+  const io = req.app.get('io');
+
+  // Shoppers still holding the offer see it vanish at once
+  notifyOffersWithdrawn(io, orderId, offerHolders, 'cancelled');
+
+  // Customer app, the assigned shopper (stops the job), admin + shops
+  emitOrderSocketEvent({
+    req,
+    event: 'order-status-changed',
+    orderId,
+    customerId,
+    shopperId: order.shopper_id,
+    payload: {
+      status: 'cancelled',
+      cancelledBy: 'customer',
+      reason: reason.text,
+      order: { ...cancelled, id: Number(cancelled.id), orderId: Number(cancelled.id), status: 'cancelled' },
+    },
+  });
+
+  // Card money back (PayHere confirms each refund; only what isn't
+  // owed), and shopper settlement for any groceries already bought
+  reconcileInBackground(orderId, { io, reason: 'Order cancelled by customer' });
+
+  if (order.shopper_id) {
+    refreshOrderSettlement(orderId, io).catch((error) =>
+      console.error('❌ cancel settlement refresh:', error.message)
+    );
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: 'Order cancelled',
+    order: cancelled,
+    cancellation: toCancellation(cancellation),
+    refund: {
+      // Expected back to the card; done only when PayHere confirms
+      // (see GET /api/payments/customer/orders/:id)
+      due: Number(cancellation.amount_held || 0) - Number(cancellation.amount_owed || 0) > 0.009
+        ? Math.round((Number(cancellation.amount_held) - Number(cancellation.amount_owed)) * 100) / 100
+        : 0,
+      status: Number(cancellation.amount_held || 0) > 0.009 ? 'pending_gateway' : 'none',
+    },
+  });
+};
 
 
 // ==================================================
@@ -3877,6 +3943,8 @@ module.exports = {
   getNearbyVehiclesForOrder,
 
   cancelCustomerOrder,
+  getCancelPreview,
+  getCancelPolicy,
 
   updateReplacementStatus,
 

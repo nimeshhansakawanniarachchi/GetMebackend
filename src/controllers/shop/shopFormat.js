@@ -16,6 +16,11 @@ const toShop = (row) => ({
   imageUrl: row.image_url || null,
   // Store page header color in the customer app; null = automatic
   brandColor: row.brand_color || null,
+  // Opening hours (phase 27, Asia/Colombo) and auto open / close
+  openingHours: row.opening_hours || null,
+  autoOpen: row.auto_open === true,
+  openOverrideUntil: row.open_override_until || null,
+  lowStockThreshold: row.low_stock_threshold != null ? Number(row.low_stock_threshold) : 5,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });

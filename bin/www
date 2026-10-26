@@ -69,6 +69,9 @@ require('../src/controllers/shopperDispatch').startDispatchLoop(io);
 
 require('../src/utils/offerClock').startOfferClock(io);
 
+// Shops with opening hours open / close on schedule (phase 27)
+require('../src/utils/shopHoursClock').startShopHoursClock(io);
+
 /**
  * Socket.IO authentication.
  */
@@ -183,6 +186,16 @@ io.on('connection', function (socket) {
   if (socket.userType === 'admin') {
     socket.join('admins');
     console.log('🏠 Joined admins room');
+
+    // Live map positions only for roles that may open Live
+    // operations (owner / operations / support)
+    db.query('SELECT role FROM admins WHERE id = $1 AND is_active IS TRUE', [socket.admin.adminId])
+      .then((result) => {
+        if (['owner', 'operations', 'support'].includes(result.rows[0]?.role)) {
+          socket.join('admins:live');
+        }
+      })
+      .catch((error) => console.error('❌ admins:live room error:', error.message));
   }
 
   if (socket.userType === 'shop') {

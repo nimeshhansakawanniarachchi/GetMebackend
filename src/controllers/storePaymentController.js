@@ -44,8 +44,10 @@ const METHOD_LABELS = {
 // Bought: found (and confirmed 'done') items and replacements
 const BOUGHT_STATUSES = ['done', 'found', 'replaced', 'completed'];
 
-// Not picked yet: an accepted extra item still on the list
-const UNPICKED_STATUSES = ['', 'pending'];
+// Not picked yet: an accepted extra item still on the list, or one
+// marked not_found but not refunded / replaced (the customer would
+// still pay for it: only 'refunded' items are taken off the total)
+const UNPICKED_STATUSES = ['', 'pending', 'not_found'];
 
 const WEIGHT_FACTORS = { g: 0.001, ml: 0.001, kg: 1, l: 1 };
 
@@ -292,8 +294,8 @@ const saveStorePayment = async (req, res) => {
         code: 'ITEMS_TO_PICK',
         message:
           unpicked === 1
-            ? 'One item is still to pick. Pick it before paying.'
-            : `${unpicked} items are still to pick. Pick them before paying.`,
+            ? 'One item is still to pick (or refund). Finish it before paying.'
+            : `${unpicked} items are still to pick (or refund). Finish them before paying.`,
       });
     }
 

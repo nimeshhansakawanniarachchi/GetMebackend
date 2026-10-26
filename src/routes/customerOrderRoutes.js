@@ -17,6 +17,8 @@ const {
   getNearbyShoppersForOrder,
   getNearbyVehiclesForOrder,
   cancelCustomerOrder,
+  getCancelPreview,
+  getCancelPolicy,
   updateReplacementStatus,
   uploadCustomItemMedia,
    startShopperSearch,
@@ -96,6 +98,12 @@ router.get(
   getCustomerOrders
 );
 
+
+// Cancellation rules + reasons (before /orders/:orderId)
+router.get('/orders/cancel-policy', authMiddleware, getCancelPolicy);
+
+// What cancelling this order would mean (allowed? refund / owed)
+router.get('/orders/:orderId/cancel-preview', authMiddleware, getCancelPreview);
 
 // ==================================================
 // GET SINGLE ORDER

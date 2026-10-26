@@ -33,10 +33,15 @@ const SERVICE_EARNED_SQL = `GREATEST(0,
 const COMMISSION_SQL = 'COALESCE(o.getme_fee_kept, o.getme_fee, 0)';
 
 // What the shopper earns: the settled amount once recorded
-// (adjustments / failed delivery included), else from the order
+// (adjustments / failed delivery included), else from the order.
+// A cancelled order with no settled record earned nothing (the
+// customer cancelled before shopping) - not its planned pay.
 const SHOPPER_PAY_SQL = `COALESCE(
   (SELECT se.net_amount FROM shopper_earnings se WHERE se.order_id = o.id AND se.status <> 'void'),
-  ${DELIVERY_PAY_SQL} + ${SERVICE_EARNED_SQL} + COALESCE(o.tip_amount, 0)
+  CASE
+    WHEN o.status IN ('cancelled', 'shopper_search_cancelled') THEN 0
+    ELSE ${DELIVERY_PAY_SQL} + ${SERVICE_EARNED_SQL} + COALESCE(o.tip_amount, 0)
+  END
 )`;
 
 // The shopper's pay by category for one order

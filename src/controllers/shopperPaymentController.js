@@ -167,6 +167,16 @@ const updateOrderPayment = async (req, res) => {
       });
     }
 
+    // The customer chose how to pay at checkout, and settlement reads
+    // it (card charges, cash due from the shopper), so a shopper can't
+    // change it. Same method = nothing to do.
+    if (String(paymentMethod).trim().toLowerCase() !== String(order.payment_method || '').toLowerCase()) {
+      return res.status(403).json({
+        success: false,
+        message: "The customer's payment method can't be changed",
+      });
+    }
+
     // ================================================
     // UPDATE PAYMENT METHOD
     // ================================================

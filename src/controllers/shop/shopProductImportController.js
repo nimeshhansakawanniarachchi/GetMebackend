@@ -2,6 +2,8 @@ const fs = require('fs/promises');
 const path = require('path');
 
 const pool = require('../../config/db');
+const { recordChange } = require('../../inventory/stockService');
+const { actorOf, recordShopActivity } = require('../../middleware/shopAccess');
 
 const { barcodeKey } = require('../../utils/barcode');
 const { readProductSheet, buildProductTemplate } = require('../../utils/productSheet');
@@ -117,14 +119,15 @@ const planImport = async (shopId, sheetRows, updateExisting) => {
   });
 };
 
-const createProduct = async (client, shopId, value, imageUrl) => {
+const createProduct = async (client, shopId, value, imageUrl, actor) => {
   const catalog = await linkCatalog(client, shopId, value, imageUrl);
 
-  await client.query(
+  const created = await client.query(
     `
     INSERT INTO products
       (shop_id, product_name, category, price, stock_quantity, description, is_available, image_url, unit, barcode, brand, size, catalog_id)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    RETURNING id
     `,
     [
       shopId,
@@ -143,12 +146,19 @@ const createProduct = async (client, shopId, value, imageUrl) => {
       catalog?.id || null,
     ]
   );
+
+  await recordChange(client, {
+    shopId, productId: created.rows[0].id, before: 0, after: value.stockQuantity, reason: 'import', actor,
+  });
 };
 
 // Blank optional cells keep what the product already has. A photo in
 // the sheet replaces the current one; without one, the catalogue photo
 // only fills a missing image.
-const updateProduct = async (client, shopId, productId, value, imageUrl) => {
+const updateProduct = async (client, shopId, productId, value, imageUrl, actor) => {
+  const before = (
+    await client.query('SELECT stock_quantity FROM products WHERE id = $1 AND shop_id = $2 FOR UPDATE', [productId, shopId])
+  ).rows[0];
   const catalog = await linkCatalog(client, shopId, value, imageUrl);
 
   await client.query(
@@ -188,10 +198,16 @@ const updateProduct = async (client, shopId, productId, value, imageUrl) => {
       imageUrl,
     ]
   );
+
+  if (before) {
+    await recordChange(client, {
+      shopId, productId, before: before.stock_quantity, after: value.stockQuantity, reason: 'import', actor,
+    });
+  }
 };
 
 // Each row saves on its own savepoint, so one bad row doesn't undo the rest
-const applyImport = async (shopId, plan) => {
+const applyImport = async (shopId, plan, actor) => {
   const client = await pool.connect();
 
   try {
@@ -206,8 +222,8 @@ const applyImport = async (shopId, plan) => {
       try {
         if (item.image) imageUrl = await savePhoto(item.image);
 
-        if (item.status === 'create') await createProduct(client, shopId, item.value, imageUrl);
-        else await updateProduct(client, shopId, item.productId, item.value, imageUrl);
+        if (item.status === 'create') await createProduct(client, shopId, item.value, imageUrl, actor);
+        else await updateProduct(client, shopId, item.productId, item.value, imageUrl, actor);
 
         await client.query('RELEASE SAVEPOINT import_row');
         item.status = item.status === 'create' ? 'created' : 'updated';
@@ -258,13 +274,25 @@ const importProducts = async (req, res) => {
     const saving = req.body?.mode === 'import';
     const plan = await planImport(req.shop.shopId, sheet.rows, req.body?.updateExisting === 'true');
 
-    if (saving) await applyImport(req.shop.shopId, plan);
+    if (saving) await applyImport(req.shop.shopId, plan, actorOf(req));
 
     const rows = plan.map(({ row, status, message, product }) => ({ row, status, message: message || null, product }));
     const summary = rows.reduce(
       (counts, { status }) => ({ ...counts, [status]: (counts[status] || 0) + 1 }),
       { total: rows.length }
     );
+
+    // A saved import with rows that failed shows up in notifications
+    if (saving && summary.error) {
+      recordShopActivity({
+        shopId: req.shop.shopId,
+        actor: actorOf(req),
+        action: 'product.import_failed',
+        entityType: 'import',
+        summary: `${summary.error} of ${summary.total} rows could not be imported`,
+        details: { file: req.file.originalname, summary, failed: rows.filter((r) => r.status === 'error').slice(0, 20) },
+      });
+    }
 
     return res.json({ success: true, imported: saving, summary, rows });
   } catch (error) {

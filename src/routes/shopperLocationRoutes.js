@@ -3,7 +3,7 @@ const jwt = require('jsonwebtoken');
 
 const db = require('../config/db');
 
-const { emitToAdmins } = require('../realtime');
+const { emitToAdmins, emitToLiveOps } = require('../realtime');
 
 const router = express.Router();
 
@@ -179,12 +179,15 @@ router.post('/location', async (req, res) => {
         UPDATE shoppers
         SET
           latitude = $1,
-          longitude = $2
+          longitude = $2,
+          location_updated_at = NOW()
         WHERE id = $3
         RETURNING
           id,
           latitude,
-          longitude
+          longitude,
+          status,
+          location_updated_at
         `,
         [
           lat,
@@ -212,6 +215,24 @@ router.post('/location', async (req, res) => {
       });
 
     }
+
+
+    // ================================================
+    // LIVE MAP (admin panel): the new position, so the
+    // shopper's pin moves without reloading everything
+    // ================================================
+
+    emitToLiveOps(
+      req.app.get('io'),
+      'admin:shopper-location',
+      {
+        shopperId: Number(result.rows[0].id),
+        latitude: Number(result.rows[0].latitude),
+        longitude: Number(result.rows[0].longitude),
+        status: result.rows[0].status,
+        at: result.rows[0].location_updated_at,
+      }
+    );
 
 
     const shopper =

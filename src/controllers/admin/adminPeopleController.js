@@ -96,7 +96,7 @@ const getCustomer = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid customer ID' });
     }
 
-    const [customerResult, ordersResult, addressesResult] = await Promise.all([
+    const [customerResult, ordersResult, addressesResult, statsResult, paymentsResult, ratingsResult, auditResult] = await Promise.all([
       pool.query(
         'SELECT id, full_name, mobile, email, created_at FROM customers WHERE id = $1',
         [customerId]
@@ -112,7 +112,7 @@ const getCustomer = async (req, res) => {
         FROM orders o
         WHERE o.customer_id = $1
         ORDER BY o.created_at DESC
-        LIMIT 50
+        LIMIT 100
         `,
         [customerId]
       ),
@@ -125,6 +125,55 @@ const getCustomer = async (req, res) => {
         `,
         [customerId]
       ),
+      // Totals over every order (not just the 100 listed). Spent =
+      // what was actually collected: card charges less refunds + cash
+      pool.query(
+        `
+        SELECT
+          COUNT(*)::int AS orders,
+          COUNT(*) FILTER (WHERE o.status = 'delivered')::int AS delivered,
+          COUNT(*) FILTER (WHERE o.status IN ('cancelled', 'shopper_search_cancelled'))::int AS cancelled,
+          COUNT(*) FILTER (WHERE o.status NOT IN ('delivered', 'cancelled', 'shopper_search_cancelled'))::int AS active,
+          COALESCE(SUM(o.tip_amount) FILTER (WHERE o.status = 'delivered'), 0)::float AS tips,
+          MIN(o.created_at) AS first_order_at,
+          MAX(o.created_at) AS last_order_at,
+          (
+            SELECT COALESCE(SUM(cp.amount - cp.refunded_amount), 0)::float FROM card_payments cp
+            WHERE cp.owner_type = 'customer' AND cp.owner_id = $1 AND cp.purpose IN ('order', 'order_extra')
+              AND cp.status IN ('paid', 'partially_refunded', 'refunded')
+          ) AS card_net,
+          (
+            SELECT COALESCE(SUM(r.amount), 0)::float FROM card_payment_refunds r
+            JOIN card_payments cp ON cp.id = r.card_payment_id
+            WHERE cp.owner_type = 'customer' AND cp.owner_id = $1 AND cp.purpose IN ('order', 'order_extra')
+          ) AS refunded,
+          (
+            SELECT COALESCE(SUM(se.cash_collected), 0)::float FROM shopper_earnings se
+            JOIN orders o2 ON o2.id = se.order_id WHERE o2.customer_id = $1
+          ) AS cash
+        FROM orders o WHERE o.customer_id = $1
+        `,
+        [customerId]
+      ),
+      pool.query(
+        `
+        SELECT cp.id, cp.order_id, cp.purpose, cp.amount::float AS amount, cp.status, cp.status_message,
+               cp.card_brand, cp.card_last4, cp.refunded_amount::float AS refunded_amount, cp.gateway,
+               cp.created_at, cp.paid_at
+        FROM card_payments cp
+        WHERE cp.owner_type = 'customer' AND cp.owner_id = $1 AND cp.purpose IN ('order', 'order_extra')
+        ORDER BY cp.created_at DESC LIMIT 100
+        `,
+        [customerId]
+      ),
+      pool.query(
+        'SELECT order_id, shopper_id, rating, comment, created_at FROM order_ratings WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 20',
+        [customerId]
+      ),
+      pool.query(
+        "SELECT created_at, admin_name, action, summary FROM admin_audit_log WHERE entity_type = 'customer' AND entity_id = $1 ORDER BY created_at DESC LIMIT 50",
+        [String(customerId)]
+      ),
     ]);
 
     const customer = customerResult.rows[0];
@@ -134,6 +183,8 @@ const getCustomer = async (req, res) => {
     }
 
     const orders = ordersResult.rows;
+    const stats = statsResult.rows[0];
+    const spent = Math.round((Number(stats.card_net) + Number(stats.cash)) * 100) / 100;
 
     return res.json({
       success: true,
@@ -143,11 +194,49 @@ const getCustomer = async (req, res) => {
         mobile: customer.mobile,
         email: customer.email,
         createdAt: customer.created_at,
-        orderCount: orders.length,
-        totalSpent: orders
-          .filter((order) => order.status === 'delivered')
-          .reduce((total, order) => total + Number(order.total_amount || 0), 0),
+        orderCount: stats.orders,
+        // Collected from the customer (card net of refunds + cash)
+        totalSpent: spent,
       },
+      stats: {
+        orders: stats.orders,
+        delivered: stats.delivered,
+        cancelled: stats.cancelled,
+        active: stats.active,
+        tips: Number(stats.tips),
+        cardPaidNet: Number(stats.card_net),
+        cashPaid: Number(stats.cash),
+        refunded: Number(stats.refunded),
+        totalPaid: spent,
+        firstOrderAt: stats.first_order_at,
+        lastOrderAt: stats.last_order_at,
+      },
+      payments: paymentsResult.rows.map((row) => ({
+        id: row.id,
+        orderId: row.order_id,
+        purpose: row.purpose,
+        amount: row.amount,
+        status: row.status,
+        statusMessage: row.status_message,
+        card: row.card_last4 ? `${row.card_brand || 'Card'} •••• ${row.card_last4}` : null,
+        refundedAmount: row.refunded_amount,
+        testMode: row.gateway === 'test',
+        createdAt: row.created_at,
+        paidAt: row.paid_at,
+      })),
+      ratings: ratingsResult.rows.map((row) => ({
+        orderId: row.order_id,
+        shopperId: row.shopper_id,
+        rating: Number(row.rating),
+        comment: row.comment,
+        createdAt: row.created_at,
+      })),
+      audit: auditResult.rows.map((row) => ({
+        at: row.created_at,
+        adminName: row.admin_name,
+        action: row.action,
+        summary: row.summary,
+      })),
       addresses: addressesResult.rows.map((row) => ({
         id: row.id,
         label: row.label,

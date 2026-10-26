@@ -46,8 +46,11 @@ const CUSTOM_UNITS = ['kg', 'g', 'L', 'ml', 'pcs', 'item', 'pack'];
 
 const MAX_PACKS_PER_LINE = 99;
 
-// Payment methods accepted now (Phase 2 adds the real gateways)
-const PAYMENT_METHODS = ['cash', 'card', 'wallet', 'payhere', 'lankaqr', 'card_on_delivery'];
+// Payment methods that collect the money: a saved card is charged at
+// booking (paymentService.bookingChargeFor), cash is collected at the
+// door and owed by the shopper (settlement cash due). Any other value
+// would deliver the order with nothing charged, so it is refused.
+const PAYMENT_METHODS = ['cash', 'card'];
 
 const issue = (code, message, extra = {}) => ({ code, message, ...extra });
 

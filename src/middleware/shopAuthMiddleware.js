@@ -92,7 +92,28 @@ const shopAuthMiddleware = async (
       });
     }
 
-    req.shop = decoded;
+    // Staff login (phase 27): the account must still be active and
+    // belong to this shop. The shop's own login is the Owner.
+    if (decoded.staffId) {
+      const staff = (
+        await db.query(
+          'SELECT id, full_name, role, is_active FROM shop_staff WHERE id = $1 AND shop_id = $2',
+          [decoded.staffId, decoded.shopId]
+        )
+      ).rows[0];
+
+      if (!staff || !staff.is_active) {
+        return res.status(401).json({
+          success: false,
+          message: 'Your staff account is not active. Ask the shop owner.',
+        });
+      }
+
+      req.shop = { ...decoded, staffId: staff.id, role: staff.role, actorName: staff.full_name };
+    } else {
+      req.shop = { ...decoded, staffId: null, role: 'owner', actorName: 'Owner' };
+    }
+
     req.shopStatus = status;
 
     next();

@@ -545,7 +545,9 @@ const chargeSavedCard = async ({
     }
   }
 
-  row = (
+  // Only while still pending: PayHere's notify may have settled the
+  // charge while we waited, and its answer must not be overwritten
+  const settled = (
     await pool.query(
       `
       UPDATE card_payments
@@ -557,7 +559,7 @@ const chargeSavedCard = async ({
         gateway_fee = CASE WHEN $2::varchar = 'paid' THEN $5::numeric ELSE gateway_fee END,
         abandoned_at = CASE WHEN $2::varchar = 'pending' THEN NOW() ELSE abandoned_at END,
         updated_at = NOW()
-      WHERE id = $1
+      WHERE id = $1 AND status = 'pending'
       RETURNING *
       `,
       [
@@ -569,6 +571,8 @@ const chargeSavedCard = async ({
       ]
     )
   ).rows[0];
+
+  row = settled || (await pool.query('SELECT * FROM card_payments WHERE id = $1', [row.id])).rows[0];
 
   console.log('💳 CARD CHARGE:', {
     ref,
@@ -1189,6 +1193,13 @@ const handlePaymentNotify = async (body, io) => {
     return;
   }
 
+  // 2 = success, 0 = still pending (PayHere notifies again when it
+  // settles; marking it failed would ignore that later success),
+  // anything else (-1 cancelled, -2 failed, -3 chargeback) = failed
+  if (String(body.status_code) === '0') {
+    return;
+  }
+
   const status = String(body.status_code) === '2' ? 'paid' : 'failed';
 
   const updated = (
@@ -1223,6 +1234,23 @@ const handlePaymentNotify = async (body, io) => {
 
   if (status === 'paid' && updated.abandoned_at) {
     await refundWholePayment(updated.id, 'Payment confirmed late; order was not placed', io);
+    return;
+  }
+
+  // Settled after its order was cancelled: give back what the
+  // customer doesn't owe (the cancel's refund ran before this money
+  // was in)
+  if (status === 'paid' && updated.order_id) {
+    const order = (
+      await pool.query('SELECT status FROM orders WHERE id = $1', [updated.order_id])
+    ).rows[0];
+
+    if (order?.status === 'cancelled') {
+      await reconcileOrderPayments(updated.order_id, {
+        io,
+        reason: 'Payment confirmed after the order was cancelled',
+      });
+    }
   }
 };
 
@@ -1269,6 +1297,7 @@ module.exports = {
   declineMessage,
   attachPaymentToOrder,
   refundWholePayment,
+  owedForOrder,
   extraChargeFor,
   bookingChargeFor,
   chargeApprovalNeeded,
