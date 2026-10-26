@@ -5,6 +5,9 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+const itemRequests = require('../controllers/orderItemRequestsController');
+const storePayments = require('../controllers/storePaymentController');
+
 const router = express.Router();
 
 // =====================================================
@@ -526,6 +529,26 @@ router.post(
   uploadDeliveryPhotoFile.single('photo'),
   uploadDeliveryPhoto
 );
+
+// =====================================================
+// EXTRA ITEMS WHILE SHOPPING
+// The customer's requests (accept / reject) and items the shopper
+// adds for the customer to approve
+// =====================================================
+
+router.get('/orders/:orderId/item-requests', authMiddleware, itemRequests.shopperListRequests);
+router.post('/orders/:orderId/item-requests', authMiddleware, itemRequests.shopperProposeItem);
+router.post('/orders/:orderId/item-requests/:requestId/accept', authMiddleware, itemRequests.shopperAcceptRequest);
+router.post('/orders/:orderId/item-requests/:requestId/reject', authMiddleware, itemRequests.shopperRejectRequest);
+router.post('/orders/:orderId/item-requests/:requestId/cancel', authMiddleware, itemRequests.shopperCancelRequest);
+
+// =====================================================
+// STORE PAYMENT (shopper paid the till; GetMe reimburses)
+// One record per order + shop, recorded before the bill photo
+// =====================================================
+
+router.get('/orders/:orderId/store-payment', authMiddleware, storePayments.getStorePayment);
+router.put('/orders/:orderId/store-payment', authMiddleware, storePayments.saveStorePayment);
 
 // =====================================================
 // MULTER AND UPLOAD ERROR HANDLER

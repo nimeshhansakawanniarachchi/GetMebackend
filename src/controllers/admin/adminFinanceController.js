@@ -4,7 +4,7 @@ const { readPage, pageMeta } = require('../../utils/pagination');
 
 const { statusLabel } = require('../../utils/orderStatus');
 
-const { SHOPPER_PAY_SQL } = require('../shopperPay');
+const { SHOPPER_PAY_SQL, COMMISSION_SQL } = require('../shopperPay');
 
 
 // =====================================================
@@ -35,12 +35,15 @@ const listPayments = async (req, res) => {
       pool.query(
         `
         SELECT
-          COALESCE(SUM(total_amount) FILTER (WHERE status = 'delivered'), 0)::float AS collected,
-          COALESCE(SUM(total_amount) FILTER (WHERE status = 'delivered' AND payment_method = 'cash'), 0)::float AS cash,
-          COALESCE(SUM(total_amount) FILTER (WHERE status = 'delivered' AND payment_method <> 'cash'), 0)::float AS non_cash,
-          COALESCE(SUM(${SHOPPER_PAY_SQL.replace(/o\./g, '')}) FILTER (WHERE status = 'delivered'), 0)::float AS shopper_pay,
-          COALESCE(SUM(service_fee) FILTER (WHERE status = 'delivered'), 0)::float AS service_fees
-        FROM orders
+          COALESCE(SUM(o.total_amount) FILTER (WHERE o.status = 'delivered'), 0)::float AS collected,
+          COALESCE(SUM(o.total_amount) FILTER (WHERE o.status = 'delivered' AND o.payment_method = 'cash'), 0)::float AS cash,
+          COALESCE(SUM(o.total_amount) FILTER (WHERE o.status = 'delivered' AND o.payment_method <> 'cash'), 0)::float AS non_cash,
+          -- Shopper's pay (delivery + priority + service fee + tip)
+          COALESCE(SUM(${SHOPPER_PAY_SQL}) FILTER (WHERE o.status = 'delivered'), 0)::float AS shopper_pay,
+          COALESCE(SUM(o.service_fee) FILTER (WHERE o.status = 'delivered'), 0)::float AS service_fees,
+          -- GetMe's income: the GetMe fee kept (delivered + cancelled)
+          COALESCE(SUM(${COMMISSION_SQL}) FILTER (WHERE o.getme_fee_kept IS NOT NULL), 0)::float AS commission
+        FROM orders o
         `
       ),
     ]);
@@ -52,7 +55,8 @@ const listPayments = async (req, res) => {
       SELECT
         o.id, o.status, o.payment_method, o.payment_status, o.payment_id, o.paid_at,
         o.items_total, o.actual_items_total, o.delivery_fee, o.fast_delivery_fee,
-        o.service_fee, o.total_amount, o.reimbursement_status, o.reimbursement_amount,
+        o.service_fee, o.getme_fee, o.getme_fee_percent, o.getme_fee_kept,
+        o.total_amount, o.reimbursement_status, o.reimbursement_amount,
         o.created_at,
         ${SHOPPER_PAY_SQL}::float AS shopper_pay,
         c.full_name AS customer_name,
@@ -82,6 +86,7 @@ const listPayments = async (req, res) => {
         nonCash: summary.non_cash,
         shopperPay: summary.shopper_pay,
         serviceFees: summary.service_fees,
+        commission: summary.commission,
       },
       payments: result.rows.map((row) => ({
         orderId: row.id,
@@ -98,6 +103,9 @@ const listPayments = async (req, res) => {
         deliveryFee: Number(row.delivery_fee || 0),
         fastDeliveryFee: Number(row.fast_delivery_fee || 0),
         serviceFee: Number(row.service_fee || 0),
+        getmeFee: Number(row.getme_fee || 0),
+        getmeFeePercent: Number(row.getme_fee_percent || 0),
+        getmeFeeKept: row.getme_fee_kept != null ? Number(row.getme_fee_kept) : null,
         totalAmount: Number(row.total_amount || 0),
         shopperPay: row.shopper_pay,
         reimbursementStatus: row.reimbursement_status,

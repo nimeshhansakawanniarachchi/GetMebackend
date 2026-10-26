@@ -11,6 +11,8 @@ const {
   sendMessage,
 } = require('../controllers/chatController');
 
+const chatUnread = require('../controllers/chatUnreadController');
+
 const router = express.Router();
 
 
@@ -57,5 +59,20 @@ router.post(
   sendMessage
 );
 
+
+// ==================================================
+// UNREAD COUNTS, READ STATUS, PUSH TOKENS
+// (both apps; the token decides whose)
+// ==================================================
+
+const unreadRoutes = (prefix, auth) => {
+  router.get(`/${prefix}/unread`, auth, chatUnread.getUnread);
+  router.post(`/${prefix}/orders/:orderId/read`, auth, chatUnread.markRead);
+  router.post(`/${prefix}/push-token`, auth, chatUnread.savePushToken);
+  router.delete(`/${prefix}/push-token`, auth, chatUnread.deletePushToken);
+};
+
+unreadRoutes('customer', authMiddleware);
+unreadRoutes('shopper', shopperAuthMiddleware);
 
 module.exports = router;

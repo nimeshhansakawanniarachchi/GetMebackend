@@ -5,6 +5,8 @@ const path = require('path');
 
 const { broadcastOrderChange } = require('../realtime');
 const { postChatEvent } = require('../utils/chatEvents');
+const { reconcileInBackground } = require('../payments/paymentService');
+const { serviceUnitsSql } = require('../pricing/fees');
 
 // Barcodes compare without spaces or leading zeros (UPC-A and
 // EAN-13 encode the same code with an extra 0); empty -> null.
@@ -795,11 +797,19 @@ const updateItemShoppingStatus = async (req, res) => {
           ELSE COALESCE($2, found_quantity)
         END,
 
-        -- Refunded: what the customer gets back for it (the item's
-        -- line total, as shown in the app: price x quantity)
+        -- Refunded: what the customer gets back for it - the line
+        -- total (price x quantity) + its service fee, with the GetMe
+        -- fee on both (rates saved on the order; fees.customerTotals)
         refund_amount = CASE
           WHEN $1::varchar = 'refunded'
-          THEN ROUND(COALESCE(price, 0) * COALESCE(quantity, 1), 2)
+          THEN ROUND(
+            (
+              COALESCE(order_items.price, 0) * COALESCE(order_items.quantity, 1)
+              + (SELECT service_fee_per_unit FROM orders WHERE orders.id = order_items.order_id)
+                * ${serviceUnitsSql('order_items')}
+            ) * (1 + (SELECT getme_fee_percent FROM orders WHERE orders.id = order_items.order_id) / 100),
+            2
+          )
           ELSE refund_amount
         END,
 
@@ -990,6 +1000,14 @@ const updateItemShoppingStatus = async (req, res) => {
         eventType: 'replacement_approved',
         data: { itemName, replacementName, preApproved: true },
         onceKey: itemKey,
+      });
+    }
+
+    // Paid by saved card: the item's price goes back to the card
+    if (nextStatus === 'refunded') {
+      reconcileInBackground(item.order_id, {
+        io,
+        reason: `${itemName || 'Item'} unavailable`,
       });
     }
 

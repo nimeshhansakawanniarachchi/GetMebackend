@@ -10,7 +10,11 @@ const { applyOffersToProducts } = require('./offers');
 const {
   round2,
   deliveryFee,
+  serviceUnits,
+  servicePerUnit,
   serviceFee,
+  getmeFeePercentOf,
+  customerTotals,
   estimateMinutes,
 } = require('./fees');
 
@@ -389,7 +393,9 @@ const buildQuote = async ({
   const vehicleFees = vehicleFeesFor(settings, baseDelivery);
   const delivery = vehicleFees[DEFAULT_VEHICLE];
   const fast = option === 'fast' ? settings.fastFee : 0;
-  const service = serviceFee(settings, itemsTotal);
+  // LKR 50 (settings) per item unit, paid to the shopper
+  const units = serviceUnits(lines);
+  const service = serviceFee(settings, units);
 
   // Invalid codes don't block the quote; the app shows promo.message
   const promo = normalizePromoCode(promoCode)
@@ -412,6 +418,19 @@ const buildQuote = async ({
     Math.min(Number(slot?.discount) || 0, Math.max(0, beforeWindow))
   );
 
+  // Customer total: fee base (no tip) + GetMe fee + tip
+  const getmeFeePercent = getmeFeePercentOf(settings);
+  const totals = customerTotals({
+    itemsTotal,
+    deliveryFee: delivery,
+    fastFee: fast,
+    serviceFee: service,
+    discount,
+    windowDiscount,
+    tip: safeTip,
+    percent: getmeFeePercent,
+  });
+
   const totalPacks = lines.reduce(
     (sum, line) => sum + (Number.isFinite(line.quantity) ? Math.ceil(line.quantity) : 1),
     0
@@ -433,13 +452,18 @@ const buildQuote = async ({
     vehicleFees,
     fastDeliveryFee: fast,
     serviceFee: service,
+    serviceUnits: units,
+    serviceFeePerUnit: servicePerUnit(settings),
+    // GetMe fee (tip excluded) - see totals below
+    getmeFee: totals.getmeFee,
+    getmeFeePercent,
     tipAmount: safeTip,
     tipOptions: TIP_OPTIONS,
     promo,
     discount,
     windowDiscount,
     savings: round2(discount + windowDiscount),
-    totalAmount: round2(Math.max(0, beforeWindow - windowDiscount)),
+    totalAmount: totals.totalAmount,
     distanceKm: farthestKm,
     estimatedMinutes: option === 'standard' ? standardEta : priorityEta,
     // What the checkout shows on each option card

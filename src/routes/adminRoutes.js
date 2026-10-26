@@ -9,6 +9,8 @@ const orders = require('../controllers/admin/adminOrderController');
 const people = require('../controllers/admin/adminPeopleController');
 const catalog = require('../controllers/admin/adminCatalogController');
 const finance = require('../controllers/admin/adminFinanceController');
+const storePayments = require('../controllers/storePaymentController');
+const settlements = require('../controllers/settlementController');
 const settings = require('../controllers/admin/adminSettingsController');
 const promos = require('../controllers/admin/adminPromoController');
 const offers = require('../controllers/admin/adminOfferController');
@@ -63,6 +65,22 @@ router.patch('/offers/:id/pause', offers.setOfferPaused);
 
 // Money + reports
 router.get('/payments', finance.listPayments);
+router.patch('/orders/:id/refund', orders.refundOrder);
+
+// Shoppers' store bills: review differences, record reimbursements
+router.get('/store-payments', storePayments.listStorePayments);
+router.patch('/store-payments/:id/review', storePayments.reviewStorePayment);
+router.patch('/store-payments/:id/reimburse', storePayments.reimburseStorePayment);
+
+// Shopper settlement: balances, payouts / cash deposits, disputes
+router.get('/settlements', settlements.listSettlements);
+router.post('/settlements/shoppers/:shopperId/payouts', settlements.recordPayout);
+router.patch('/settlements/earnings/:orderId/dispute', settlements.disputeEarning);
+router.patch('/settlements/earnings/:orderId/resolve', settlements.resolveEarning);
+router.patch('/settlements/earnings/:orderId/adjust', settlements.adjustEarning);
+
+// Every money movement and accrual (finance_ledger view)
+router.get('/ledger', settlements.getLedger);
 router.get('/reports', finance.getReports);
 
 // Fees & pricing (GetMe earns the service fee; shoppers earn delivery + fast fee)

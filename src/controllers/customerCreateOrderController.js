@@ -14,6 +14,8 @@ const { getPricingSettings } = require('../pricing/settings');
 
 const { broadcastOrderChange } = require('../realtime');
 
+const { getOwnerCard, toPublicCard } = require('../payments/paymentService');
+
 const MAX_ADDRESS_LENGTH = 500;
 const MAX_INSTRUCTIONS_LENGTH = 500;
 
@@ -76,10 +78,13 @@ const getDeliverySlots = async (req, res) => {
 //   scheduledStartTime, scheduledEndTime,
 //   deliveryDropoff ('leave_at_door'|'meet_at_door'), deliveryInstructions,
 //   contactPhone (shopper calls it; empty = account mobile),
-//   paymentMethod, expectedTotal, tipAmount, promoCode, items[{ productId, shopId, quantity,
+//   paymentMethod, cardId (saved card; required for 'card'),
+//   expectedTotal, tipAmount, promoCode, items[{ productId, shopId, quantity,
 //   amount, selectedUnit } | { custom:true, shopId, itemName, quantity,
 //   unit, details, image, voiceUrl }]
 // Every amount is computed here — client prices and fees are ignored.
+// Card: the saved card is only checked and remembered here; it is
+// charged when the customer books a vehicle (start-search).
 // =====================================================
 
 const createOrder = async (req, res) => {
@@ -159,7 +164,43 @@ const createOrder = async (req, res) => {
   const primaryShop =
     quote.shops.find((shop) => shop.id === requestedPrimary) || quote.shops[0];
 
+  const io = req.app.get('io');
+
+  // ================================================
+  // CARD: remember which saved card pays. Nothing is charged
+  // here - the order total is charged when the customer books a
+  // vehicle (start-search, paymentService.bookingChargeFor).
+  // ================================================
+
+  let paymentCardId = null;
+
+  if (paymentMethod === 'card' && quote.totalAmount > 0) {
+    const card = await getOwnerCard(
+      { type: 'customer', id: Number(customerId) },
+      Number(req.body?.cardId) || 0
+    );
+
+    if (!card) {
+      return res.status(400).json({
+        success: false,
+        code: 'CARD_REQUIRED',
+        message: 'Add or choose a card to pay with',
+      });
+    }
+
+    if (toPublicCard(card).expired) {
+      return res.status(400).json({
+        success: false,
+        code: 'CARD_EXPIRED',
+        message: `${toPublicCard(card).label} has expired. Choose another card.`,
+      });
+    }
+
+    paymentCardId = Number(card.id);
+  }
+
   const client = await pool.connect();
+  let committed = false;
 
   try {
     await client.query('BEGIN');
@@ -204,9 +245,11 @@ const createOrder = async (req, res) => {
         tip_amount, promo_code, discount_amount,
         window_discount, delivery_dropoff, delivery_instructions, contact_phone,
         vehicle_fees, offer_savings,
+        payment_card_id,
+        getme_fee, getme_fee_percent, service_fee_per_unit,
         status
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,'pending_shopper_search')
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,'pending_shopper_search')
       RETURNING *
       `,
       [
@@ -239,6 +282,12 @@ const createOrder = async (req, res) => {
         quote.vehicleFees,
         // Shop offers (pricing/offers.js)
         quote.offerSavings || 0,
+        // Saved card charged at booking (null: cash / wallet)
+        paymentCardId,
+        // GetMe fee charged to the customer, and the rates it used
+        quote.getmeFee,
+        quote.getmeFeePercent,
+        quote.serviceFeePerUnit,
       ]
     );
 
@@ -308,6 +357,7 @@ const createOrder = async (req, res) => {
     }
 
     await client.query('COMMIT');
+    committed = true;
 
     // Response keeps the shape the customer app already reads
     const itemsResult = await pool.query(
@@ -342,6 +392,8 @@ const createOrder = async (req, res) => {
       deliveryFee: Number(order.delivery_fee),
       fastDeliveryFee: Number(order.fast_delivery_fee),
       serviceFee: Number(order.service_fee),
+      getmeFee: Number(order.getme_fee),
+      getmeFeePercent: Number(order.getme_fee_percent),
       tipAmount: Number(order.tip_amount),
       promoCode: order.promo_code,
       discountAmount: Number(order.discount_amount),
@@ -366,8 +418,6 @@ const createOrder = async (req, res) => {
       })),
     };
 
-    const io = req.app.get('io');
-
     io?.to(`customer:${customerId}`).emit('order-update', { order: responseOrder });
     broadcastOrderChange(io, order.id, { event: 'order-created', status: order.status });
 
@@ -378,7 +428,9 @@ const createOrder = async (req, res) => {
       quote,
     });
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
+    if (!committed) {
+      await client.query('ROLLBACK').catch(() => {});
+    }
 
     console.error('❌ createOrder error:', error.message);
 

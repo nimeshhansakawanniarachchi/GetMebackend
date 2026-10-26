@@ -34,6 +34,14 @@ const {
   rescheduleOrder,
 } = require('../controllers/customerOrderChangesController');
 
+const {
+  customerListRequests,
+  customerRequestItems,
+  customerApproveItem,
+  customerDeclineItem,
+  customerCancelRequest,
+} = require('../controllers/orderItemRequestsController');
+
 const router = express.Router();
 
 
@@ -205,6 +213,14 @@ router.post(
   authMiddleware,
   rescheduleOrder
 );
+
+// While shopping: extra items go to the shopper as requests;
+// items the shopper adds wait for the customer's approval
+router.get('/orders/:orderId/item-requests', authMiddleware, customerListRequests);
+router.post('/orders/:orderId/item-requests', authMiddleware, customerRequestItems);
+router.post('/orders/:orderId/item-requests/:requestId/approve', authMiddleware, customerApproveItem);
+router.post('/orders/:orderId/item-requests/:requestId/decline', authMiddleware, customerDeclineItem);
+router.post('/orders/:orderId/item-requests/:requestId/cancel', authMiddleware, customerCancelRequest);
 
 router.get(
   '/order-ratings',

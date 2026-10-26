@@ -8,6 +8,8 @@ const {
 const {
   deliveryFee,
   serviceFee,
+  getmeFeePercentOf,
+  customerTotals,
 } = require('../../pricing/fees');
 const { DEFAULT_VEHICLE, vehicleFeesFor } = require('../../pricing/vehicles');
 
@@ -73,13 +75,15 @@ const updatePricing = async (req, res) => {
 // =====================================================
 // PREVIEW (no save)
 // POST /api/admin/settings/pricing/preview
-//   { pricing?, itemsTotal, distanceKm, shopCount, fast }
+//   { pricing?, itemsTotal, itemUnits, distanceKm, shopCount, fast }
 // =====================================================
 
 const previewPricing = async (req, res) => {
   try {
     const pricing = req.body?.pricing || (await getPricingSettings());
     const itemsTotal = Math.max(0, Number(req.body?.itemsTotal) || 0);
+    // Packs / pieces in the basket (service fee is per unit)
+    const itemUnits = Math.max(0, Math.min(500, Number.parseInt(req.body?.itemUnits, 10) || 0));
     const distanceKm = Math.max(0, Number(req.body?.distanceKm) || 0);
     const shopCount = Math.max(1, Math.min(10, Number.parseInt(req.body?.shopCount, 10) || 1));
     const fast = req.body?.fast !== false;
@@ -88,20 +92,32 @@ const previewPricing = async (req, res) => {
     const vehicleFees = vehicleFeesFor(pricing, deliveryFee(pricing, distanceKm, shopCount) ?? 0);
     const delivery = vehicleFees[DEFAULT_VEHICLE];
     const fastFee = fast ? Number(pricing.fastFee || 0) : 0;
-    const service = serviceFee(pricing, itemsTotal);
+    const service = serviceFee(pricing, itemUnits);
+    const getmeFeePercent = getmeFeePercentOf(pricing);
+    const totals = customerTotals({
+      itemsTotal,
+      deliveryFee: delivery,
+      fastFee,
+      serviceFee: service,
+      percent: getmeFeePercent,
+    });
 
     return res.json({
       success: true,
       preview: {
         itemsTotal,
+        itemUnits,
         deliveryFee: delivery,
         vehicleFees,
         fastDeliveryFee: fastFee,
         serviceFee: service,
-        customerTotal: itemsTotal + delivery + fastFee + service,
+        getmeFee: totals.getmeFee,
+        getmeFeePercent,
+        customerTotal: totals.totalAmount,
         shopReceives: itemsTotal,
-        shopperEarns: delivery + fastFee,
-        getmeEarns: service,
+        // Shopper keeps every fee (+ 100% of any tip); GetMe keeps its fee
+        shopperEarns: delivery + fastFee + service,
+        getmeEarns: totals.getmeFee,
         tooFar: distanceKm > Number(pricing.delivery?.maxKm || 0),
       },
     });

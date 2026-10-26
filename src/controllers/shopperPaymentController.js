@@ -2,6 +2,8 @@
 const db = require('../config/db');
 
 const { broadcastOrderChange } = require('../realtime');
+const { pendingRequestsBlock } = require('./orderItemRequestsController');
+const { hasStorePayment, lockStorePaymentForBill } = require('./storePaymentController');
 
 // =====================================================
 // GET SHOPPER ID
@@ -319,6 +321,22 @@ const uploadBill = async (req, res) => {
   }
 
   try {
+    // A shop's checkout waits for its extra item requests
+    const pendingBlock = await pendingRequestsBlock(orderId, shopId);
+
+    if (pendingBlock) {
+      return res.status(409).json(pendingBlock);
+    }
+
+    // The bill belongs to a recorded store payment (amount, method)
+    if (!(await hasStorePayment(orderId, shopId))) {
+      return res.status(409).json({
+        success: false,
+        code: 'PAYMENT_NOT_RECORDED',
+        message: 'Record how much you paid at checkout before uploading the bill',
+      });
+    }
+
     // ================================================
     // VERIFY ORDER OWNERSHIP
     // ================================================
@@ -527,6 +545,9 @@ const uploadBill = async (req, res) => {
 
       bill = insertBillResult.rows[0];
     }
+
+    // The store payment is final now that its bill is in
+    await lockStorePaymentForBill(orderId, shopId, req.app.get('io'));
 
     console.log('BILL SAVED SUCCESSFULLY:', {
       orderId,

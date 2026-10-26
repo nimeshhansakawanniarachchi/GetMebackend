@@ -25,6 +25,16 @@ const FALLBACK_TEXT = {
     }${data.instructions ? ` · "${data.instructions}"` : ''}`,
   items_added: (data) =>
     `The customer added ${data.count === 1 ? '1 item' : `${data.count || 'more'} items`} to the order`,
+  item_requested: (data) =>
+    data.count > 1
+      ? `The customer asked for ${data.count} more items`
+      : `The customer asked for ${data.itemName || 'another item'}`,
+  item_proposed: (data) =>
+    `Your shopper suggested adding ${data.itemName || 'an item'}`,
+  item_request_accepted: (data) =>
+    `${data.itemName || 'An item'} was added to the order`,
+  item_request_rejected: (data) =>
+    `${data.itemName || 'An item'} wasn't added${data.reason ? ` (${data.reason})` : ''}`,
   delivery_rescheduled: (data) =>
     `Delivery moved to ${data.date || 'a new day'}${data.label ? `, ${data.label}` : ''}`,
 };

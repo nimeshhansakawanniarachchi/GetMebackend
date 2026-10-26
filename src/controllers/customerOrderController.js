@@ -25,6 +25,18 @@ const {
 
 const { broadcastOrderChange } = require('../realtime');
 const { postChatEvent } = require('../utils/chatEvents');
+const {
+  extraChargeFor,
+  bookingChargeFor,
+  toPublicPayment,
+  chargeApprovalNeeded,
+  chargeApproved,
+  chargeOrderExtra,
+  syncOrderPaymentColumns,
+  refundWholePayment,
+  reconcileInBackground,
+} = require('../payments/paymentService');
+const { publicBaseUrl } = require('../payments/payhere');
 const { vehicleEtasToShop } = require('../utils/vehicleEta');
 const {
   CUSTOMER_CANCELLABLE_STATUSES,
@@ -368,9 +380,18 @@ const startShopperSearch = async (req, res) => {
         ? requestedVehicle
         : null;
 
-    // Status change + delivery fee for the booked vehicle together
+    // Status change + delivery fee for the booked vehicle together.
+    // Saved card: the first booking charges the whole order (Place
+    // order charges nothing); a later booking with a dearer vehicle
+    // charges the difference. Either way the customer approves the
+    // amount first (402 CARD_CHARGE_REQUIRED, then again with
+    // authorizeCharge) and the card is charged before the search
+    // starts. A decline rolls the booking back, so retrying (same
+    // order, optional cardId for another card) can't double-charge.
     const client = await pool.connect();
     let result;
+    let extraPayment = null;
+    let refusal = null;
 
     try {
       await client.query('BEGIN');
@@ -401,13 +422,83 @@ const startShopperSearch = async (req, res) => {
         };
       }
 
-      await client.query('COMMIT');
+      const booking =
+        result.rows.length > 0
+          ? await bookingChargeFor(client, result.rows[0], req.body?.cardId)
+          : null;
+
+      if (booking?.error) {
+        refusal = () =>
+          res.status(booking.error.status).json({
+            success: false,
+            code: booking.error.code,
+            message: booking.error.message,
+          });
+      } else if (result.rows.length > 0) {
+        const repriced = result.rows[0];
+        const firstCharge = booking.needed;
+        const charge = firstCharge
+          ? booking
+          : await extraChargeFor(client, repriced, repriced.total_amount);
+
+        if (charge.extra > 0 && !chargeApproved(req.body, charge)) {
+          refusal = () =>
+            chargeApprovalNeeded(
+              res,
+              charge,
+              'This vehicle',
+              firstCharge
+                ? `Booking charges Rs ${charge.extra.toFixed(2)} to ${charge.card?.label || 'your card'}. Approve the payment?`
+                : undefined
+            );
+        } else if (charge.extra > 0) {
+          const outcome = await chargeOrderExtra({
+            order: repriced,
+            charge,
+            items: firstCharge
+              ? `GetMe order #${orderId}`
+              : `GetMe order #${orderId} - vehicle change`,
+            purpose: firstCharge ? 'order' : 'order_extra',
+            baseUrl: publicBaseUrl(req),
+            io: req.app.get('io'),
+          });
+
+          if (outcome.error) {
+            refusal = () =>
+              res.status(outcome.error.status).json({
+                success: false,
+                code: outcome.error.code,
+                message: outcome.error.message,
+              });
+          } else {
+            extraPayment = outcome.row;
+            await syncOrderPaymentColumns(client, orderId);
+          }
+        }
+      }
+
+      await client.query(refusal ? 'ROLLBACK' : 'COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
+
+      if (extraPayment) {
+        await refundWholePayment(extraPayment.id, 'Shopper search did not start', req.app.get('io'));
+      }
+
       throw error;
     } finally {
       client.release();
     }
+
+    if (refusal) {
+      return refusal();
+    }
+
+    // A cheaper vehicle than before: the difference goes back
+    reconcileInBackground(orderId, {
+      io: req.app.get('io'),
+      reason: 'Cheaper vehicle chosen',
+    });
 
     if (result.rows.length === 0) {
       const existing = await pool.query(
@@ -472,6 +563,8 @@ const startShopperSearch = async (req, res) => {
       success: true,
       message: 'Shopper search started',
       order: order,
+      // Saved-card charge taken for this booking (null: none needed)
+      payment: extraPayment ? toPublicPayment(extraPayment) : null,
     });
   } catch (error) {
     console.error('START SHOPPER SEARCH ERROR:', error);
@@ -1404,6 +1497,15 @@ const getCustomerOrders = async (
 
               service_fee:
                 serviceFee,
+              getme_fee:
+                Number(order.getme_fee) || 0,
+
+              getme_fee_percent:
+                Number(order.getme_fee_percent) || 0,
+
+              service_fee_per_unit:
+                Number(order.service_fee_per_unit) || 0,
+
 
               distance_km:
                 distanceKm,
@@ -2403,6 +2505,15 @@ const getCustomerOrderById =
 
           service_fee:
             serviceFee,
+          getme_fee:
+            Number(order.getme_fee) || 0,
+
+          getme_fee_percent:
+            Number(order.getme_fee_percent) || 0,
+
+          service_fee_per_unit:
+            Number(order.service_fee_per_unit) || 0,
+
 
           distance_km:
             distanceKm,
@@ -2971,6 +3082,12 @@ const cancelCustomerOrder =
               'cancelled',
           },
         },
+      });
+
+      // Paid by saved card: everything goes back to the card
+      reconcileInBackground(orderId, {
+        io: req.app.get('io'),
+        reason: 'Order cancelled',
       });
 
       return res.status(200).json({
@@ -3673,6 +3790,9 @@ const getNearbyVehiclesForOrder = async (req, res) => {
       SELECT
         o.id, o.status, o.shopper_id, o.promo_code,
         o.delivery_fee, o.vehicle_fees, o.discount_amount, o.total_amount,
+        -- the parts repriceOrder rebuilds the total (and GetMe fee) from
+        o.items_total, o.fast_delivery_fee, o.service_fee, o.window_discount,
+        o.tip_amount, o.getme_fee, o.getme_fee_percent,
         s.latitude AS shop_latitude,
         s.longitude AS shop_longitude
       FROM orders o

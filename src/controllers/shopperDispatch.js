@@ -234,6 +234,7 @@ const alertOfferedShopper = async ({ io, orderId, shopperId }) => {
         o.delivery_fee,
         o.vehicle_fees,
         o.fast_delivery_fee,
+        o.service_fee,
         o.tip_amount,
         (SELECT vehicle_type FROM shoppers WHERE id = $2) AS shopper_vehicle_type,
         STRING_AGG(s.shop_name, ' + ' ORDER BY os.shop_id) AS shop_names

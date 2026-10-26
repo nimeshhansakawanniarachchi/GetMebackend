@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 
 const { buildQuote, DROPOFF_OPTIONS } = require('../pricing/quote');
+const { customerTotals } = require('../pricing/fees');
 const {
   BOOKABLE_VEHICLES,
   DEFAULT_VEHICLE,
@@ -9,6 +10,16 @@ const {
 } = require('../pricing/vehicles');
 const { broadcastOrderChange } = require('../realtime');
 const { postChatEvent } = require('../utils/chatEvents');
+const { publicBaseUrl } = require('../payments/payhere');
+const {
+  extraChargeFor,
+  chargeApprovalNeeded,
+  chargeApproved,
+  chargeOrderExtra,
+  syncOrderPaymentColumns,
+  refundWholePayment,
+  reconcileInBackground,
+} = require('../payments/paymentService');
 
 // =====================================================
 // CUSTOMER ORDER CHANGES
@@ -212,7 +223,12 @@ const editBlockReason = (order) => {
     return 'Shopping has started, so this order can no longer be changed';
   }
 
-  if (PAID_STATUSES.includes(String(order.payment_status || '').toLowerCase())) {
+  // Saved-card orders stay editable: a higher total is charged to
+  // the card once the customer approves it, a lower one refunded
+  if (
+    PAID_STATUSES.includes(String(order.payment_status || '').toLowerCase()) &&
+    order.payment_method !== 'card'
+  ) {
     return 'This order is already paid, so it can no longer be changed';
   }
 
@@ -313,6 +329,7 @@ const bookedVehicleOf = (order) => {
 // moves with that fee. keepWindowDiscount: the slot isn't changing,
 // so its flexible-window discount stays (the quote can't re-validate
 // a slot that is now inside the lead time).
+// The service fee and GetMe fee use the rates saved on the order.
 const totalsFromQuote = (
   order,
   quote,
@@ -320,10 +337,6 @@ const totalsFromQuote = (
 ) => {
   const deliveryFee = round2(
     quote.vehicleFees?.[bookedVehicleOf(order)] ?? quote.deliveryFee
-  );
-
-  const beforeWindow = round2(
-    quote.totalAmount + quote.windowDiscount + (deliveryFee - quote.deliveryFee)
   );
 
   const windowDiscount = keepWindowDiscount
@@ -338,18 +351,36 @@ const totalsFromQuote = (
     )
   );
 
+  const perUnit = Number(order.service_fee_per_unit ?? quote.serviceFeePerUnit);
+  const serviceFee = round2(perUnit * (Number(quote.serviceUnits) || 0));
+  const getmeFeePercent = Number(order.getme_fee_percent ?? quote.getmeFeePercent);
+
+  const totals = customerTotals({
+    itemsTotal: quote.itemsTotal,
+    deliveryFee,
+    fastFee: quote.fastDeliveryFee,
+    serviceFee,
+    discount,
+    windowDiscount,
+    tip: quote.tipAmount,
+    percent: getmeFeePercent,
+  });
+
   return {
     itemsTotal: quote.itemsTotal,
     deliveryFee,
     fastDeliveryFee: quote.fastDeliveryFee,
-    serviceFee: quote.serviceFee,
+    serviceFee,
+    serviceUnits: quote.serviceUnits,
     vehicleFees: quote.vehicleFees,
     offerSavings: quote.offerSavings || 0,
     windowDiscount,
     discount,
     tipAmount: quote.tipAmount,
+    getmeFee: totals.getmeFee,
+    getmeFeePercent,
     freeDelivery,
-    totalAmount: round2(Math.max(0, beforeWindow - windowDiscount - discount)),
+    totalAmount: totals.totalAmount,
   };
 };
 
@@ -367,6 +398,7 @@ const saveTotals = async (client, orderId, totals, extraSql = '', extraValues = 
       window_discount = $7,
       total_amount = $8,
       discount_amount = $9,
+      getme_fee = $11,
       ${extraSql}
       updated_at = NOW()
     WHERE id = $10
@@ -383,6 +415,7 @@ const saveTotals = async (client, orderId, totals, extraSql = '', extraValues = 
       totals.totalAmount,
       totals.discount,
       orderId,
+      totals.getmeFee,
       ...extraValues,
     ]
   );
@@ -412,6 +445,7 @@ const insertOrderLine = (client, orderId, line) =>
       original_unit_price, offer_id, offer_label
     )
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+    RETURNING id
     `,
     [
       orderId,
@@ -483,7 +517,9 @@ const withTransaction = async (work) => {
 // body: { items: [same shape as createOrder items],
 //         confirm: false -> price only (nothing saved),
 //         confirm: true  -> save; expectedTotal (from the preview)
-//                           must still match }
+//                           must still match;
+//         authorizeCharge -> saved-card orders: the extra amount the
+//                           customer approved (preview.cardCharge) }
 // Items must come from a store already in the order.
 // =====================================================
 
@@ -503,6 +539,10 @@ const addItemsToOrder = async (req, res) => {
       message: `Choose between 1 and ${MAX_NEW_ITEMS} items to add`,
     });
   }
+
+  // Extra card charge taken inside the transaction (refunded if
+  // the change is not saved after all)
+  let extraPayment = null;
 
   try {
     const outcome = await withTransaction(async (client) => {
@@ -556,6 +596,8 @@ const addItemsToOrder = async (req, res) => {
         freeDelivery: await hasFreeDeliveryPromo(client, order),
       });
 
+      const charge = await extraChargeFor(client, order, totals.totalAmount);
+
       const preview = {
         currentTotal: round2(order.total_amount),
         addedItemsTotal: round2(
@@ -564,6 +606,9 @@ const addItemsToOrder = async (req, res) => {
         addedCount: addedLines.length,
         hasCustomItems: addedLines.some((line) => line.custom),
         ...totals,
+        // Saved-card orders: charged to this card when confirmed
+        cardCharge: charge.extra,
+        card: charge.cardPaid ? charge.card : null,
       };
 
       if (!confirm) {
@@ -587,11 +632,38 @@ const addItemsToOrder = async (req, res) => {
         };
       }
 
+      if (charge.extra > 0) {
+        if (!chargeApproved(req.body, charge)) {
+          return { reply: (res) => chargeApprovalNeeded(res, charge, 'Adding these items') };
+        }
+
+        const paid = await chargeOrderExtra({
+          order,
+          charge,
+          items: `GetMe order #${orderId} - added items`,
+          baseUrl: publicBaseUrl(req),
+          io: req.app.get('io'),
+        });
+
+        if (paid.error) {
+          return {
+            status: paid.error.status,
+            body: { success: false, code: paid.error.code, message: paid.error.message },
+          };
+        }
+
+        extraPayment = paid.row;
+      }
+
       for (const line of addedLines) {
         await insertOrderLine(client, orderId, line);
       }
 
       const saved = await saveTotals(client, orderId, totals);
+
+      if (charge.cardPaid) {
+        await syncOrderPaymentColumns(client, orderId);
+      }
 
       return {
         commit: true,
@@ -603,9 +675,14 @@ const addItemsToOrder = async (req, res) => {
           preview,
           addedCount: addedLines.length,
           totalAmount: totals.totalAmount,
+          cardCharged: extraPayment ? Number(extraPayment.amount) : 0,
         },
       };
     });
+
+    if (outcome.reply) {
+      return outcome.reply(res);
+    }
 
     if (outcome.commit) {
       const order = outcome.order;
@@ -631,6 +708,10 @@ const addItemsToOrder = async (req, res) => {
   } catch (error) {
     console.error('❌ ADD ITEMS ERROR:', error);
 
+    if (extraPayment) {
+      await refundWholePayment(extraPayment.id, 'Items were not added', req.app.get('io'));
+    }
+
     return res.status(500).json({ success: false, message: 'Could not add the items' });
   }
 };
@@ -642,6 +723,9 @@ const addItemsToOrder = async (req, res) => {
 // Scheduled orders only; the new slot must be bookable now
 // (same slots as GET /delivery-slots). A flexible window's
 // discount follows the new slot.
+// Saved-card orders: a dearer slot answers 402 CARD_CHARGE_REQUIRED
+// until the request carries authorizeCharge; a cheaper one is
+// refunded.
 // =====================================================
 
 const rescheduleOrder = async (req, res) => {
@@ -661,6 +745,8 @@ const rescheduleOrder = async (req, res) => {
   if (!slot.date || !slot.start) {
     return res.status(400).json({ success: false, message: 'Choose a delivery time' });
   }
+
+  let extraPayment = null;
 
   try {
     const outcome = await withTransaction(async (client) => {
@@ -700,13 +786,42 @@ const rescheduleOrder = async (req, res) => {
         freeDelivery: await hasFreeDeliveryPromo(client, order),
       });
 
+      const charge = await extraChargeFor(client, order, totals.totalAmount);
+
+      if (charge.extra > 0) {
+        if (!chargeApproved(req.body, charge)) {
+          return { reply: (res) => chargeApprovalNeeded(res, charge, 'This delivery time') };
+        }
+
+        const paid = await chargeOrderExtra({
+          order,
+          charge,
+          items: `GetMe order #${orderId} - new delivery time`,
+          baseUrl: publicBaseUrl(req),
+          io: req.app.get('io'),
+        });
+
+        if (paid.error) {
+          return {
+            status: paid.error.status,
+            body: { success: false, code: paid.error.code, message: paid.error.message },
+          };
+        }
+
+        extraPayment = paid.row;
+      }
+
       const saved = await saveTotals(
         client,
         orderId,
         totals,
-        'scheduled_date = $11, scheduled_start_time = $12, scheduled_end_time = $13,',
+        'scheduled_date = $12, scheduled_start_time = $13, scheduled_end_time = $14,',
         [quote.slot.date, quote.slot.start, quote.slot.end]
       );
+
+      if (charge.cardPaid) {
+        await syncOrderPaymentColumns(client, orderId);
+      }
 
       return {
         commit: true,
@@ -721,12 +836,20 @@ const rescheduleOrder = async (req, res) => {
           slotLabel: quote.slot.label,
           totalAmount: totals.totalAmount,
           windowDiscount: totals.windowDiscount,
+          cardCharged: extraPayment ? Number(extraPayment.amount) : 0,
         },
       };
     });
 
+    if (outcome.reply) {
+      return outcome.reply(res);
+    }
+
     if (outcome.commit) {
       const order = outcome.order;
+
+      // A cheaper slot: the difference goes back to the card
+      reconcileInBackground(orderId, { io: req.app.get('io'), reason: 'Delivery time changed' });
 
       emitOrderChange(req, order, 'order-rescheduled', {
         scheduledDate: outcome.body.scheduledDate,
@@ -754,6 +877,10 @@ const rescheduleOrder = async (req, res) => {
   } catch (error) {
     console.error('❌ RESCHEDULE ERROR:', error);
 
+    if (extraPayment) {
+      await refundWholePayment(extraPayment.id, 'Delivery time was not changed', req.app.get('io'));
+    }
+
     return res.status(500).json({ success: false, message: 'Could not change the delivery time' });
   }
 };
@@ -762,4 +889,6 @@ module.exports = {
   updateDeliveryInstructions,
   addItemsToOrder,
   rescheduleOrder,
+  // Shared with orderItemRequestsController (extra items while shopping)
+  insertOrderLine,
 };

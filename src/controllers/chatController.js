@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { notifyChatMessage } = require('./chatUnreadController');
 
 // ==================================================
 // GET CHAT MESSAGES
@@ -309,6 +310,9 @@ const sendMessage = async (req, res) => {
         if (order?.shopper_id) {
           io.to(`shopper:${order.shopper_id}`).emit('chat-message', savedMessage);
         }
+
+        // The other person's unread badge + push notification
+        notifyChatMessage(io, { ...order, id: Number(orderId) }, savedMessage);
       }
     } catch (emitError) {
       console.error('❌ CHAT EMIT ERROR:', emitError.message);

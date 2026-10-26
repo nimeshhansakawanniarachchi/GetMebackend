@@ -67,6 +67,11 @@ const getMyOrders = async (req, res) => {
       SELECT
         o.*,
 
+        -- Same customer contact as GET /orders/:id, so screens that
+        -- merge both responses don't lose the phone (call button)
+        c.full_name AS customer_name,
+        COALESCE(o.contact_phone, c.mobile) AS customer_phone,
+
         COALESCE(
           (
             SELECT json_agg(shop_data.shop ORDER BY shop_data.id)
@@ -128,6 +133,9 @@ const getMyOrders = async (req, res) => {
         ) AS total_items
 
       FROM orders o
+
+      LEFT JOIN customers c
+        ON c.id = o.customer_id
 
       WHERE o.shopper_id = $1
 
@@ -233,6 +241,13 @@ const getMyOrders = async (req, res) => {
         shop: shopName,
         shopName,
         shopImage,
+
+        // Customer contact (same fields as the order details API)
+        customerName: order.customer_name || `Customer #${order.customer_id ?? ''}`,
+        customer_name: order.customer_name || `Customer #${order.customer_id ?? ''}`,
+        customerPhone: order.customer_phone || null,
+        customer_phone: order.customer_phone || null,
+        phone: order.customer_phone || null,
 
         shop_id:
           firstShop?.id ??

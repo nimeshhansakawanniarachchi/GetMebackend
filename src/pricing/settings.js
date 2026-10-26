@@ -26,7 +26,11 @@ const DEFAULT_PRICING = {
   // LKR off the order for a flexible window (one hour longer
   // than slotHours); 0 turns flexible windows off
   flexibleWindowDiscount: 100,
-  serviceFee: { percent: 5, min: 50, max: 400 },
+  // LKR per item unit (each pack / piece), paid to the shopper
+  serviceFee: { perUnit: 50 },
+  // GetMe fee charged to the customer: % of groceries + delivery +
+  // priority + service fee - discounts (tip excluded)
+  getmeFeePercent: 15,
   slots: { days: 4, startHour: 8, endHour: 20, slotHours: 2, leadMinutes: 60 },
 };
 
@@ -103,10 +107,9 @@ const validatePricing = (input) => {
     standardExtraMinutes: Number(input?.standardExtraMinutes),
     flexibleWindowDiscount: money(input?.flexibleWindowDiscount, 5000),
     serviceFee: {
-      percent: money(input?.serviceFee?.percent, 100),
-      min: money(input?.serviceFee?.min),
-      max: money(input?.serviceFee?.max),
+      perUnit: money(input?.serviceFee?.perUnit, 10000),
     },
+    getmeFeePercent: money(input?.getmeFeePercent, 100),
     slots: {
       days: Number(input?.slots?.days),
       startHour: Number(input?.slots?.startHour),
@@ -155,8 +158,12 @@ const validatePricing = (input) => {
     errors.push('Tier distances must increase and start above the base distance');
   }
 
-  if ([s.percent, s.min, s.max].includes(null) || s.min > s.max) {
-    errors.push('Service fee: percent 0-100, and minimum must not be above maximum');
+  if (s.perUnit === null) {
+    errors.push('Service fee per item must be between LKR 0 and LKR 10,000');
+  }
+
+  if (value.getmeFeePercent === null) {
+    errors.push('GetMe fee must be between 0% and 100%');
   }
 
   if (

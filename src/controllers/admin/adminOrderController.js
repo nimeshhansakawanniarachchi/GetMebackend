@@ -11,6 +11,8 @@ const { readPage, pageMeta } = require('../../utils/pagination');
 const { SHOPPER_PAY_SQL } = require('../shopperPay');
 
 const { broadcastOrderChange } = require('../../realtime');
+const { reconcileInBackground, refundOrderAmount } = require('../../payments/paymentService');
+const { refreshOrderSettlement } = require('../settlementController');
 
 const {
   getOfferHolders,
@@ -332,9 +334,16 @@ const getOrder = async (req, res) => {
           deliveryFee: Number(order.delivery_fee || 0),
           fastDeliveryFee: Number(order.fast_delivery_fee || 0),
           serviceFee: Number(order.service_fee || 0),
+          serviceFeePerUnit: Number(order.service_fee_per_unit || 0),
           windowDiscount: Number(order.window_discount || 0),
+          discountAmount: Number(order.discount_amount || 0),
+          tipAmount: Number(order.tip_amount || 0),
+          getmeFee: Number(order.getme_fee || 0),
+          getmeFeePercent: Number(order.getme_fee_percent || 0),
+          getmeFeeKept: toNumber(order.getme_fee_kept),
           totalAmount: Number(order.total_amount || 0),
           shopperPay: Number(order.shopper_pay || 0),
+          failedDeliveryAt: order.failed_delivery_at,
         },
         payment: {
           method: order.payment_method,
@@ -365,13 +374,20 @@ const getOrder = async (req, res) => {
 
 // =====================================================
 // CANCEL ORDER
-// PATCH /api/admin/orders/:id/cancel { reason }
+// PATCH /api/admin/orders/:id/cancel { reason, failedDelivery }
+// failedDelivery: the shopper reached the customer (out for delivery
+// / arrived) but couldn't hand over. The customer then pays the
+// groceries bought + delivery fee (+ GetMe fee) and the shopper is
+// paid the delivery fee (paymentService.owedForOrder, settlement).
 // =====================================================
+
+const DELIVERY_STATUSES = ['out_for_delivery', 'arrived'];
 
 const cancelOrder = async (req, res) => {
   try {
     const orderId = Number(req.params.id);
     const reason = String(req.body?.reason || '').trim();
+    const failedDelivery = req.body?.failedDelivery === true;
 
     if (!Number.isInteger(orderId) || orderId <= 0) {
       return res.status(400).json({ success: false, message: 'Invalid order ID' });
@@ -389,17 +405,22 @@ const cancelOrder = async (req, res) => {
         cancelled_by = 'admin',
         cancel_reason = $2,
         delivery_pin = NULL,
+        failed_delivery_at = CASE WHEN $4::boolean THEN NOW() ELSE NULL END,
         updated_at = NOW()
-      WHERE id = $1 AND NOT (status = ANY($3))
+      WHERE id = $1
+        AND NOT (status = ANY($3))
+        AND (NOT $4::boolean OR (status = ANY($5) AND shopper_id IS NOT NULL))
       RETURNING id, customer_id, shopper_id, status
       `,
-      [orderId, reason.slice(0, 500), FINISHED_STATUSES]
+      [orderId, reason.slice(0, 500), FINISHED_STATUSES, failedDelivery, DELIVERY_STATUSES]
     );
 
     if (result.rows.length === 0) {
       return res.status(409).json({
         success: false,
-        message: 'This order is already finished and cannot be cancelled',
+        message: failedDelivery
+          ? 'Only an order out for delivery can be marked as a failed delivery'
+          : 'This order is already finished and cannot be cancelled',
       });
     }
 
@@ -412,6 +433,7 @@ const cancelOrder = async (req, res) => {
       status: 'cancelled',
       cancelledBy: 'admin',
       reason,
+      failedDelivery,
     };
 
     if (io) {
@@ -424,6 +446,17 @@ const cancelOrder = async (req, res) => {
     }
 
     broadcastOrderChange(io, orderId, { event: 'order-status-changed', status: 'cancelled' });
+
+    // Paid by saved card: the card gets back all but what the customer
+    // still owes (groceries bought; + delivery on a failed delivery)
+    reconcileInBackground(orderId, {
+      io,
+      reason: failedDelivery ? 'Delivery failed' : 'Order cancelled by GetMe',
+    });
+
+    // Groceries the shopper already paid for go to reimbursement
+    // review; a failed delivery also pays the shopper's delivery fee
+    refreshOrderSettlement(orderId, io);
 
     // Shoppers still holding the offer see it vanish at once
     notifyOffersWithdrawn(io, orderId, await getOfferHolders(orderId), 'cancelled');
@@ -439,7 +472,10 @@ const cancelOrder = async (req, res) => {
       });
     }
 
-    return res.json({ success: true, message: 'Order cancelled' });
+    return res.json({
+      success: true,
+      message: failedDelivery ? 'Marked as a failed delivery' : 'Order cancelled',
+    });
   } catch (error) {
     console.error('❌ admin cancelOrder error:', error.message);
 
@@ -447,7 +483,44 @@ const cancelOrder = async (req, res) => {
   }
 };
 
+// =====================================================
+// REFUND THE CUSTOMER'S CARD
+// PATCH /api/admin/orders/:id/refund { amount, reason }
+// Disputed deliveries / goodwill; capped at what the card still holds.
+// =====================================================
+
+const refundOrder = async (req, res) => {
+  const orderId = Number(req.params.id);
+  const reason = String(req.body?.reason || '').trim().slice(0, 200);
+
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    return res.status(400).json({ success: false, message: 'Invalid order ID' });
+  }
+
+  if (reason.length < 3) {
+    return res.status(400).json({ success: false, message: 'Enter a reason for the refund' });
+  }
+
+  const outcome = await refundOrderAmount(
+    orderId,
+    req.body?.amount,
+    `GetMe order #${orderId}: ${reason}`,
+    req.app.get('io')
+  );
+
+  if (outcome.error) {
+    return res.status(outcome.error.status).json({ success: false, message: outcome.error.message });
+  }
+
+  return res.json({
+    success: true,
+    message: `Rs ${outcome.refunded.toFixed(2)} refunded to the customer's card`,
+    refunded: outcome.refunded,
+  });
+};
+
 module.exports = {
+  refundOrder,
   listOrders,
   getOrder,
   cancelOrder,

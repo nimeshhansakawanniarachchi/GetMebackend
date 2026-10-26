@@ -12,6 +12,9 @@ const {
 
 const { broadcastOrderChange } = require('../realtime');
 const { postChatEvent } = require('../utils/chatEvents');
+const { reconcileInBackground } = require('../payments/paymentService');
+const { pendingRequestsBlock } = require('./orderItemRequestsController');
+const { recordDeliveredEarnings } = require('./settlementController');
 
 const {
   createShopperNotification,
@@ -274,6 +277,12 @@ const acceptOrder = async (req, res) => {
     await client.query('COMMIT');
 
     notifyOffersWithdrawn(req.app.get('io'), orderId, otherHolders, 'accepted');
+
+    // A cheaper vehicle took it: the fee difference goes back to the card
+    reconcileInBackground(orderId, {
+      io: req.app.get('io'),
+      reason: 'Delivered by a cheaper vehicle',
+    });
 
     const acceptedOrder = updateResult.rows[0];
 
@@ -589,6 +598,13 @@ const startDelivery = async (req, res) => {
         message: 'Order is not ready for delivery',
         status: order.status,
       });
+    }
+
+    // Extra item requests must be answered before leaving the store
+    const pendingBlock = await pendingRequestsBlock(orderId);
+
+    if (pendingBlock) {
+      return res.status(409).json(pendingBlock);
     }
 
     // Check each shop's latest bill using shopping_status.
@@ -907,6 +923,13 @@ const verifyDeliveryPin = async (req, res) => {
       ).toFixed(2)}.`,
       orderId: updatedOrder.id,
     });
+
+    // Settle the card: anything held above the final total goes back
+    reconcileInBackground(updatedOrder.id, { io: req.app.get('io') });
+
+    // The shopper's delivery earnings become payable now (pending
+    // until this point); cash orders also record the cash collected
+    await recordDeliveredEarnings(updatedOrder, req.app.get('io'));
 
     return res.status(200).json({
       success: true,

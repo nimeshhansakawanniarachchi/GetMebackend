@@ -1,4 +1,4 @@
-const { round2 } = require('./fees');
+const { round2, customerTotals } = require('./fees');
 
 // =====================================================
 // DELIVERY FEE PER VEHICLE
@@ -63,6 +63,7 @@ const deliveryFeeForShopper = (order, shopperVehicleType) => {
 
 // Order totals re-priced for a vehicle (pure). A free-delivery
 // promo covers the delivery fee, so its discount moves with it.
+// The GetMe fee follows the new delivery fee (fees.customerTotals).
 const repriceOrder = (order, vehicleType, { freeDelivery = false } = {}) => {
   const oldFee = Number(order?.delivery_fee) || 0;
   const oldDiscount = Number(order?.discount_amount) || 0;
@@ -70,16 +71,33 @@ const repriceOrder = (order, vehicleType, { freeDelivery = false } = {}) => {
   const fee = orderFeeFor(order, vehicleType);
 
   if (fee === null) {
-    return { deliveryFee: oldFee, discountAmount: oldDiscount, totalAmount: oldTotal };
+    return {
+      deliveryFee: oldFee,
+      discountAmount: oldDiscount,
+      getmeFee: Number(order?.getme_fee) || 0,
+      totalAmount: oldTotal,
+    };
   }
 
   const change = fee - oldFee;
-  const discountChange = freeDelivery ? change : 0;
+  const discountAmount = round2(oldDiscount + (freeDelivery ? change : 0));
+
+  const totals = customerTotals({
+    itemsTotal: order?.items_total,
+    deliveryFee: fee,
+    fastFee: order?.fast_delivery_fee,
+    serviceFee: order?.service_fee,
+    discount: discountAmount,
+    windowDiscount: order?.window_discount,
+    tip: order?.tip_amount,
+    percent: order?.getme_fee_percent ?? 15,
+  });
 
   return {
     deliveryFee: round2(fee),
-    discountAmount: round2(oldDiscount + discountChange),
-    totalAmount: round2(Math.max(0, oldTotal + change - discountChange)),
+    discountAmount,
+    getmeFee: totals.getmeFee,
+    totalAmount: totals.totalAmount,
   };
 };
 
@@ -113,11 +131,12 @@ const applyVehiclePrice = async (client, order, vehicleType) => {
       delivery_fee = $2,
       discount_amount = $3,
       total_amount = $4,
+      getme_fee = $5,
       updated_at = NOW()
     WHERE id = $1
     RETURNING *
     `,
-    [order.id, price.deliveryFee, price.discountAmount, price.totalAmount]
+    [order.id, price.deliveryFee, price.discountAmount, price.totalAmount, price.getmeFee]
   );
 
   if (freeDelivery) {
