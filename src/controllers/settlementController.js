@@ -320,6 +320,8 @@ const refreshOrderSettlement = async (orderId, io) => {
 
     for (const payment of payments) {
       if (payment.reimbursement_status === 'reimbursed') continue;
+      // GetMe's own money (company card, phase 38): never owed to the shopper
+      if (payment.funded_by === 'getme') continue;
 
       // Once confirmed (or released by an admin) it stays so: a later
       // goodwill refund to the customer doesn't take the shopper's
@@ -369,6 +371,9 @@ const refreshOrderSettlement = async (orderId, io) => {
   } finally {
     client.release();
   }
+
+  // Spending limits / payment checks follow the order (phase 38)
+  await require('../groceryPayments/groceryPayments').syncOrder(id);
 
   if (changed && shopperId) {
     announce(io, shopperId, { orderId: id });

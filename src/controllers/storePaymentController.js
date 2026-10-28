@@ -3,7 +3,6 @@ const pool = require('../config/db');
 const { broadcastOrderChange, emitToAdmins } = require('../realtime');
 const { readPage, pageMeta } = require('../utils/pagination');
 const { createShopperNotification } = require('./shopperNotificationController');
-const { pendingRequestsBlock } = require('./orderItemRequestsController');
 
 // =====================================================
 // STORE PAYMENTS: the shopper pays the supermarket, GetMe reimburses
@@ -37,7 +36,7 @@ const { pendingRequestsBlock } = require('./orderItemRequestsController');
 // reimbursement_* follow these records (admin Payments page).
 // =====================================================
 
-const METHODS = ['cash', 'card', 'lankaqr'];
+const METHODS = ['cash', 'card', 'phone_wallet', 'lankaqr'];
 
 // settlementController requires this file; load it when first used
 const settlement = () => require('./settlementController');
@@ -48,8 +47,10 @@ const APPROVED_REVIEWS = ['ok', 'approved'];
 
 const METHOD_LABELS = {
   cash: 'Cash',
-  card: 'Card / phone wallet',
+  card: 'Own bank card',
+  phone_wallet: 'Phone tap (Google Wallet)',
   lankaqr: 'LANKAQR',
+  getme_card: 'GetMe company card',
 };
 
 // Bought: found (and confirmed 'done') items and replacements
@@ -134,6 +135,9 @@ const toPublic = (row) =>
         shopperId: Number(row.shopper_id),
         method: row.method,
         methodLabel: METHOD_LABELS[row.method] || row.method,
+        // shopper: own money, reimbursed; getme: GetMe card, never owed (phase 38)
+        fundedBy: row.funded_by || 'shopper',
+        attemptId: row.attempt_id != null ? Number(row.attempt_id) : null,
         amountPaid: Number(row.amount_paid),
         expectedAmount: Number(row.expected_amount),
         variance: Number(row.variance),
@@ -164,10 +168,12 @@ const toPublic = (row) =>
       }
     : null;
 
-// Order-level totals the admin Payments page already shows
+// Order-level totals the admin Payments page already shows. Only the
+// shopper's own money is reimbursed: GetMe-funded payments (company
+// card, phase 38) are left out.
 const syncOrderReimbursement = async (client, orderId) => {
   const rows = (
-    await client.query('SELECT * FROM store_payments WHERE order_id = $1', [orderId])
+    await client.query("SELECT * FROM store_payments WHERE order_id = $1 AND funded_by = 'shopper'", [orderId])
   ).rows;
 
   if (rows.length === 0) {
@@ -286,137 +292,32 @@ const saveStorePayment = async (req, res) => {
     });
   }
 
-  const client = await pool.connect();
-
+  // Phase 38: recorded through a payment attempt (spending limit,
+  // ledger, one live payment per shop) - groceryPayments.legacyRecord
   try {
-    await client.query('BEGIN');
+    const result = await require('../groceryPayments/groceryPayments').legacyRecord({
+      shopperId: shopperIdOf(req),
+      orderId,
+      shopId,
+      method,
+      amountPaid,
+      reference,
+      note,
+      io: req.app.get('io'),
+    });
 
-    const order = await findShopperOrderShop(client, orderId, shopperIdOf(req), shopId);
-
-    if (!order) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ success: false, message: 'Order not found for this shopper' });
-    }
-
-    if (order.status !== 'shopping') {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ success: false, message: 'Shopping has finished for this order' });
-    }
-
-    const pendingBlock = await pendingRequestsBlock(orderId, shopId);
-
-    if (pendingBlock) {
-      await client.query('ROLLBACK');
-      return res.status(409).json(pendingBlock);
-    }
-
-    const items = await shopItems(client, orderId, shopId);
-    const unpicked = items.filter((item) =>
-      UNPICKED_STATUSES.includes(String(item.shopping_status || '').toLowerCase())
-    ).length;
-
-    if (unpicked > 0) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({
-        success: false,
-        code: 'ITEMS_TO_PICK',
-        message:
-          unpicked === 1
-            ? 'One item is still to pick (or refund). Finish it before paying.'
-            : `${unpicked} items are still to pick (or refund). Finish them before paying.`,
-      });
-    }
-
-    const expected = expectedFor(items);
-
-    if (amountPaid > hardLimit(expected)) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({
-        success: false,
-        code: 'AMOUNT_TOO_HIGH',
-        message: `Rs ${amountPaid.toFixed(2)} is far above the expected Rs ${expected.toFixed(2)}. Check the amount on the bill.`,
-      });
-    }
-
-    // One record per order + shop; locked once the bill is uploaded
-    const existing = (
-      await client.query(
-        'SELECT * FROM store_payments WHERE order_id = $1 AND shop_id = $2 FOR UPDATE',
-        [orderId, shopId]
-      )
-    ).rows[0];
-
-    if (existing?.locked_at) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({
-        success: false,
-        code: 'ALREADY_RECORDED',
-        message: 'This store payment is already final (the bill was uploaded)',
-        payment: toPublic(existing),
-      });
-    }
-
-    const variance = round2(amountPaid - expected);
-    const needsReview = Math.abs(variance) > reviewTolerance(expected);
-
-    const row = (
-      await client.query(
-        `
-        INSERT INTO store_payments (
-          order_id, shop_id, shopper_id, method, amount_paid, expected_amount,
-          variance, reference, note, review_status, reimbursement_status
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        ON CONFLICT (order_id, shop_id) DO UPDATE SET
-          method = EXCLUDED.method,
-          amount_paid = EXCLUDED.amount_paid,
-          expected_amount = EXCLUDED.expected_amount,
-          variance = EXCLUDED.variance,
-          reference = EXCLUDED.reference,
-          note = EXCLUDED.note,
-          review_status = EXCLUDED.review_status,
-          reimbursement_status = EXCLUDED.reimbursement_status,
-          review_note = NULL,
-          reviewed_by = NULL,
-          reviewed_at = NULL,
-          updated_at = NOW()
-        RETURNING *
-        `,
-        [
-          orderId,
-          shopId,
-          shopperIdOf(req),
-          method,
-          amountPaid,
-          expected,
-          variance,
-          reference,
-          note,
-          needsReview ? 'needs_review' : 'ok',
-          'pending',
-        ]
-      )
-    ).rows[0];
-
-    await syncOrderReimbursement(client, orderId);
-    await client.query('COMMIT');
-
-    announce(req.app.get('io'), row);
-    await settlement().refreshOrderSettlement(orderId, req.app.get('io'));
-
-    return res.status(existing ? 200 : 201).json({
+    return res.status(result.created ? 201 : 200).json({
       success: true,
-      message: needsReview
-        ? 'Payment recorded. The amount differs from the expected cost, so GetMe will check the bill before reimbursing you after delivery.'
-        : 'Payment recorded. GetMe will reimburse you once the order is delivered.',
-      payment: toPublic(row),
+      message: result.message,
+      payment: toPublic(result.payment),
     });
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
+    if (error?.body) return res.status(error.status).json(error.body);
+    if (error?.status) {
+      return res.status(error.status).json({ success: false, code: error.code, message: error.message, payment: error.payment });
+    }
     console.error('❌ SAVE STORE PAYMENT ERROR:', error.message);
     return res.status(500).json({ success: false, message: 'Unable to record the payment' });
-  } finally {
-    client.release();
   }
 };
 
@@ -873,6 +774,16 @@ const reimburseStorePaymentDirect = async (req, res) => {
 module.exports = {
   METHODS,
   METHOD_LABELS,
+  // Shared with src/groceryPayments (phase 38)
+  UNPICKED_STATUSES,
+  lineTotal,
+  shopItems,
+  expectedFor,
+  reviewTolerance,
+  hardLimit,
+  toPublic,
+  announce,
+  findShopperOrderShop,
   syncOrderReimbursement,
   getStorePayment,
   saveStorePayment,

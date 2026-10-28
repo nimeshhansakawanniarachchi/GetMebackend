@@ -1195,7 +1195,7 @@ const cashOrders = async (shopperId = null, { limit = 50 } = {}) =>
       LEFT JOIN LATERAL (
         SELECT SUM(amount_paid) AS paid,
                SUM(amount_paid) FILTER (WHERE reimbursement_status IN ('owed', 'reimbursed')) AS released
-        FROM store_payments WHERE order_id = se.order_id
+        FROM store_payments WHERE order_id = se.order_id AND funded_by = 'shopper'
       ) sp ON TRUE
       LEFT JOIN cash_settlements cs ON cs.id = se.cash_settlement_id
       LEFT JOIN shopper_withdrawals w ON w.id = se.cash_withdrawal_id
@@ -1288,7 +1288,7 @@ const reimbursementHistory = async (shopperId, { limit = 50 } = {}) =>
       FROM store_payments sp
       LEFT JOIN shops s ON s.id = sp.shop_id
       LEFT JOIN orders o ON o.id = sp.order_id
-      WHERE sp.shopper_id = $1
+      WHERE sp.shopper_id = $1 AND sp.funded_by = 'shopper'
       ORDER BY sp.created_at DESC, sp.id DESC
       LIMIT $2
       `,

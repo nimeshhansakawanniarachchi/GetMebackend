@@ -105,6 +105,16 @@ const AUDITED = {
   'PATCH /store-payments/:id/review': ['store_payment.review', 'store_payment', (req) =>
     `${{ approve: 'Approved', query: 'Queried', release: 'Released without customer payment' }[req.body?.action] || 'Reviewed'} store bill${req.body?.note ? `: ${req.body.note}` : ''}`],
   'PATCH /store-payments/:id/reimburse': ['store_payment.reimburse', 'store_payment', (req) => `Reimbursed (ref ${req.body?.reference || ''})`],
+  // Supermarket payments (phase 38)
+  'PATCH /grocery-payments/:id': ['grocery_payment.update', 'grocery_payment', (req) =>
+    `${req.body?.action || 'Updated'}${req.body?.result ? ` ${req.body.result}` : ''}${req.body?.outcome ? ` ${req.body.outcome}` : ''}${req.body?.statementReference ? ` (statement ${String(req.body.statementReference).slice(0, 60)})` : ''}`],
+  'PATCH /grocery-reservations/:id/limit': ['grocery_limit.change', 'grocery_reservation', (req) => `Spending limit ${req.body?.limit === null ? 'back to computed' : `set to Rs ${req.body?.limit}`}: ${String(req.body?.note || '').slice(0, 120)}`],
+  'PATCH /grocery-payment-methods/:key': ['grocery_method.update', 'grocery_payment_method', (req) => `${req.params.key}: ${req.body?.enabled === true ? 'switched on' : req.body?.enabled === false ? 'switched off' : 'instructions edited'}`],
+  'PUT /grocery-payment-methods/:key/shops/:shopId': ['grocery_method.shop', 'grocery_payment_method', (req) => `${req.params.key} at shop ${req.params.shopId}: ${req.body?.enabled === null ? 'default' : req.body?.enabled ? 'on' : 'off'}`],
+  'PATCH /grocery-payment-settings': ['grocery_settings.update', 'grocery_payment_settings', (req) => `Limit buffer ${req.body?.limitBufferPercent}% / at least Rs ${req.body?.limitBufferMin}`],
+  'POST /getme-cards': ['getme_card.create', 'getme_card', (req) => `Registered ${String(req.body?.issuer || '').slice(0, 60)} card ••${String(req.body?.last4 || '').slice(-4)}`],
+  'PATCH /getme-cards/:id': ['getme_card.update', 'getme_card', (req) => `Card updated${req.body?.status ? `: ${req.body.status}` : ''}${req.body?.shopperId !== undefined ? ` (shopper ${req.body.shopperId ?? 'none'})` : ''}`],
+  'POST /getme-cards/:id/funds': ['getme_card.funds', 'getme_card', (req) => `${req.body?.kind === 'unload' ? 'Removed' : 'Added'} Rs ${req.body?.amount} (bank ref ${String(req.body?.reference || '').slice(0, 60)})`],
   'POST /shopper-registrations': ['shopper.register', 'shopper', (req) => `Registered a shopper: ${String(req.body?.fullName || '').slice(0, 80)}`],
   'PATCH /shopper-registrations/:applicationId/steps': ['shopper.register_edit', 'shopper_application', (req) => `Edited the ${req.body?.step || ''} step of a registration`],
   'POST /shopper-registrations/:applicationId/documents': ['shopper.register_document', 'shopper_application', (req) => `Uploaded ${req.body?.docType || 'a document'} for a registration`],

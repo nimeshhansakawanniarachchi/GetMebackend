@@ -564,6 +564,13 @@ router.post('/orders/:orderId/price-reports/:reportId/cancel', authMiddleware, p
 router.get('/orders/:orderId/store-payment', authMiddleware, storePayments.getStorePayment);
 router.put('/orders/:orderId/store-payment', authMiddleware, storePayments.saveStorePayment);
 
+// Supermarket payment methods, spending limit, payment attempts (phase 38)
+const groceryPayments = require('../controllers/groceryPaymentController');
+router.get('/orders/:orderId/grocery-payment', authMiddleware, groceryPayments.getPaymentScreen);
+router.post('/orders/:orderId/grocery-payment/attempts', authMiddleware, groceryPayments.startAttempt);
+router.post('/grocery-payment-attempts/:id/result', authMiddleware, groceryPayments.reportResult);
+router.post('/grocery-payment-attempts/:id/cancel', authMiddleware, groceryPayments.cancelAttempt);
+
 // =====================================================
 // MULTER AND UPLOAD ERROR HANDLER
 // =====================================================

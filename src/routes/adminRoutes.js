@@ -109,6 +109,21 @@ router.get('/store-payments', MONEY, storePayments.listStorePayments);
 router.patch('/store-payments/:id/review', MONEY, storePayments.reviewStorePayment);
 router.patch('/store-payments/:id/reimburse', MONEY, storePayments.reimburseStorePayment);
 
+// Supermarket payments: attempts, reconciliation, limits, methods, GetMe cards (phase 38)
+const grocery = require('../controllers/groceryPaymentController').admin;
+router.get('/grocery-payments', INSIGHT, grocery.listPayments);
+router.get('/grocery-payments/orders/:orderId', INSIGHT, grocery.orderDetail);
+router.patch('/grocery-payments/:id', MONEY, grocery.paymentAction);
+router.patch('/grocery-reservations/:id/limit', MONEY, grocery.changeLimit);
+router.get('/grocery-payment-methods', INSIGHT, grocery.methodsConfig);
+router.patch('/grocery-payment-methods/:key', MONEY, grocery.updateMethod);
+router.put('/grocery-payment-methods/:key/shops/:shopId', MONEY, grocery.setShopException);
+router.patch('/grocery-payment-settings', MONEY, grocery.updateSettings);
+router.get('/getme-cards', MONEY, grocery.listCards);
+router.post('/getme-cards', MONEY, grocery.createCard);
+router.patch('/getme-cards/:id', MONEY, grocery.updateCard);
+router.post('/getme-cards/:id/funds', MONEY, grocery.recordFunds);
+
 // Shopper settlement: balances, payouts / cash deposits, disputes
 router.get('/settlements', MONEY, settlements.listSettlements);
 router.post('/settlements/shoppers/:shopperId/payouts', MONEY, settlements.recordPayout);

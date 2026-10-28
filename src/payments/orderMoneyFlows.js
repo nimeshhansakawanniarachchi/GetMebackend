@@ -26,7 +26,7 @@ const pool = require('../config/db');
 // =====================================================
 
 // cash / card / lankaqr, as the Shopper App's checkout offers them
-const { METHOD_LABELS } = require('../controllers/storePaymentController');
+const { METHODS, METHOD_LABELS } = require('../controllers/storePaymentController');
 
 const REIMBURSEMENT_LABELS = {
   not_started: 'Pay the store at checkout',
@@ -44,8 +44,12 @@ const BEFORE_SHOPPING = ['pending_shopper_search', 'waiting_for_shopper', 'shopp
 
 const round2 = (value) => Math.round(Number(value || 0) * 100) / 100;
 
-const reimbursementFor = (order, rows) => {
+const reimbursementFor = (order, allRows) => {
   const status = String(order.status || '');
+  // Only the shopper's own money is reimbursed (GetMe card: phase 38)
+  const rows = allRows.filter((row) => row.funded_by !== 'getme');
+
+  if (allRows.length > 0 && rows.length === 0) return 'none';
 
   if (rows.length === 0) {
     if (status === 'cancelled') return 'none';
@@ -76,7 +80,7 @@ const moneyFlowsFor = async (orders, shopperId, client = pool) => {
     await client.query(
       `
       SELECT sp.order_id, sp.shop_id, s.shop_name, sp.method, sp.amount_paid, sp.expected_amount,
-             sp.locked_at, sp.review_status, sp.reimbursement_status, sp.reimbursed_at
+             sp.locked_at, sp.review_status, sp.reimbursement_status, sp.reimbursed_at, sp.funded_by
       FROM store_payments sp
       LEFT JOIN shops s ON s.id = sp.shop_id
       WHERE sp.order_id = ANY($1) AND sp.shopper_id = $2
@@ -100,7 +104,9 @@ const moneyFlowsFor = async (orders, shopperId, client = pool) => {
         // GetMe's rule: the shopper pays every store upfront
         payer: 'shopper',
         upfront: true,
-        methods: Object.entries(METHOD_LABELS).map(([key, label]) => ({ key, label })),
+        // The shopper's own-money methods; the GetMe card (phase 38) is
+        // per shopper and shop (GET .../grocery-payment)
+        methods: METHODS.map((key) => ({ key, label: METHOD_LABELS[key] })),
         // Groceries at the customer's prices when placed (an estimate
         // of the till total; the bill decides)
         groceryEstimate: round2(order.items_total),

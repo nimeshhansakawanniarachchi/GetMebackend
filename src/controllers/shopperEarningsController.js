@@ -176,6 +176,7 @@ const getEarnings = async (req, res) => {
         FROM store_payments sp
         LEFT JOIN shops s ON s.id = sp.shop_id
         WHERE sp.shopper_id = $1
+          AND sp.funded_by = 'shopper'
           AND (
             sp.reimbursement_status <> 'reimbursed'
             OR sp.reimbursed_at >= date_trunc('month', NOW())

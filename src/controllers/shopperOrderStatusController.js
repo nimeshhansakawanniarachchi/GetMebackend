@@ -540,6 +540,10 @@ const startShopping = async (req, res) => {
       onceKey: 'order',
     });
 
+    // Spending limit for each shop of the order, reserved before the
+    // shopper buys anything (phase 38)
+    await require('../groceryPayments/groceryPayments').syncOrder(orderId);
+
     return res.status(200).json({
       success: true,
       message: 'Shopping started',
