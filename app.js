@@ -461,6 +461,12 @@ app.set('view engine', 'jade');
 
 app.use(logger('dev'));
 
+// Technical error log for the admin Developer role (phase 40): 5xx
+// answers (route patterns only) + server error labels, kept in memory
+const systemHealth = require('./src/admin/systemHealth');
+systemHealth.hookConsole();
+app.use(systemHealth.trackResponses);
+
 // Browsers may only call the API from the admin panel / shop website.
 // Mobile apps send no Origin header, so they are always allowed.
 const allowedOrigins = String(

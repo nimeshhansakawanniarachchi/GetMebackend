@@ -12,6 +12,7 @@ Status filter groups (`?status=`): `active`, `delivery`, `delivered`, `cancelled
 ## Real-time (socket.io-client, same base URL)
 `io(BASE_URL, { auth: { token } })`. Server puts admins in room `admins` and shops in `shop:{id}` automatically.
 - Admin events: `admin:order-updated` `{ orderId, event, status }`, `admin:shoppers-updated` `{ shopperId, reason }`, `admin:shops-updated` `{ shopId, reason }`.
+- Admin notifications (phase 41): `admin:notification` (new, already filtered to this admin), `admin:notification-updated` (grouped count grew), `admin:notifications-changed` (refetch the summary). API `/notifications*`, see `code-backups/reports/admin-notifications-api.md`. The server disconnects an admin's sockets when their account changes: reconnect.
 - Shop events: `shop:new-order` `{ orderId }`, `shop:order-updated` `{ orderId, event, status }`, `shop:status-changed` `{ status }` (admin approved/suspended the shop).
 Use events to refetch the current view (debounce ~500 ms). No polling.
 

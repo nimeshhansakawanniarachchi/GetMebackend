@@ -662,10 +662,12 @@ const exportDataset = async (req, res) => {
     return res.status(404).json({ success: false, message: 'Unknown export' });
   }
 
-  const role = req.admin?.role;
+  // Phase 40: datasets operations could export need exports.orders,
+  // the finance ones exports.finance
+  const needed = spec.roles.includes('operations') ? 'exports.orders' : 'exports.finance';
 
-  if (role !== 'owner' && !spec.roles.includes(role)) {
-    return res.status(403).json({ success: false, code: 'ROLE_FORBIDDEN', message: "Your role can't export this data" });
+  if (!req.admin?.permissions?.has(needed)) {
+    return res.status(403).json({ success: false, code: 'PERMISSION_DENIED', permission: needed, message: "You don't have permission to export this data" });
   }
 
   try {

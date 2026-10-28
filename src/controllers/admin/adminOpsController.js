@@ -199,7 +199,7 @@ const getOverview = async (req, res) => {
 
     // Company money is for owner / finance / operations (reports
     // roles); support sees operations figures only
-    const showMoney = ['owner', 'finance', 'operations'].includes(req.admin?.role);
+    const showMoney = Boolean(req.admin?.permissions?.has('reports.view') || req.admin?.permissions?.has('finance.view'));
     const cardPayments = sum('customer_payment');
     const refunds = sum('customer_refund');
     const cashCollected = sum('cash_collected');
@@ -279,7 +279,7 @@ const getOverview = async (req, res) => {
         commission: round2(row.commission),
         netRevenue: round2(row.net_revenue),
       })),
-      issues: summarizeIssues(visibleIssues(issues, req.admin?.role)),
+      issues: summarizeIssues(visibleIssues(issues, req.admin)),
       moneyVisible: showMoney,
     });
   } catch (error) {
@@ -803,9 +803,12 @@ const computeIssues = async () => {
   );
 };
 
-// Support staff don't see company finance or shopper payout problems
-const visibleIssues = (issues, role) =>
-  role === 'support' ? issues.filter((i) => !['finance', 'payouts'].includes(i.category)) : issues;
+// Staff without report / finance access (Support) don't see company
+// finance or shopper payout problems
+const visibleIssues = (issues, admin) =>
+  admin?.permissions?.has('reports.view') || admin?.permissions?.has('finance.view')
+    ? issues
+    : issues.filter((i) => !['finance', 'payouts'].includes(i.category));
 
 const summarizeIssues = (issues) => ({
   total: issues.length,
@@ -818,7 +821,7 @@ const summarizeIssues = (issues) => ({
 
 const getIssues = async (req, res) => {
   try {
-    const issues = visibleIssues(await computeIssues(), req.admin?.role);
+    const issues = visibleIssues(await computeIssues(), req.admin);
 
     return res.json({
       success: true,
@@ -921,6 +924,10 @@ const toAudit = (row) => ({
   summary: row.summary,
   details: row.details,
   ip: row.ip,
+  // phase 40
+  outcome: row.outcome || 'success',
+  before: row.before_value ?? null,
+  after: row.after_value ?? null,
 });
 
 const auditFor = async (entityType, entityId, limit = 50) =>
@@ -950,6 +957,11 @@ const getAuditLog = async (req, res) => {
     if (req.query.entityId) {
       params.push(String(req.query.entityId).slice(0, 40));
       where.push(`entity_id = $${params.length}`);
+    }
+
+    if (['success', 'failed', 'denied'].includes(req.query.outcome)) {
+      params.push(req.query.outcome);
+      where.push(`outcome = $${params.length}`);
     }
 
     if (req.query.action) {

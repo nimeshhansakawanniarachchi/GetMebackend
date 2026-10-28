@@ -17,14 +17,10 @@ const pool = require('../config/db');
 // recordAdminAudit() writes one entry directly (login, etc.).
 // =====================================================
 
-const ROLES = ['owner', 'operations', 'finance', 'support'];
-
-const ROLE_LABELS = {
-  owner: 'Owner',
-  operations: 'Operations',
-  finance: 'Finance',
-  support: 'Support',
-};
+// Phase 40: roles + granular permissions live in src/admin/permissions.js
+// ('owner' = Super Admin). Routes are guarded with requirePermission;
+// allowRoles stays for older callers.
+const { ROLES, ROLE_LABELS, PERMISSIONS } = require('../admin/permissions');
 
 const allowRoles = (...roles) => (req, res, next) => {
   const role = req.admin?.role;
@@ -36,7 +32,34 @@ const allowRoles = (...roles) => (req, res, next) => {
   return res.status(403).json({
     success: false,
     code: 'ROLE_FORBIDDEN',
-    message: `Your role (${ROLE_LABELS[role] || role || 'unknown'}) can't do this. Ask an owner for access.`,
+    message: `Your role (${ROLE_LABELS[role] || role || 'unknown'}) can't do this. Ask the Super Admin for access.`,
+  });
+};
+
+const adminCan = (req, permission) => Boolean(req.admin?.permissions?.has(permission));
+
+// Route guard: the admin needs at least one of the permissions. A
+// denied attempt is written to the audit log as a security event.
+const requirePermission = (...permissions) => (req, res, next) => {
+  if (permissions.some((permission) => adminCan(req, permission))) {
+    return next();
+  }
+
+  recordAdminAudit({
+    admin: req.admin,
+    action: 'security.denied',
+    entityType: 'route',
+    entityId: null,
+    summary: `${req.method} ${req.baseUrl}${req.route?.path || req.path} needs ${permissions.join(' or ')}`,
+    outcome: 'denied',
+    ip: req.ip,
+  });
+
+  return res.status(403).json({
+    success: false,
+    code: 'PERMISSION_DENIED',
+    permission: permissions[0],
+    message: `You don't have permission for this (${PERMISSIONS[permissions[0]]?.label || permissions[0]}). Ask the Super Admin for access.`,
   });
 };
 
@@ -61,15 +84,25 @@ const sanitize = (value, depth = 0) => {
     );
   }
 
-  return typeof value === 'string' ? value.slice(0, 300) : value;
+  // Phase 40: a card-number-like run of digits (12-19, spaces / dashes
+  // allowed) is masked wherever it appears, whatever the field is called
+  // (refused requests are logged too, with what was sent)
+  if (typeof value === 'string') return maskCardNumbers(value).slice(0, 300);
+  if (typeof value === 'number' && Number.isInteger(value) && String(Math.abs(value)).length >= 12) return maskCardNumbers(String(value));
+  return value;
 };
 
-const recordAdminAudit = async ({ admin, action, entityType = null, entityId = null, summary = null, details = null, ip = null }) => {
+const maskCardNumbers = (text) =>
+  String(text).replace(/\d(?:[ -]?\d){11,18}/g, (match) => `••••${match.replace(/\D/g, '').slice(-4)}`);
+
+// outcome: success | failed | denied; before / after: the record's
+// relevant values around the change (sanitised like details)
+const recordAdminAudit = async ({ admin, action, entityType = null, entityId = null, summary = null, details = null, ip = null, outcome = 'success', before = null, after = null }) => {
   try {
     await pool.query(
       `
-      INSERT INTO admin_audit_log (admin_id, admin_name, admin_role, action, entity_type, entity_id, summary, details, ip)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      INSERT INTO admin_audit_log (admin_id, admin_name, admin_role, action, entity_type, entity_id, summary, details, ip, outcome, before_value, after_value)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       `,
       [
         admin?.adminId ?? null,
@@ -78,9 +111,12 @@ const recordAdminAudit = async ({ admin, action, entityType = null, entityId = n
         String(action).slice(0, 80),
         entityType,
         entityId != null ? String(entityId).slice(0, 40) : null,
-        summary ? String(summary).slice(0, 300) : null,
+        summary ? maskCardNumbers(String(summary)).slice(0, 300) : null,
         details ? JSON.stringify(sanitize(details)) : null,
         ip ? String(ip).slice(0, 64) : null,
+        ['success', 'failed', 'denied'].includes(outcome) ? outcome : 'success',
+        before != null ? JSON.stringify(sanitize(before)) : null,
+        after != null ? JSON.stringify(sanitize(after)) : null,
       ]
     );
   } catch (error) {
@@ -156,6 +192,14 @@ const AUDITED = {
     return `Admin ${parts.join(', ') || 'updated'}`;
   }],
   'PUT /auth/password': ['admin.password', 'admin', () => 'Changed own password'],
+  // Phase 40
+  'POST /admins/:id/reset-password': ['admin.password_reset', 'admin', () => 'Reset a staff password (temporary password issued)'],
+  'PUT /security-settings': ['security.settings', 'security', (req) => `Approval limits: refunds Rs ${req.body?.refundApprovalLimit}, earnings adjustments Rs ${req.body?.earningsAdjustApprovalLimit}`],
+  'PATCH /approvals/:id': ['approval.decide', 'approval', (req) => `${req.body?.decision || 'decided'}: ${String(req.body?.note || '').slice(0, 120)}`],
+  'POST /approvals/:id/cancel': ['approval.cancel', 'approval', () => 'Cancelled own approval request'],
+  'POST /orders/:id/notes': ['order.note', 'order', (req) => `Support note (${req.body?.category || 'general'})`],
+  // Phase 41
+  'PUT /notifications/settings': ['notifications.policy', 'notifications', () => 'Changed the notification policy'],
 };
 
 const auditAdminChanges = (req, res, next) => {
@@ -164,7 +208,14 @@ const auditAdminChanges = (req, res, next) => {
   }
 
   res.on('finish', () => {
-    if (res.statusCode >= 400 || !req.route) return;
+    // Denied (401/403) attempts are logged by requirePermission; a
+    // refused change (other 4xx / 5xx) is logged with outcome 'failed'
+    if (!req.route || res.statusCode === 401 || res.statusCode === 403) return;
+    // Reading / dismissing own notifications and own preferences are not audited (phase 41)
+    if (res.locals?.skipAudit) return;
+    const failed = res.statusCode >= 400;
+    // Controllers can add before / after values (res.locals.audit)
+    const extra = res.locals?.audit || {};
 
     const key = `${req.method} ${req.route.path}`;
     const [action, entityType, describe] = AUDITED[key] || [
@@ -184,12 +235,15 @@ const auditAdminChanges = (req, res, next) => {
 
     recordAdminAudit({
       admin: req.admin,
-      action,
-      entityType,
-      entityId,
-      summary,
-      details: req.body,
+      action: extra.action || action,
+      entityType: extra.entityType || entityType,
+      entityId: extra.entityId ?? entityId,
+      summary: failed ? `Refused (${res.statusCode}): ${summary || action}`.slice(0, 300) : extra.summary || summary,
+      details: failed ? { status: res.statusCode, request: req.body } : req.body,
       ip: req.ip,
+      outcome: failed ? 'failed' : 'success',
+      before: failed ? null : extra.before ?? null,
+      after: failed ? null : extra.after ?? null,
     });
   });
 
@@ -200,6 +254,8 @@ module.exports = {
   ROLES,
   ROLE_LABELS,
   allowRoles,
+  adminCan,
+  requirePermission,
   auditAdminChanges,
   recordAdminAudit,
 };

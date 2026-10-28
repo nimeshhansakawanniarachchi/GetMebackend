@@ -664,13 +664,11 @@ const getOrder = async (req, res) => {
               createdAt: ratingResult.rows[0].created_at,
             }
           : null,
-        audit,
-        chat: chatResult.rows.map((row) => ({
-          id: row.id,
-          senderType: row.sender_type,
-          message: row.message,
-          createdAt: row.created_at,
-        })),
+        // Phase 40: the order's admin history for staff who act on orders
+        // or money (and the Super Admin); the chat itself only through
+        // GET /orders/:id/chat (orders.chat, every view audited)
+        audit: ['audit.view', 'orders.cancel', 'finance.view'].some((p) => req.admin?.permissions?.has(p)) ? audit : [],
+        chatMessageCount: chatResult.rows.length,
       },
     });
   } catch (error) {

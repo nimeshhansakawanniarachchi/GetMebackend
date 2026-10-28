@@ -1065,6 +1065,22 @@ const dismissOrderOffer = async (req, res) => {
       [shopperId, orderId]
     );
 
+    // Admin notification: the shopper turned the order down (phase 41;
+    // once per shopper and order)
+    const shopper = await db.query('SELECT full_name FROM shoppers WHERE id = $1', [shopperId]);
+    const parts = String(shopper.rows[0]?.full_name || '').trim().split(/\s+/).filter(Boolean);
+    const name = parts.length > 1 ? `${parts[0]} ${parts[parts.length - 1][0].toUpperCase()}.` : parts[0] || 'A shopper';
+    require('../admin/notifications').notify({
+      category: 'orders',
+      event: 'order.offer_declined',
+      title: `${name} declined order #${orderId}`,
+      body: 'The offer moves to the next shopper.',
+      entityType: 'order',
+      entityId: orderId,
+      permissions: ['orders.view'],
+      dedupe: `order.declined:${orderId}:${shopperId}`,
+    });
+
     // Hand the batch to the next closest shopper right away
     await dispatchOrder({ io: req.app.get('io'), orderId });
 

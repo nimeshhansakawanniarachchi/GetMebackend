@@ -72,6 +72,10 @@ require('../src/utils/offerClock').startOfferClock(io);
 // Shops with opening hours open / close on schedule (phase 27)
 require('../src/utils/shopHoursClock').startShopHoursClock(io);
 
+// Admin notifications: push committed events, time-based checks (phase 41)
+require('../src/admin/notifications').startListener(io);
+require('../src/admin/notifications').startClock();
+
 /**
  * Socket.IO authentication.
  */
@@ -197,18 +201,37 @@ io.on('connection', function (socket) {
    */
 
   if (socket.userType === 'admin') {
-    socket.join('admins');
-    console.log('🏠 Joined admins room');
-
-    // Live map positions only for roles that may open Live
-    // operations (owner / operations / support)
-    db.query('SELECT role FROM admins WHERE id = $1 AND is_active IS TRUE', [socket.admin.adminId])
+    // Phase 40: active account, current session version and the
+    // permissions decide the rooms (a Developer gets no business events;
+    // live map positions need liveops.view)
+    socket.adminPermissions = new Set();
+    socket.adminReady = db
+      .query('SELECT role, is_active, auth_version, permission_grants, permission_revokes, must_change_password FROM admins WHERE id = $1', [socket.admin.adminId])
       .then((result) => {
-        if (['owner', 'operations', 'support'].includes(result.rows[0]?.role)) {
+        const row = result.rows[0];
+        if (!row || !row.is_active || Number(socket.admin.av ?? 0) !== Number(row.auth_version || 0)) {
+          socket.disconnect(true);
+          return;
+        }
+        socket.adminPermissions = new Set(require('../src/admin/permissions').effectivePermissions(row));
+        // Phase 41: own room + notification push (src/admin/notifications.js);
+        // nothing until a temporary password has been replaced
+        if (row.must_change_password) return null;
+        return require('../src/admin/notifications')
+          .attachSocket(socket, { adminId: Number(socket.admin.adminId), role: row.role || 'owner', permissions: socket.adminPermissions })
+          .then(() => row);
+      })
+      .then((row) => {
+        if (!row) return;
+        if (socket.adminPermissions.has('dashboard.view')) {
+          socket.join('admins');
+          console.log('🏠 Joined admins room');
+        }
+        if (socket.adminPermissions.has('liveops.view')) {
           socket.join('admins:live');
         }
       })
-      .catch((error) => console.error('❌ admins:live room error:', error.message));
+      .catch((error) => console.error('❌ admin socket rooms error:', error.message));
   }
 
   if (socket.userType === 'shop') {
@@ -232,6 +255,14 @@ io.on('connection', function (socket) {
     }
 
     try {
+      if (socket.userType === 'admin') {
+        await socket.adminReady;
+        if (!socket.adminPermissions?.has('orders.view')) {
+          console.warn('⚠️ SOCKET: admin without orders.view tried to join an order');
+          return;
+        }
+      }
+
       if (socket.userType !== 'admin') {
         const result = await db.query(
           'SELECT customer_id, shopper_id, status FROM orders WHERE id = $1',
