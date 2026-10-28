@@ -200,6 +200,36 @@ const AUDITED = {
   'POST /orders/:id/notes': ['order.note', 'order', (req) => `Support note (${req.body?.category || 'general'})`],
   // Phase 41
   'PUT /notifications/settings': ['notifications.policy', 'notifications', () => 'Changed the notification policy'],
+  // Phase 47: shop onboarding checklist (controller adds before / after)
+  'PATCH /shops/:id/onboarding': ['shop.onboarding', 'shop', () => 'Updated the shop onboarding checklist'],
+  // Phase 43: support cases + GetMe credit
+  'PATCH /support/cases/:id/assign': ['support_case.assign', 'support_case', (req) => (req.body?.adminId == null ? 'Unassigned a support case' : `Assigned a support case to ${req.body.adminId === 'me' ? 'self' : `admin #${req.body.adminId}`}`)],
+  'PATCH /support/cases/:id/status': ['support_case.status', 'support_case', (req) => `Support case status: ${req.body?.status || ''}`],
+  'POST /support/cases/:id/reply': ['support_case.reply', 'support_case', (req) => `Replied to the customer${req.body?.waitingForCustomer ? ' (waiting for customer)' : ''}`],
+  'POST /support/cases/:id/notes': ['support_case.note', 'support_case', () => 'Internal note on a support case'],
+  'POST /support/cases/:id/resolve': ['support_case.resolve', 'support_case', (req) => `${req.body?.type === 'declined' ? 'Declined' : 'Resolved without money'}: ${String(req.body?.note || '').slice(0, 150)}`],
+  'POST /support/cases/:id/credit': ['support_case.credit', 'support_case', (req) => `Resolved with GetMe credit ${money(req.body?.amount)}`],
+  'POST /support/cases/:id/refund': ['support_case.refund', 'support_case', (req) => `Resolved with a card refund of ${money(req.body?.amount)}`],
+  'POST /customers/:id/credit': ['customer.credit', 'customer', (req) => `Gave GetMe credit ${money(req.body?.amount)}: ${String(req.body?.reason || '').slice(0, 150)}`],
+  // Phase 44: customer account controls (controllers add before / after)
+  'PATCH /customers/:id/status': ['customer.status', 'customer', (req) => `Account status -> ${req.body?.status || ''}${req.body?.reason ? `: ${String(req.body.reason).slice(0, 150)}` : ''}`],
+  'PATCH /customers/:id/cod-limit': ['customer.cod_limit', 'customer', (req) => `Cash-on-delivery limit -> ${req.body?.codLimit == null || req.body?.codLimit === '' ? 'platform default' : money(req.body.codLimit)}`],
+  'PUT /customer-controls/settings': ['customer.settings', 'settings', () => 'Changed the customer control settings'],
+  // Phase 46: shopper documents, training quiz, incidents (controllers add before / after)
+  'PATCH /shoppers/:id/documents': ['shopper.documents', 'shopper', () => 'Changed document expiry dates'],
+  'PUT /shopper-training/settings': ['shopper_training.settings', 'shopper_training', (req) =>
+    `Shopper training ${req.body?.trainingRequired === true ? 'required' : req.body?.trainingRequired === false ? 'not required' : 'settings changed'}`],
+  'POST /incidents/:id/acknowledge': ['incident.acknowledge', 'incident', () => 'Acknowledged a shopper incident'],
+  'POST /incidents/:id/resolve': ['incident.resolve', 'incident', (req) => `Resolved a shopper incident: ${String(req.body?.note || '').slice(0, 150)}`],
+  'POST /incidents/:id/notes': ['incident.note', 'incident', () => 'Note on a shopper incident'],
+  // Phase 45: dispatch control + shopper cash limit (controllers add before / after)
+  'POST /orders/:id/release-shopper': ['order.dispatch_release', 'order', (req) =>
+    `Released the shopper${req.body?.confirmShopping ? ' (while shopping)' : ''}: ${String(req.body?.reason || '').slice(0, 200)}`],
+  'POST /orders/:id/offer-shopper': ['order.dispatch_offer', 'order', (req) =>
+    `Offered to shopper #${req.body?.shopperId || ''}${req.body?.exclusive ? ' (exclusive)' : ''}: ${String(req.body?.reason || '').slice(0, 200)}`],
+  'POST /orders/:id/redispatch': ['order.redispatch', 'order', (req) => `Re-dispatched: ${String(req.body?.reason || '').slice(0, 200)}`],
+  'PUT /dispatch-settings': ['dispatch.settings', 'settings', (req) =>
+    `Dispatch settings${req.body?.shopperCashLimit !== undefined ? `: shopper cash limit Rs ${req.body.shopperCashLimit}` : ''}${req.body?.exclusiveOfferMinutes !== undefined ? `, exclusive offers ${req.body.exclusiveOfferMinutes} min` : ''}`],
 };
 
 const auditAdminChanges = (req, res, next) => {

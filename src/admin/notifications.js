@@ -150,6 +150,10 @@ const linkFor = (row) => {
     case 'admin': return '/staff';
     case 'audit': return '/audit-log';
     case 'system': return '/system';
+    // Phase 43: support cases open in the Support queue's case drawer
+    case 'support_case': return id ? `/support?case=${id}` : '/support';
+    // Phase 46: shopper help requests open in the Incidents page drawer
+    case 'incident': return id ? `/incidents?incident=${id}` : '/incidents';
     default: return null;
   }
 };
@@ -650,6 +654,14 @@ const cleanup = async () => {
   await pool.query('DELETE FROM admin_notifications WHERE created_at < NOW() - make_interval(days => $1::int)', [settings.retentionDays]);
 };
 
+// Other modules add their own minute checks (phase 43: support case
+// first-response deadlines); each runs after the Issues checks and its
+// errors never stop the others
+const clockChecks = [];
+const addClockCheck = (label, fn) => {
+  clockChecks.push({ label, fn });
+};
+
 const startClock = () => {
   const tick = async () => {
     try {
@@ -657,6 +669,13 @@ const startClock = () => {
       await cleanup();
     } catch (error) {
       warn('clock', error);
+    }
+    for (const check of clockChecks) {
+      try {
+        await check.fn();
+      } catch (error) {
+        warn(`clock ${check.label}`, error);
+      }
     }
   };
   setTimeout(tick, 15_000);
@@ -710,6 +729,7 @@ module.exports = {
   refreshSockets,
   startListener,
   startClock,
+  addClockCheck,
   systemEvent,
   checkIssues,
   // tests

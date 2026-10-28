@@ -50,6 +50,9 @@ const announce = (req, shopperId, payload = {}) => {
   } catch (error) {
     console.error('❌ WITHDRAWAL SOCKET ERROR:', error.message);
   }
+
+  // Phase 45: a paid withdrawal settles cash owed (cash limit)
+  require('../../dispatch/cashLimit').refreshInBackground(shopperId, req.app.get('io'));
 };
 
 const money = (value) => `LKR ${Number(value || 0).toFixed(2)}`;

@@ -2,6 +2,8 @@ const pool = require('../../config/db');
 
 const { PROMO_TYPES, normalizePromoCode } = require('../../pricing/promos');
 const { ORDER_STATUS_GROUPS } = require('../../utils/orderStatus');
+const { adminCan } = require('../../middleware/adminAccess');
+const { promoResults, emptyResult } = require('../../reports/promotionResults');
 
 // =====================================================
 // ADMIN: PROMO CODES
@@ -129,7 +131,18 @@ const listPromos = async (req, res) => {
       [ORDER_STATUS_GROUPS.cancelled]
     );
 
-    return res.json({ success: true, promos: result.rows.map(toPromoResponse) });
+    // Phase 47: all-time results for staff who may see them (reports.view
+    // or promos.manage); GET /promos/:id/results gives a date range
+    const showResults = adminCan(req, 'reports.view') || adminCan(req, 'promos.manage');
+    const results = showResults ? await promoResults(pool) : null;
+
+    return res.json({
+      success: true,
+      promos: result.rows.map((row) => ({
+        ...toPromoResponse(row),
+        ...(showResults ? { results: results.get(Number(row.id)) || emptyResult() } : {}),
+      })),
+    });
   } catch (error) {
     console.error('❌ listPromos error:', error.message);
     return res.status(500).json({ success: false, message: 'Unable to load promo codes' });

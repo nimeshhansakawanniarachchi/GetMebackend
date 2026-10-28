@@ -75,6 +75,10 @@ require('../src/utils/shopHoursClock').startShopHoursClock(io);
 // Admin notifications: push committed events, time-based checks (phase 41)
 require('../src/admin/notifications').startListener(io);
 require('../src/admin/notifications').startClock();
+// Support cases: first-response deadline alerts on the same clock (phase 43)
+require('../src/support/supportCases').startOverdueCheck(io);
+// Shopper document expiry alerts / auto-offline on the same clock (phase 46)
+require('../src/compliance/documents').startComplianceCheck(io);
 
 /**
  * Socket.IO authentication.
@@ -134,6 +138,23 @@ io.use(function (socket, next) {
           return next();
         })
         .catch(() => next(new Error('Unable to check the session')));
+    }
+
+    // Phase 44: a blocked customer account can't connect (same style
+    // as the shopper session check; one primary-key lookup)
+    if (socket.userType === 'customer') {
+      return require('../src/config/db')
+        .query('SELECT account_status FROM customers WHERE id = $1', [Number(customerId)])
+        .then((result) => {
+          if (result.rows[0]?.account_status === 'blocked') {
+            const error = new Error('ACCOUNT_BLOCKED');
+            error.data = { code: 'ACCOUNT_BLOCKED', message: 'Your GetMe account is blocked. Please contact GetMe support for help.' };
+            return next(error);
+          }
+          console.log('🔐 SOCKET AUTH SUCCESS:', { type: socket.userType, customerId, shopperId });
+          return next();
+        })
+        .catch(() => next(new Error('Unable to check the account')));
     }
 
     console.log('🔐 SOCKET AUTH SUCCESS:', {

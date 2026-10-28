@@ -16,6 +16,8 @@ const { reconcileInBackground } = require('../payments/paymentService');
 const { pendingRequestsBlock } = require('./orderItemRequestsController');
 const { recordDeliveredEarnings } = require('./settlementController');
 const { paymentStateFor } = require('../payments/orderPaymentState');
+// Phase 45: shopper cash limit
+const cashLimit = require('../dispatch/cashLimit');
 
 const {
   createShopperNotification,
@@ -188,6 +190,24 @@ const acceptOrder = async (req, res) => {
       });
     }
 
+    // Phase 45: no cash order while holding too much cash for GetMe
+    if (order.payment_method === 'cash') {
+      const cash = await cashLimit.statusFor(shopperId, client);
+
+      if (cash.reached) {
+        await client.query('ROLLBACK');
+
+        cashLimit.refreshInBackground(shopperId, req.app.get('io'));
+
+        return res.status(403).json({
+          success: false,
+          code: 'CASH_LIMIT_REACHED',
+          message: cash.message,
+          cashLimit: cash,
+        });
+      }
+    }
+
     // Only shoppers the batch is currently offered to (closest first)
     if (!(await shopperHoldsOffer({ client, orderId, shopperId }))) {
       await client.query('ROLLBACK');
@@ -210,6 +230,9 @@ const acceptOrder = async (req, res) => {
         shopper_id = $1,
         status = 'shopper_accepted',
         accepted_at = NOW(),
+        -- Phase 45: an exclusive staff offer ends with the accept
+        dispatch_paused_until = NULL,
+        dispatch_exclusive_shopper_id = NULL,
         updated_at = NOW()
       WHERE
         id = $2

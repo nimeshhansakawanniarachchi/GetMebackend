@@ -395,6 +395,7 @@ var cookieParser = require('cookie-parser');
 var logger = require('morgan');
 var cors = require('cors');
 var { requireSignedBill, signBillLinksInJson } = require('./src/utils/billUrls');
+var supportPhotos = require('./src/support/supportPhotos');
 
 require('dotenv').config();
 
@@ -641,6 +642,18 @@ app.use(
 );
 
 // ==================================================
+// SUPPORT CASE PHOTOS (phase 43)
+// Private like bill photos: signed, expiring links only
+// (src/support/supportPhotos.js)
+// ==================================================
+
+app.use(
+  '/uploads/support-cases',
+  supportPhotos.requireSignedPhoto,
+  express.static(supportPhotos.STORAGE_DIR, { cacheControl: false })
+);
+
+// ==================================================
 // CUSTOMER ORDER MEDIA
 // ==================================================
 
@@ -721,6 +734,12 @@ app.use('/api/customer', customerOrderMediaRoutes);
 app.use('/api/customer', customerAddressRoutes);
 
 // ==================================================
+// CUSTOMER SUPPORT CASES + GETME CREDIT (phase 43)
+// ==================================================
+
+app.use('/api/customer', require('./src/routes/customerSupportRoutes'));
+
+// ==================================================
 // ADMIN API
 // ==================================================
 
@@ -771,6 +790,9 @@ app.use('/api/shopper', shopperAccountRoutes);
 
 // Shopper wallet: earnings balance, bank accounts, withdrawals
 app.use('/api/shopper', require('./src/routes/shopperWalletRoutes'));
+
+// Training quiz + 'I need help' incidents (phase 46)
+app.use('/api/shopper', require('./src/routes/shopperSafetyRoutes'));
 
 // ==================================================
 // CHAT API

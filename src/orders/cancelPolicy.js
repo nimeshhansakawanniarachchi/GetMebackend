@@ -1,4 +1,5 @@
 const { owedForOrder, round2 } = require('../payments/paymentService');
+const orderCredit = require('../payments/orderCredit');
 
 // =====================================================
 // CUSTOMER CANCELLATION POLICY
@@ -126,13 +127,19 @@ const cancelMoney = async (client, order) => {
 
   const held = round2(payments.rows[0].held);
   const owedAfterCancel = await owedForOrder(client, { ...order, status: 'cancelled', failed_delivery_at: null });
+  // Phase 44: GetMe credit pays first; the card / cash only its part
+  const moneyOwed = orderCredit.moneyPart(owedAfterCancel, order);
 
   return {
     method: order.payment_method,
     held,
-    owedAfterCancel: round2(owedAfterCancel),
+    // In money (card / cash), after GetMe credit
+    owedAfterCancel: moneyOwed,
     // Card money that goes back (PayHere confirms each refund)
-    refundDue: round2(Math.max(0, held - owedAfterCancel)),
+    refundDue: round2(Math.max(0, held - moneyOwed)),
+    // Phase 44: GetMe credit used on the order, and what goes back
+    creditApplied: orderCredit.creditOf(order),
+    creditBack: orderCredit.creditBackFor(owedAfterCancel, order),
     pendingCharges: payments.rows[0].pending,
     itemsBought: bought.rows[0].n,
   };

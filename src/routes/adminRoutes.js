@@ -26,6 +26,12 @@ const applicationsAdmin = require('../controllers/admin/adminShopperApplicationC
 const changeAdmin = require('../controllers/admin/adminShopperChangeController');
 const registerAdmin = require('../controllers/admin/adminShopperRegistrationController');
 const grocery = require('../controllers/groceryPaymentController').admin;
+const growthOps = require('../controllers/admin/adminGrowthOpsController');
+const supportCases = require('../controllers/admin/adminSupportCaseController');
+// Phase 46: shopper documents, training quiz, incidents
+const compliance = require('../compliance/documents');
+const training = require('../compliance/training');
+const incidents = require('../compliance/incidents');
 
 const router = express.Router();
 
@@ -78,9 +84,9 @@ router.put('/security-settings', can('security.settings'), account.updateSecurit
 router.get('/audit-log', can('audit.view'), ops.getAuditLog);
 
 // Approvals of high-risk money actions
-router.get('/approvals', can('approvals.decide', 'finance.refund', 'finance.adjust'), approvals.listApprovals);
+router.get('/approvals', can('approvals.decide', 'finance.refund', 'finance.adjust', 'support.credit'), approvals.listApprovals);
 router.patch('/approvals/:id', can('approvals.decide'), approvals.decide);
-router.post('/approvals/:id/cancel', can('finance.refund', 'finance.adjust'), approvals.cancel);
+router.post('/approvals/:id/cancel', can('finance.refund', 'finance.adjust', 'support.credit'), approvals.cancel);
 
 // Technical (Developer)
 router.get('/system/health', can('system.health'), support.systemStatus);
@@ -101,10 +107,54 @@ router.patch('/orders/:id/cancel', can('orders.cancel'), orders.cancelOrder);
 router.get('/orders/:id/notes', can('orders.view'), support.listNotes);
 router.post('/orders/:id/notes', can('orders.notes'), support.addNote);
 router.get('/orders/:id/chat', can('orders.chat'), support.orderChat);
+// Phase 45: staff control over shopper assignment (the shopper always
+// accepts themselves) + shopper cash limit
+const dispatchControl = require('../controllers/admin/adminDispatchController');
+router.get('/orders/:id/dispatch', can('orders.view'), dispatchControl.getDispatch);
+router.get('/orders/:id/dispatch-candidates', can('orders.dispatch'), dispatchControl.getCandidates);
+router.post('/orders/:id/release-shopper', can('orders.dispatch'), dispatchControl.releaseShopper);
+router.post('/orders/:id/offer-shopper', can('orders.dispatch'), dispatchControl.offerShopper);
+router.post('/orders/:id/redispatch', can('orders.dispatch'), dispatchControl.redispatch);
+router.get('/dispatch-settings', can('orders.dispatch', 'finance.view', 'shoppers.view'), dispatchControl.getSettings);
+// Cash limit: finance.settlements; exclusive offer minutes: orders.dispatch (checked per field)
+router.put('/dispatch-settings', can('finance.settlements', 'orders.dispatch'), dispatchControl.updateSettings);
+router.get('/shoppers/:id/cash-limit', can('shoppers.view', 'finance.view'), dispatchControl.getShopperCashLimit);
 
 // Customers
 router.get('/customers', can('customers.view'), people.listCustomers);
 router.get('/customers/:id', can('customers.view'), people.getCustomer);
+// Phase 44: account controls (block / card only), COD limit, risk indicators
+const customerControls = require('../controllers/admin/adminCustomerControlsController');
+router.patch('/customers/:id/status', can('customers.manage'), customerControls.setStatus);
+router.patch('/customers/:id/cod-limit', can('customers.manage'), customerControls.setCodLimit);
+router.get('/customers/:id/risk', can('customers.view'), customerControls.getRisk);
+router.get('/customer-controls/settings', can('customers.view'), customerControls.getSettings);
+router.put('/customer-controls/settings', can('customers.manage', 'security.settings'), customerControls.updateSettings);
+// GetMe credit (phase 43): balance + history; giving credit over the
+// limit waits for the Super Admin (approval type customer.credit)
+const creditTarget = (target) => (req, res, next) => {
+  req.body = { ...(req.body || {}), target };
+  next();
+};
+router.get('/customers/:id/credit', can('customers.view'), supportCases.getCustomerCredit);
+router.post('/customers/:id/credit', can('support.credit'), creditTarget('customer'), approvals.requireApproval('customer.credit'), supportCases.giveCustomerCredit);
+approvals.register('customer.credit', supportCases.creditHandler);
+
+// Support cases (phase 43): customers report a problem with a delivered
+// order; staff reply, assign, and resolve (decline / no money with
+// support.cases, GetMe credit with support.credit, card refund with
+// finance.refund - both over their limits wait for the Super Admin)
+router.get('/support/cases', can('support.cases'), supportCases.listCases);
+router.get('/support/staff', can('support.cases'), supportCases.listAssignableStaff);
+router.get('/support/cases/:id', can('support.cases', 'support.credit', 'finance.refund'), supportCases.getCase);
+router.patch('/support/cases/:id/assign', can('support.cases'), supportCases.assignCase);
+router.patch('/support/cases/:id/status', can('support.cases'), supportCases.setStatus);
+router.post('/support/cases/:id/reply', can('support.cases'), supportCases.reply);
+router.post('/support/cases/:id/notes', can('support.cases'), supportCases.addNote);
+router.post('/support/cases/:id/resolve', can('support.cases'), supportCases.resolveCase);
+router.post('/support/cases/:id/credit', can('support.credit'), creditTarget('case'), approvals.requireApproval('customer.credit'), supportCases.resolveWithCredit);
+router.post('/support/cases/:id/refund', can('finance.refund'), approvals.requireApproval('support.refund'), supportCases.resolveWithRefund);
+approvals.register('support.refund', supportCases.resolveWithRefund);
 
 // Shoppers
 router.get('/shoppers', can('shoppers.view'), people.listShoppers);
@@ -190,6 +240,18 @@ router.post('/shoppers/:id/activation-code', can('shoppers.manage'), registerAdm
 router.patch('/shoppers/:id/vehicle-restriction', can('shoppers.manage'), changeAdmin.setVehicleRestriction);
 router.get('/shoppers/:id/profile-history', can('shoppers.manage'), changeAdmin.getProfileHistory);
 
+// Phase 46: document expiry dates (shoppers.manage edits, audited),
+// training quiz settings, shopper help requests (incidents.manage)
+router.get('/shoppers/:id/compliance', can('shoppers.view', 'shoppers.manage'), compliance.getCompliance);
+router.patch('/shoppers/:id/documents', can('shoppers.manage'), compliance.updateDocuments);
+router.get('/shopper-training/settings', can('shoppers.view', 'shoppers.manage'), training.getSettings);
+router.put('/shopper-training/settings', can('shoppers.manage'), training.updateSettings);
+router.get('/incidents', can('incidents.manage'), incidents.listIncidents);
+router.get('/incidents/:id', can('incidents.manage'), incidents.getIncident);
+router.post('/incidents/:id/acknowledge', can('incidents.manage'), incidents.acknowledgeIncident);
+router.post('/incidents/:id/resolve', can('incidents.manage'), incidents.resolveIncident);
+router.post('/incidents/:id/notes', can('incidents.manage'), incidents.addIncidentNote);
+
 // Every money movement and accrual (finance_ledger view)
 router.get('/ledger', can('finance.view'), settlements.getLedger);
 
@@ -218,5 +280,14 @@ router.delete('/settings/pricing/versions/:id', can('settings.pricing'), setting
 router.get('/promos', can('shops.view'), promos.listPromos);
 router.post('/promos', can('promos.manage'), promos.createPromo);
 router.patch('/promos/:id', can('promos.manage'), promos.updatePromo);
+
+// Phase 47: grocery operations report, shop onboarding + account
+// manager, promotion results (controllers/admin/adminGrowthOpsController.js)
+router.get('/reports/operations', can('reports.view'), growthOps.getOperationsReport);
+router.get('/shops/:id/onboarding', can('shops.view'), growthOps.getShopOnboarding);
+router.patch('/shops/:id/onboarding', can('shops.manage'), growthOps.updateShopOnboarding);
+router.get('/staff-directory', can('shops.manage'), growthOps.getStaffDirectory);
+router.get('/promos/:id/results', can('reports.view', 'promos.manage'), growthOps.getPromoResults);
+router.get('/offers/:id/results', can('reports.view', 'shops.manage'), growthOps.getOfferResults);
 
 module.exports = router;

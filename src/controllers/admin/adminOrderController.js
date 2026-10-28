@@ -14,6 +14,8 @@ const { broadcastOrderChange } = require('../../realtime');
 const { reconcileInBackground, refundOrderAmount, owedForOrder } = require('../../payments/paymentService');
 const { refreshOrderSettlement } = require('../settlementController');
 const { cancelMoney } = require('../../orders/cancelPolicy');
+// Phase 44: GetMe credit on orders
+const orderCredit = require('../../payments/orderCredit');
 
 const {
   getOfferHolders,
@@ -375,6 +377,12 @@ const getOrder = async (req, res) => {
 
     const cancellationRow = cancellationResult.rows[0] || null;
 
+    // Phase 44: GetMe credit used on the order (GetMe pays it, like a
+    // promo discount) and what went back to the customer's credit
+    const creditApplied = orderCredit.creditOf(order);
+    const creditReturned = creditApplied > 0 ? await orderCredit.creditReturnedFor(pool, orderId) : 0;
+    const creditUsed = round2(Math.max(0, creditApplied - creditReturned));
+
     // Refunds an admin gave (disputes, goodwill) are approved, not owed
     const goodwill = round2(
       (
@@ -546,6 +554,11 @@ const getOrder = async (req, res) => {
           getmeFeePercent: Number(order.getme_fee_percent || 0),
           getmeFeeKept: toNumber(order.getme_fee_kept),
           totalAmount: Number(order.total_amount || 0),
+          // Phase 44: GetMe credit (applied at checkout, returned, kept)
+          creditApplied,
+          creditReturned,
+          creditUsed,
+          amountToPay: round2(Math.max(0, Number(order.total_amount || 0) - creditApplied)),
           shopperPay: Number(order.shopper_pay || 0),
           failedDeliveryAt: order.failed_delivery_at,
         },
@@ -646,7 +659,9 @@ const getOrder = async (req, res) => {
           owed: round2(owed),
           goodwillRefunds: goodwill,
           collected,
-          difference: round2(collected - Math.max(0, owed - goodwill)),
+          // Phase 44: GetMe credit paid part of what was owed
+          creditUsed,
+          difference: round2(collected + creditUsed - Math.max(0, owed - goodwill)),
           groceryCost: round2(storePaymentsResult.rows.reduce((sum, row) => sum + Number(row.amount_paid), 0)),
           groceriesReimbursable: round2(
             storePaymentsResult.rows
@@ -708,6 +723,7 @@ const cancelOrder = async (req, res) => {
     // the order's status before and the money position are recorded
     const client = await pool.connect();
     let result = { rows: [] };
+    let creditBack = null;
 
     try {
       await client.query('BEGIN');
@@ -739,11 +755,12 @@ const cancelOrder = async (req, res) => {
 
       if (result.rows.length > 0) {
         const money = await cancelMoney(client, before);
-        const owed = await owedForOrder(client, {
+        // In money (card / cash): GetMe credit pays first (phase 44)
+        const owed = orderCredit.moneyPart(await owedForOrder(client, {
           ...before,
           status: 'cancelled',
           failed_delivery_at: failedDelivery ? new Date() : null,
-        });
+        }), before);
 
         await client.query(
           `
@@ -767,6 +784,10 @@ const cancelOrder = async (req, res) => {
             owed,
           ]
         );
+
+        // Phase 44: unused GetMe credit back with the cancel (once)
+        const after = (await client.query('SELECT * FROM orders WHERE id = $1', [orderId])).rows[0];
+        creditBack = await orderCredit.settleOrderCredit(client, after);
       }
 
       await client.query('COMMIT');
@@ -808,6 +829,8 @@ const cancelOrder = async (req, res) => {
     }
 
     broadcastOrderChange(io, orderId, { event: 'order-status-changed', status: 'cancelled' });
+
+    if (creditBack?.created) orderCredit.emitCreditBalance(io, order.customer_id);
 
     // Paid by saved card: the card gets back all but what the customer
     // still owes (groceries bought; + delivery on a failed delivery)

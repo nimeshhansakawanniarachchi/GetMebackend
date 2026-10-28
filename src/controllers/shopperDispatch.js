@@ -14,6 +14,9 @@ const {
   createShopperNotification,
 } = require('./shopperNotificationController');
 
+// Phase 45: shopper cash limit
+const cashLimit = require('../dispatch/cashLimit');
+
 // =====================================================
 // SHOPPER DISPATCH
 // A waiting order is offered to shoppers closest to the shop first
@@ -52,10 +55,14 @@ const DISPATCH_TICK_MS = 1000;
 // anyVehicle: ignore the preference (nearby vehicles on the map).
 // =====================================================
 
+// Phase 45: shoppers a staff member released from this order are left
+// out (includeExcluded: the admin candidate list shows them), and on
+// cash orders so are shoppers at / over the cash limit
+// (ignoreCashLimit: the admin list shows them, flagged).
 const getEligibleShoppers = async (
   orderId,
   client = db,
-  { anyVehicle = false } = {}
+  { anyVehicle = false, includeExcluded = false, ignoreCashLimit = false } = {}
 ) => {
   const [shopsResult, shoppersResult] = await Promise.all([
     client.query(
@@ -83,6 +90,9 @@ const getEligibleShoppers = async (
         -- phase 35: no restricted vehicle / expired licence
         AND sh.vehicle_restriction IS NULL
         AND (sh.licence_expiry IS NULL OR sh.licence_expiry >= CURRENT_DATE)
+        -- phase 46: no expired revenue licence / insurance
+        AND (sh.revenue_licence_expiry IS NULL OR sh.revenue_licence_expiry >= CURRENT_DATE)
+        AND (sh.insurance_expiry IS NULL OR sh.insurance_expiry >= CURRENT_DATE)
         AND sh.latitude IS NOT NULL
         AND sh.longitude IS NOT NULL
         -- Busy shoppers (any unfinished order) aren't offered more
@@ -91,6 +101,16 @@ const getEligibleShoppers = async (
           FROM orders busy
           WHERE busy.shopper_id = sh.id
             AND busy.status <> ALL($3::text[])
+        )
+        -- Phase 45: released from this order by staff
+        AND (
+          $5
+          OR NOT EXISTS (
+            SELECT 1
+            FROM order_dispatch_exclusions x
+            WHERE x.order_id = o.id
+              AND x.shopper_id = sh.id
+          )
         )
         -- NULL preference = any vehicle. After
         -- VEHICLE_FALLBACK_SECONDS of searching, vehicles that cost
@@ -119,7 +139,7 @@ const getEligibleShoppers = async (
           )
         )
       `,
-      [orderId, anyVehicle, FINISHED_STATUSES, VEHICLE_FALLBACK_SECONDS]
+      [orderId, anyVehicle, FINISHED_STATUSES, VEHICLE_FALLBACK_SECONDS, includeExcluded]
     ),
   ]);
 
@@ -129,7 +149,7 @@ const getEligibleShoppers = async (
     return [];
   }
 
-  return shoppersResult.rows
+  const inRange = shoppersResult.rows
     .map((shopper) => {
       const distances = shops.map((shop) =>
         distanceKm(
@@ -153,6 +173,9 @@ const getEligibleShoppers = async (
         shopper.farthestKm <= OFFER_RADIUS_KM
     )
     .sort((a, b) => a.nearestKm - b.nearestKm);
+
+  // Phase 45: cash orders skip shoppers at / over the cash limit
+  return ignoreCashLimit ? inRange : cashLimit.dropOverLimit(orderId, inRange, client);
 };
 
 // =====================================================
@@ -320,7 +343,14 @@ const dispatchOrder = async ({ io = null, orderId }) => {
     // One dispatcher per order at a time (accept locks the same row)
     const orderResult = await client.query(
       `
-      SELECT id, status, shopper_id
+      SELECT
+        id,
+        status,
+        shopper_id,
+        -- Phase 45: an exclusive staff offer pauses forwarding
+        dispatch_exclusive_shopper_id,
+        dispatch_paused_until IS NOT NULL AS has_pause,
+        COALESCE(dispatch_paused_until > NOW(), false) AS paused
       FROM orders
       WHERE id = $1
       FOR UPDATE
@@ -395,8 +425,28 @@ const dispatchOrder = async ({ io = null, orderId }) => {
       ? Math.min(...offers.map((offer) => offer.ageSeconds))
       : Infinity;
 
+    // Phase 45: staff offered it to one shopper exclusively. No
+    // forwarding while that shopper still holds the offer and the
+    // pause runs; once it ends, or the shopper hides it / can no
+    // longer take it, the pause is cleared and forwarding resumes.
+    const exclusiveId = Number(order.dispatch_exclusive_shopper_id) || null;
+    const exclusiveWaiting =
+      order.paused && holders.some((offer) => offer.shopperId === exclusiveId);
+
+    if (order.has_pause && !exclusiveWaiting) {
+      await client.query(
+        `
+        UPDATE orders
+        SET dispatch_paused_until = NULL, dispatch_exclusive_shopper_id = NULL
+        WHERE id = $1
+        `,
+        [orderId]
+      );
+    }
+
     const forwardDue =
-      holders.length === 0 || newestOfferAge >= FORWARD_SECONDS;
+      !exclusiveWaiting &&
+      (holders.length === 0 || newestOfferAge >= FORWARD_SECONDS);
 
     let next = null;
 
@@ -492,8 +542,11 @@ const dispatchWaitingOrders = async ({ io = null } = {}) => {
 
 let dispatchLoopBusy = false;
 
-const startDispatchLoop = (io) =>
-  setInterval(async () => {
+const startDispatchLoop = (io) => {
+  // Cash limit notifications from background checks (phase 45)
+  cashLimit.useIo(io);
+
+  return setInterval(async () => {
     if (dispatchLoopBusy) {
       return;
     }
@@ -506,6 +559,7 @@ const startDispatchLoop = (io) =>
       dispatchLoopBusy = false;
     }
   }, DISPATCH_TICK_MS);
+};
 
 // =====================================================
 // DOES THIS SHOPPER HOLD THE OFFER?
@@ -574,4 +628,6 @@ module.exports = {
   dispatchWaitingOrders,
   startDispatchLoop,
   shopperHoldsOffer,
+  // Phase 45: staff offers alert the chosen shopper the same way
+  alertOfferedShopper,
 };

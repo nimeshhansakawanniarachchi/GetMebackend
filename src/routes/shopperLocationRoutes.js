@@ -533,6 +533,15 @@ router.post('/status', async (req, res) => {
         return res.status(403).json({ success: false, code: vehicleBlock.code, message: vehicleBlock.message });
       }
 
+      // Phase 46: expired revenue licence / insurance (DOCUMENTS_EXPIRED),
+      // then the training quiz before the first time online (TRAINING_REQUIRED)
+      const complianceBlock =
+        await require('../compliance/documents').goOnlineBlock(shopperId);
+
+      if (complianceBlock) {
+        return res.status(403).json({ success: false, ...complianceBlock });
+      }
+
     }
 
 

@@ -80,9 +80,12 @@ const owedFor = (order, sums) => {
   return round2(Math.max(0, Number(order.total_amount || 0) - (sums?.refunds || 0)));
 };
 
-const stateFor = (order, { sums, cards = [], earning }) => {
+const stateFor = (order, { sums, cards = [], earning, credit = 0 }) => {
   const method = String(order.payment_method || '').toLowerCase() === 'cash' ? 'cash' : 'card';
-  const owed = owedFor(order, sums);
+  // Phase 44: GetMe credit pays first; amountOwed below is what the
+  // customer pays in money (card / cash) - payments/orderCredit.js
+  const orderOwed = owedFor(order, sums);
+  const owed = round2(Math.max(0, orderOwed - credit));
   const cancelled = order.status === 'cancelled';
   const finalAmount = FINAL_STATUSES.includes(order.status);
   let status;
@@ -110,7 +113,10 @@ const stateFor = (order, { sums, cards = [], earning }) => {
     const waiting = cards.some((row) => row.status === 'pending' && !row.abandoned_at);
     const latest = cards[cards.length - 1];
 
-    if (charged <= 0) {
+    if (charged <= 0 && credit > 0 && owed <= 0.009 && !cancelled) {
+      // Phase 44: GetMe credit covers the whole order (nothing to charge)
+      status = 'paid_online';
+    } else if (charged <= 0) {
       status = waiting
         ? 'payment_pending'
         : latest?.status === 'failed' && !cancelled
@@ -143,8 +149,11 @@ const stateFor = (order, { sums, cards = [], earning }) => {
     status,
     label: LABELS[status],
     tone: TONES[status],
-    // What the customer owes for the order now
+    // What the customer owes for the order now, in money (after credit)
     amountOwed: owed,
+    // Phase 44: owed before GetMe credit, and the credit applied
+    orderOwed,
+    creditApplied: credit,
     // Money GetMe holds from the customer (card net of refunds, or
     // cash recorded as collected)
     amountPaid,
@@ -172,7 +181,7 @@ const paymentStatesFor = async (orders, client = pool) => {
     return states;
   }
 
-  const [sumRows, cardRows, earningRows] = await Promise.all([
+  const [sumRows, cardRows, earningRows, creditRows] = await Promise.all([
     client.query(
       `
       SELECT
@@ -198,7 +207,11 @@ const paymentStatesFor = async (orders, client = pool) => {
       'SELECT order_id, cash_collected, cash_status, created_at FROM shopper_earnings WHERE order_id = ANY($1)',
       [ids]
     ),
+    // Phase 44: read here (callers pass rows with different columns)
+    client.query('SELECT id, credit_applied FROM orders WHERE id = ANY($1) AND credit_applied > 0', [ids]),
   ]);
+
+  const credits = new Map(creditRows.rows.map((row) => [Number(row.id), round2(row.credit_applied)]));
 
   const sums = new Map(sumRows.rows.map((row) => [Number(row.order_id), row]));
   const earnings = new Map(earningRows.rows.map((row) => [Number(row.order_id), row]));
@@ -212,7 +225,7 @@ const paymentStatesFor = async (orders, client = pool) => {
 
   list.forEach((order) => {
     const id = Number(order.id);
-    states.set(id, stateFor(order, { sums: sums.get(id), cards: cards.get(id) || [], earning: earnings.get(id) }));
+    states.set(id, stateFor(order, { sums: sums.get(id), cards: cards.get(id) || [], earning: earnings.get(id), credit: credits.get(id) || 0 }));
   });
 
   return states;

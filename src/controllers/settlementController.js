@@ -8,6 +8,8 @@ const { createShopperNotification } = require('./shopperNotificationController')
 const { syncOrderReimbursement } = require('./storePaymentController');
 const { changeEarningsSafely, walletFor, cashOrders, listCashSettlements, recordCashSettlement } = require('../wallet/shopperWallet');
 const { owedForOrder, heldForOrder } = require('../payments/paymentService');
+// Phase 44: GetMe credit pays part of an order (credit first)
+const orderCredit = require('../payments/orderCredit');
 
 // Did the customer's money for a finished order reach GetMe? (backend
 // records only, never the app's success screen)
@@ -17,8 +19,11 @@ const { owedForOrder, heldForOrder } = require('../payments/paymentService');
 // -> 'confirmed' | 'unconfirmed'
 const customerPaymentCheck = async (client, order) => {
   if (order.payment_method === 'card') {
-    const owed = await owedForOrder(client, order);
+    // The card's part only: GetMe credit paid the rest (phase 44)
+    const owed = orderCredit.moneyPart(await owedForOrder(client, order), order);
     const { held, payments } = await heldForOrder(client, order.id);
+
+    if (owed <= 0.01 && orderCredit.creditOf(order) > 0) return 'confirmed';
 
     return payments > 0 && held >= owed - 0.01 ? 'confirmed' : 'unconfirmed';
   }
@@ -70,6 +75,10 @@ const announce = (io, shopperId, payload = {}) => {
   } catch (error) {
     console.error('❌ SETTLEMENT SOCKET ERROR:', error.message);
   }
+
+  // Phase 45: the cash the shopper holds may have crossed the cash limit
+  // (either way); notified once per crossing
+  require('../dispatch/cashLimit').refreshInBackground(shopperId, io);
 };
 
 // =====================================================
@@ -175,7 +184,8 @@ const recordDeliveredEarnings = async (order, io) => {
         )
       ).rows[0].total;
 
-      cashCollected = round2(Math.max(0, Number(order.total_amount || 0) - Number(refunds || 0)));
+      // Phase 44: less the GetMe credit used (GetMe pays that part)
+      cashCollected = round2(Math.max(0, Number(order.total_amount || 0) - Number(refunds || 0) - orderCredit.creditOf(order)));
     }
 
     const row = (
@@ -213,6 +223,12 @@ const recordDeliveredEarnings = async (order, io) => {
     // Payable only once every shop's bill is in and approved
     await refreshOrderSettlement(order.id, io);
 
+    // Phase 45: cash collected at the door may take the shopper over
+    // the cash limit
+    if (row && cashCollected > 0) {
+      await require('../dispatch/cashLimit').refreshState(order.shopper_id, { io });
+    }
+
     return row || null;
   } catch (error) {
     console.error('❌ RECORD EARNINGS ERROR:', order?.id, error.message);
@@ -243,6 +259,7 @@ const refreshOrderSettlement = async (orderId, io) => {
   const client = await pool.connect();
   let shopperId = null;
   let changed = false;
+  let creditCustomerId = null;
 
   try {
     await client.query('BEGIN');
@@ -257,6 +274,10 @@ const refreshOrderSettlement = async (orderId, io) => {
     }
 
     shopperId = Number(order.shopper_id) || null;
+
+    // Phase 44: a final order gives back the GetMe credit it doesn't need (once)
+    const credit = await orderCredit.settleOrderCredit(client, order);
+    if (credit?.created) creditCustomerId = Number(order.customer_id);
 
     if (order.status === 'cancelled') {
       // A cancelled cash order was never paid (nothing collected at the
@@ -378,6 +399,8 @@ const refreshOrderSettlement = async (orderId, io) => {
   if (changed && shopperId) {
     announce(io, shopperId, { orderId: id });
   }
+
+  if (creditCustomerId) await orderCredit.emitCreditBalance(io, creditCustomerId);
 
   return { changed };
 };
@@ -999,6 +1022,8 @@ const LEDGER_TYPES = [
   'reimbursement_payout',
   'cash_deposit',
   'getme_net_revenue',
+  // Phase 44: GetMe credit customers used on settled orders (GetMe's cost)
+  'credit_used',
 ];
 
 const getLedger = async (req, res) => {

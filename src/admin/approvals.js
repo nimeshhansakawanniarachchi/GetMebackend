@@ -45,6 +45,37 @@ const TYPES = {
     describe: (req) => `Adjust shopper earnings on order #${req.params.orderId} by Rs ${round2(req.body?.amount || 0).toFixed(2)}: ${String(req.body?.note || '').slice(0, 120)}`,
     fields: ['amount', 'note'],
   },
+  // Phase 43: GetMe credit from a support case or straight to a customer.
+  // The limit is customer_controls_settings.credit_approval_limit; the
+  // route sets body.target ('case' | 'customer'), so the handler knows
+  // which one it is when it runs after approval.
+  'customer.credit': {
+    label: 'GetMe credit',
+    entityTypeOf: (req) => (req.body?.target === 'case' ? 'support_case' : 'customer'),
+    permission: 'support.credit',
+    limitOf: async () => {
+      const row = (await pool.query('SELECT credit_approval_limit FROM customer_controls_settings WHERE id = 1')).rows[0];
+      return Number(row?.credit_approval_limit ?? 5000);
+    },
+    amountOf: (req) => Math.abs(Number(req.body?.amount) || 0),
+    entityOf: (req) => req.params.id,
+    describe: (req) =>
+      `GetMe credit Rs ${round2(req.body?.amount || 0).toFixed(2)} ${req.body?.target === 'case' ? `on support case #${req.params.id}` : `to customer #${req.params.id}`}: ${String(req.body?.note || req.body?.reason || '').slice(0, 120)}`,
+    fields: ['amount', 'note', 'reason', 'requestId', 'target'],
+  },
+  // Phase 43: card refund that resolves a support case. Same limit and
+  // permission as an order refund (refund_approval_limit, finance.refund);
+  // a separate type so the approved request resolves the case too.
+  'support.refund': {
+    label: 'Customer refund (support case)',
+    entityType: 'support_case',
+    permission: 'finance.refund',
+    limitColumn: 'refund_approval_limit',
+    amountOf: (req) => Math.abs(Number(req.body?.amount) || 0),
+    entityOf: (req) => req.params.id,
+    describe: (req) => `Refund Rs ${round2(req.body?.amount || 0).toFixed(2)} to the card for support case #${req.params.id}: ${String(req.body?.note || '').slice(0, 120)}`,
+    fields: ['amount', 'note'],
+  },
 };
 
 const handlers = {};
@@ -92,7 +123,7 @@ const requireApproval = (type) => async (req, res, next) => {
 
   try {
     const amount = spec.amountOf(req);
-    const limit = Number((await limits())[spec.limitColumn]);
+    const limit = spec.limitOf ? await spec.limitOf() : Number((await limits())[spec.limitColumn]);
     if (amount <= limit) return next();
 
     const payload = Object.fromEntries(spec.fields.filter((f) => req.body?.[f] !== undefined).map((f) => [f, req.body[f]]));
@@ -103,7 +134,7 @@ const requireApproval = (type) => async (req, res, next) => {
         await pool.query(
           `INSERT INTO admin_approval_requests (action_type, entity_type, entity_id, amount, summary, params, payload, requested_by)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-          [type, spec.entityType, String(spec.entityOf(req)), round2(amount), spec.describe(req).slice(0, 300), JSON.stringify(req.params || {}), JSON.stringify(payload), req.admin.adminId]
+          [type, spec.entityTypeOf ? spec.entityTypeOf(req) : spec.entityType, String(spec.entityOf(req)), round2(amount), spec.describe(req).slice(0, 300), JSON.stringify(req.params || {}), JSON.stringify(payload), req.admin.adminId]
         )
       ).rows[0];
     } catch (error) {

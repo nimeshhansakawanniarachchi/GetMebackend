@@ -4,6 +4,8 @@ const { readPage, pageMeta } = require('../../utils/pagination');
 
 const { emitToAdmins, broadcastCatalogChange } = require('../../realtime');
 const { applyOffersToProducts } = require('../../pricing/offers');
+// Phase 47: onboarding progress + account manager on the shops list
+const { DONE_COUNT_SQL: ONBOARDING_DONE_SQL, TOTAL_ITEMS: ONBOARDING_TOTAL } = require('../../shops/onboarding');
 
 const {
   MIN_WHITE_CONTRAST,
@@ -16,7 +18,7 @@ const SHOP_STATUSES = ['pending', 'approved', 'rejected', 'suspended'];
 
 // =====================================================
 // SHOPS
-// GET /api/admin/shops?status=&search=&page=
+// GET /api/admin/shops?status=&search=&page=&onboarding=incomplete|complete
 // =====================================================
 
 const listShops = async (req, res) => {
@@ -35,6 +37,13 @@ const listShops = async (req, res) => {
     if (search) {
       params.push(`%${search}%`);
       where.push(`(LOWER(s.shop_name) LIKE $${params.length} OR LOWER(s.email) LIKE $${params.length} OR LOWER(COALESCE(s.address, '')) LIKE $${params.length})`);
+    }
+
+    // Phase 47: complete = every onboarding item done (computed live)
+    if (req.query.onboarding === 'complete') {
+      where.push(`${ONBOARDING_DONE_SQL} = ${ONBOARDING_TOTAL}`);
+    } else if (req.query.onboarding === 'incomplete') {
+      where.push(`${ONBOARDING_DONE_SQL} < ${ONBOARDING_TOTAL}`);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -58,8 +67,12 @@ const listShops = async (req, res) => {
           FROM order_items oi
           JOIN orders o ON o.id = oi.order_id
           WHERE oi.shop_id = s.id AND o.status = 'delivered'
-        ) AS sales
+        ) AS sales,
+        ${ONBOARDING_DONE_SQL} AS onboarding_done,
+        s.onboarding_completed_at,
+        am.id AS manager_id, am.full_name AS manager_name
       FROM shops s
+      LEFT JOIN admins am ON am.id = s.account_manager_admin_id
       ${whereSql}
       ORDER BY
         CASE s.status WHEN 'pending' THEN 0 ELSE 1 END,
@@ -89,6 +102,13 @@ const listShops = async (req, res) => {
         orderCount: row.order_count,
         sales: row.sales,
         createdAt: row.created_at,
+        accountManager: row.manager_id ? { id: row.manager_id, name: row.manager_name } : null,
+        onboarding: {
+          done: Number(row.onboarding_done),
+          total: ONBOARDING_TOTAL,
+          complete: Number(row.onboarding_done) === ONBOARDING_TOTAL,
+          completedAt: row.onboarding_completed_at,
+        },
       })),
     });
   } catch (error) {

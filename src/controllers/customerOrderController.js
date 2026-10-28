@@ -54,6 +54,8 @@ const {
   readReason: readCancelReason,
 } = require('../orders/cancelPolicy');
 const { refreshOrderSettlement } = require('./settlementController');
+// Phase 44: GetMe credit spent on an order goes back when it is cancelled
+const { settleOrderCredit, emitCreditBalance } = require('../payments/orderCredit');
 
 // ==================================================
 // SOCKET.IO ORDER EVENT HELPER
@@ -1537,6 +1539,13 @@ const getCustomerOrders = async (
               totalAmount:
                 totalAmount,
 
+              // Phase 44: GetMe credit used, and what is left to pay in money
+              creditApplied:
+                Number(order.credit_applied) || 0,
+
+              amountToPay:
+                Math.max(0, Math.round((totalAmount - (Number(order.credit_applied) || 0)) * 100) / 100),
+
               itemsTotal:
                 itemsTotal,
 
@@ -2564,6 +2573,13 @@ const getCustomerOrderById =
           totalAmount:
             totalAmount,
 
+          // Phase 44: GetMe credit used, and what is left to pay in money
+          creditApplied:
+            Number(order.credit_applied) || 0,
+
+          amountToPay:
+            Math.max(0, Math.round((totalAmount - (Number(order.credit_applied) || 0)) * 100) / 100),
+
           itemsTotal:
             itemsTotal,
 
@@ -3064,6 +3080,7 @@ const cancelCustomerOrder = async (req, res) => {
   let cancelled = null;
   let cancellation = null;
   let offerHolders = [];
+  let creditBack = null;
 
   try {
     await client.query('BEGIN');
@@ -3155,6 +3172,9 @@ const cancelCustomerOrder = async (req, res) => {
       return res.status(409).json({ success: false, code: 'ALREADY_CANCELLED', message: 'This order is already cancelled.' });
     }
 
+    // Phase 44: unused GetMe credit back with the cancel (once)
+    creditBack = await settleOrderCredit(client, cancelled);
+
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
@@ -3188,6 +3208,8 @@ const cancelCustomerOrder = async (req, res) => {
   // owed), and shopper settlement for any groceries already bought
   reconcileInBackground(orderId, { io, reason: 'Order cancelled by customer' });
 
+  if (creditBack?.created) emitCreditBalance(io, customerId);
+
   if (order.shopper_id) {
     refreshOrderSettlement(orderId, io).catch((error) =>
       console.error('❌ cancel settlement refresh:', error.message)
@@ -3207,6 +3229,8 @@ const cancelCustomerOrder = async (req, res) => {
         : 0,
       status: Number(cancellation.amount_held || 0) > 0.009 ? 'pending_gateway' : 'none',
     },
+    // Phase 44: GetMe credit given back to the account (at once)
+    creditReturned: creditBack?.returned || 0,
   });
 };
 

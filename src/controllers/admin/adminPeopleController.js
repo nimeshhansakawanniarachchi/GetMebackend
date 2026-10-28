@@ -8,6 +8,9 @@ const { SHOPPER_PAY_SQL } = require('../shopperPay');
 
 const { emitToAdmins } = require('../../realtime');
 
+// Phase 44: customer account controls
+const { toControls } = require('./adminCustomerControlsController');
+
 const {
   createShopperNotification,
 } = require('../shopperNotificationController');
@@ -30,12 +33,20 @@ const listCustomers = async (req, res) => {
     const like = searchParam(req.query);
 
     const params = [];
-    let whereSql = '';
+    const where = [];
 
     if (like) {
       params.push(like);
-      whereSql = `WHERE LOWER(c.full_name) LIKE $1 OR LOWER(c.email) LIKE $1 OR c.mobile LIKE $1`;
+      where.push(`(LOWER(c.full_name) LIKE $${params.length} OR LOWER(c.email) LIKE $${params.length} OR c.mobile LIKE $${params.length})`);
     }
+
+    // Phase 44: ?status=active|restricted|blocked
+    if (['active', 'restricted', 'blocked'].includes(req.query.status)) {
+      params.push(req.query.status);
+      where.push(`c.account_status = $${params.length}`);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const countResult = await pool.query(
       `SELECT COUNT(*)::int AS total FROM customers c ${whereSql}`,
@@ -48,6 +59,7 @@ const listCustomers = async (req, res) => {
       `
       SELECT
         c.id, c.full_name, c.mobile, c.email, c.created_at,
+        c.account_status, c.cod_limit,
         COUNT(o.id)::int AS order_count,
         COALESCE(SUM(o.total_amount) FILTER (WHERE o.status = 'delivered'), 0)::float AS total_spent,
         MAX(o.created_at) AS last_order_at
@@ -73,6 +85,9 @@ const listCustomers = async (req, res) => {
         totalSpent: row.total_spent,
         lastOrderAt: row.last_order_at,
         createdAt: row.created_at,
+        // Phase 44
+        accountStatus: row.account_status,
+        codLimit: row.cod_limit != null ? Number(row.cod_limit) : null,
       })),
     });
   } catch (error) {
@@ -98,7 +113,13 @@ const getCustomer = async (req, res) => {
 
     const [customerResult, ordersResult, addressesResult, statsResult, paymentsResult, ratingsResult, auditResult] = await Promise.all([
       pool.query(
-        'SELECT id, full_name, mobile, email, created_at FROM customers WHERE id = $1',
+        `SELECT c.id, c.full_name, c.mobile, c.email, c.created_at,
+                c.account_status, c.status_reason, c.status_changed_at, c.status_changed_by, c.cod_limit,
+                a.full_name AS changed_by_name, s.default_cod_limit
+         FROM customers c
+         LEFT JOIN admins a ON a.id = c.status_changed_by
+         LEFT JOIN customer_controls_settings s ON s.id = 1
+         WHERE c.id = $1`,
         [customerId]
       ),
       pool.query(
@@ -197,6 +218,14 @@ const getCustomer = async (req, res) => {
         orderCount: stats.orders,
         // Collected from the customer (card net of refunds + cash)
         totalSpent: spent,
+      },
+      // Phase 44: account controls (status, reason, COD limit)
+      controls: {
+        ...toControls(customer),
+        defaultCodLimit: customer.default_cod_limit != null ? Number(customer.default_cod_limit) : null,
+        effectiveCodLimit: customer.cod_limit != null
+          ? Number(customer.cod_limit)
+          : customer.default_cod_limit != null ? Number(customer.default_cod_limit) : null,
       },
       stats: {
         orders: stats.orders,

@@ -5,6 +5,8 @@ const { broadcastOrderChange } = require('../realtime');
 
 const gateway = require('./payhere');
 const { encryptToken, decryptToken } = require('./cardVault');
+// Phase 44: GetMe credit pays part of an order (credit first)
+const orderCredit = require('./orderCredit');
 
 // =====================================================
 // SAVED CARDS + CARD PAYMENTS
@@ -790,7 +792,13 @@ const heldForOrder = async (client, orderId) => {
 const extraChargeFor = async (client, order, newTotal) => {
   const { held, payments } = await heldForOrder(client, order.id);
 
-  if (payments === 0) {
+  // Phase 44: a card order that GetMe credit covered in full was never
+  // charged at booking; once booked, a later rise is charged to its card
+  const creditOnlyBooked =
+    payments === 0 && order.payment_method === 'card' && orderCredit.creditOf(order) > 0 &&
+    !['pending_shopper_search', 'shopper_search_cancelled', 'cancelled'].includes(order.status);
+
+  if (payments === 0 && !creditOnlyBooked) {
     return { cardPaid: false, extra: 0 };
   }
 
@@ -798,7 +806,21 @@ const extraChargeFor = async (client, order, newTotal) => {
     Number(order.total_amount || 0) - (await owedForOrder(client, order))
   );
 
-  const extra = round2(Number(newTotal) - refunds - held);
+  // Credit pays its part first (phase 44)
+  const extra = round2(Number(newTotal) - refunds - held - orderCredit.creditOf(order));
+
+  if (creditOnlyBooked) {
+    const saved = order.payment_card_id
+      ? await getOwnerCard({ type: 'customer', id: Number(order.customer_id) }, Number(order.payment_card_id), client)
+      : null;
+
+    return {
+      cardPaid: true,
+      extra: extra > 0.009 ? extra : 0,
+      cardId: saved ? Number(saved.id) : null,
+      card: saved ? { brand: saved.card_brand, last4: saved.card_last4, label: cardLabel(saved.card_brand, saved.card_last4) } : null,
+    };
+  }
 
   // The card the order was paid with (latest charge)
   const card = (
@@ -860,7 +882,8 @@ const bookingChargeFor = async (client, order, cardId = null) => {
     await client.query('UPDATE orders SET payment_card_id = $2 WHERE id = $1', [order.id, card.id]);
   }
 
-  const extra = await owedForOrder(client, order);
+  // GetMe credit covers its part first (phase 44)
+  const extra = orderCredit.moneyPart(await owedForOrder(client, order), order);
 
   return {
     needed: extra > 0.009,
@@ -968,6 +991,7 @@ const reconcileOrderPayments = async (orderId, { io, reason } = {}) => {
 
   const client = await pool.connect();
   const changed = [];
+  let creditReturnedTo = null;
 
   try {
     await client.query('BEGIN');
@@ -981,14 +1005,20 @@ const reconcileOrderPayments = async (orderId, { io, reason } = {}) => {
       return null;
     }
 
+    // Phase 44: unused GetMe credit of a final order goes back (once)
+    const credit = await orderCredit.settleOrderCredit(client, order);
+    if (credit?.created) creditReturnedTo = Number(order.customer_id);
+
     const { held, payments } = await heldForOrder(client, id);
 
     if (payments === 0) {
-      await client.query('ROLLBACK');
+      await client.query('COMMIT');
+      if (creditReturnedTo) await orderCredit.emitCreditBalance(io, creditReturnedTo);
       return null;
     }
 
-    let excess = round2(held - (await owedForOrder(client, order)));
+    // The card holds only its part: credit pays first (phase 44)
+    let excess = round2(held - orderCredit.moneyPart(await owedForOrder(client, order), order));
 
     if (excess > 0.009) {
       // Newest charges are given back first
@@ -1040,6 +1070,8 @@ const reconcileOrderPayments = async (orderId, { io, reason } = {}) => {
 
     rows.forEach((row) => emitPayment(io, row, { reason: 'refund' }));
   }
+
+  if (creditReturnedTo) await orderCredit.emitCreditBalance(io, creditReturnedTo);
 
   return { refundedPayments: changed.length };
 };
@@ -1171,7 +1203,9 @@ const orderPaymentSummary = async (order) => {
 
   const charged = round2(settled.reduce((sum, payment) => sum + payment.amount, 0));
   const refunded = round2(settled.reduce((sum, payment) => sum + payment.refundedAmount, 0));
-  const owed = await owedForOrder(pool, order);
+  const orderOwed = await owedForOrder(pool, order);
+  // Phase 44: what the customer owes in money (GetMe credit pays first)
+  const owed = orderCredit.moneyPart(orderOwed, order);
   const latestCard = [...settled].reverse().find((payment) => payment.card)?.card || null;
 
   return {
@@ -1183,6 +1217,11 @@ const orderPaymentSummary = async (order) => {
     amountRefunded: refunded,
     netPaid: round2(charged - refunded),
     amountOwed: owed,
+    // Phase 44: GetMe credit used on the order (owed before credit, credit
+    // applied at checkout, credit given back once the order is final)
+    orderOwed,
+    creditApplied: orderCredit.creditOf(order),
+    creditReturned: orderCredit.creditOf(order) > 0 ? await orderCredit.creditReturnedFor(pool, order.id) : 0,
     card: latestCard,
     transactions,
   };

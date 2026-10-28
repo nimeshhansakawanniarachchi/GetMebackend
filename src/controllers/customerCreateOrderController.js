@@ -16,6 +16,34 @@ const { broadcastOrderChange } = require('../realtime');
 
 const { getOwnerCard, toPublicCard } = require('../payments/paymentService');
 
+// Phase 44: account controls (card only / COD limit) + GetMe credit
+const accountControls = require('../customers/accountControls');
+const { balanceOf, spendCredit, round2 } = require('../support/credit');
+const { spentRequestId, emitCreditBalance } = require('../payments/orderCredit');
+
+// What checkout adds to a quote (additive fields only):
+//   paymentOptions: { cash: { allowed, code, reason, limit }, card: { allowed } }
+//   credit: { balance, applicable, applied }  applicable = min(balance, total)
+//   amountToPay: total - credit applied (when useCredit)
+const checkoutExtras = async (customerId, quote, useCredit, client = undefined) => {
+  const [controls, balance] = await Promise.all([
+    accountControls.controlsFor(customerId, client),
+    balanceOf(customerId, client),
+  ]);
+  const total = Number(quote?.totalAmount) || 0;
+  const applicable = round2(Math.max(0, Math.min(balance, total)));
+  const applied = useCredit ? applicable : 0;
+
+  return {
+    controls,
+    paymentOptions: accountControls.paymentOptionsFor(controls, total),
+    credit: { balance, applicable, applied },
+    amountToPay: round2(Math.max(0, total - applied)),
+  };
+};
+
+const readUseCredit = (body) => body?.useCredit === true || body?.useCredit === 'true';
+
 const MAX_ADDRESS_LENGTH = 500;
 const MAX_INSTRUCTIONS_LENGTH = 500;
 
@@ -79,6 +107,9 @@ const findOrderByRequest = async (customerId, requestId) => {
     promoCode: order.promo_code,
     discountAmount: Number(order.discount_amount),
     windowDiscount: Number(order.window_discount),
+    // Phase 44: GetMe credit used, and what is left to pay (card / cash)
+    creditApplied: Number(order.credit_applied) || 0,
+    amountToPay: Math.max(0, Math.round((Number(order.total_amount) - (Number(order.credit_applied) || 0)) * 100) / 100),
     deliveryDropoff: order.delivery_dropoff,
     deliveryInstructions: order.delivery_instructions,
     contactPhone: order.contact_phone,
@@ -123,6 +154,12 @@ const readQuoteInput = (body, customerId) => ({
 const getQuote = async (req, res) => {
   try {
     const quote = await buildQuote(readQuoteInput(req.body, req.customer.customerId));
+
+    // Phase 44: allowed payment methods (and why not) + GetMe credit
+    const extras = await checkoutExtras(req.customer.customerId, quote, readUseCredit(req.body));
+    quote.paymentOptions = extras.paymentOptions;
+    quote.credit = extras.credit;
+    quote.amountToPay = extras.amountToPay;
 
     return res.json({ success: true, quote });
   } catch (error) {
@@ -289,6 +326,54 @@ const createOrder = async (req, res) => {
       });
     }
 
+    // ================================================
+    // PHASE 44: ACCOUNT CONTROLS + GETME CREDIT
+    // The customer row is locked (FOR UPDATE) for the rest of this
+    // transaction: two orders placed at once spend the credit one after
+    // the other, so the balance can never go below zero.
+    // ================================================
+
+    const useCredit = readUseCredit(req.body);
+    await client.query('SELECT id FROM customers WHERE id = $1 FOR UPDATE', [customerId]);
+    const locked = await checkoutExtras(customerId, quote, useCredit, client);
+
+    quote.paymentOptions = locked.paymentOptions;
+    quote.credit = locked.credit;
+    quote.amountToPay = locked.amountToPay;
+
+    if (locked.controls?.status === 'blocked') {
+      return refuse(403, accountControls.blockedBody());
+    }
+
+    if (paymentMethod === 'cash' && !locked.paymentOptions.cash.allowed) {
+      const cash = locked.paymentOptions.cash;
+
+      return refuse(accountControls.cashRefusalStatus(cash.code), {
+        code: cash.code,
+        message: cash.reason,
+        limit: cash.limit,
+        quote,
+      });
+    }
+
+    // The credit the customer saw at checkout changed (spent on another
+    // order meanwhile): ask again before charging more
+    const expectedCredit = Number(req.body?.expectedCredit);
+
+    if (
+      useCredit &&
+      req.body?.expectedCredit != null && req.body.expectedCredit !== '' &&
+      Number.isFinite(expectedCredit) &&
+      Math.abs(expectedCredit - locked.credit.applied) > 0.009
+    ) {
+      return refuse(409, {
+        code: 'CREDIT_CHANGED',
+        message: `Your GetMe credit available for this order is now Rs ${locked.credit.applied.toFixed(2)}. Please review and confirm.`,
+        credit: locked.credit,
+        quote,
+      });
+    }
+
     const requestedPrimary = Number(req.body?.shopId);
     const primaryShop =
       quote.shops.find((shop) => shop.id === requestedPrimary) || quote.shops[0];
@@ -411,7 +496,30 @@ const createOrder = async (req, res) => {
       ]
     );
 
-    const order = orderResult.rows[0];
+    let order = orderResult.rows[0];
+
+    // Phase 44: GetMe credit pays part of the order, in this same
+    // transaction (customer row locked above). A retried request with
+    // the same requestId never gets here (duplicate answered above, or
+    // the unique request id rolls this whole transaction back).
+    let creditSpent = false;
+
+    if (useCredit && locked.credit.applicable > 0) {
+      const spent = await spendCredit(client, {
+        customerId,
+        wanted: quote.totalAmount,
+        orderId: order.id,
+        reason: `Used on order #${order.id}`,
+        clientRequestId: spentRequestId(order.id),
+      });
+
+      if (spent.applied > 0) {
+        order = (
+          await client.query('UPDATE orders SET credit_applied = $2 WHERE id = $1 RETURNING *', [order.id, spent.applied])
+        ).rows[0];
+        creditSpent = true;
+      }
+    }
 
     if (promo) {
       await client.query(
@@ -523,6 +631,9 @@ const createOrder = async (req, res) => {
       promoCode: order.promo_code,
       discountAmount: Number(order.discount_amount),
       windowDiscount: Number(order.window_discount),
+      // Phase 44: GetMe credit used, and what is left to pay (card / cash)
+      creditApplied: Number(order.credit_applied) || 0,
+      amountToPay: round2(Math.max(0, Number(order.total_amount) - (Number(order.credit_applied) || 0))),
       deliveryDropoff: order.delivery_dropoff,
       deliveryInstructions: order.delivery_instructions,
       contactPhone: order.contact_phone,
@@ -545,6 +656,8 @@ const createOrder = async (req, res) => {
 
     io?.to(`customer:${customerId}`).emit('order-update', { order: responseOrder });
     broadcastOrderChange(io, order.id, { event: 'order-created', status: order.status });
+
+    if (creditSpent) emitCreditBalance(io, customerId);
 
     return res.status(201).json({
       success: true,

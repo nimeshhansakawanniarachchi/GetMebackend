@@ -12,6 +12,7 @@ const jwt = require('jsonwebtoken');
 
 const db = require('../config/db');
 const authMiddleware = require('../middleware/authMiddleware');
+const { blockedBody } = require('../customers/accountControls');
 
 const router = express.Router();
 
@@ -198,7 +199,8 @@ router.post('/login', loginRateLimit, async (req, res) => {
         mobile,
         email,
         password_hash,
-        created_at
+        created_at,
+        account_status
        FROM customers
        WHERE LOWER(email) = $1 OR mobile = $1
        LIMIT 1`,
@@ -232,6 +234,16 @@ router.post('/login', loginRateLimit, async (req, res) => {
         success: false,
         message: 'Invalid email/mobile or password',
       });
+    }
+
+    // ==================================================
+    // BLOCKED ACCOUNT (phase 44): no new session
+    // ==================================================
+
+    if (customer.account_status === 'blocked') {
+      console.log('❌ Login refused: account blocked', customer.id);
+
+      return res.status(403).json(blockedBody());
     }
 
     // ==================================================

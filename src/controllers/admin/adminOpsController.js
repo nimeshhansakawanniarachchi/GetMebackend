@@ -642,7 +642,8 @@ const computeIssues = async () => {
     pool.query(
       `
       SELECT o.id, o.delivered_at,
-             GREATEST(0, o.total_amount - COALESCE(r.refunds, 0) - (
+             -- Phase 44: GetMe credit paid its part (o.credit_applied)
+             GREATEST(0, o.total_amount - COALESCE(r.refunds, 0) - o.credit_applied - (
         SELECT COALESCE(SUM((a.details->>'amount')::numeric), 0) FROM admin_audit_log a
         WHERE a.action = 'order.refund' AND a.entity_type = 'order' AND a.entity_id = (o.id)::text
           AND (a.details->>'amount') ~ '^[0-9]+(\.[0-9]+)?$'
@@ -659,7 +660,7 @@ const computeIssues = async () => {
           AND status IN ('paid', 'partially_refunded', 'refunded')
       ) p ON TRUE
       WHERE o.status = 'delivered' AND o.payment_method = 'card'
-        AND COALESCE(p.net, 0) < o.total_amount - COALESCE(r.refunds, 0) - (
+        AND COALESCE(p.net, 0) < o.total_amount - COALESCE(r.refunds, 0) - o.credit_applied - (
         SELECT COALESCE(SUM((a.details->>'amount')::numeric), 0) FROM admin_audit_log a
         WHERE a.action = 'order.refund' AND a.entity_type = 'order' AND a.entity_id = (o.id)::text
           AND (a.details->>'amount') ~ '^[0-9]+(\.[0-9]+)?$'

@@ -69,6 +69,9 @@ const LEDGER_ORDER = [
   ['reimbursement_payout', 'Reimbursements paid to shoppers', 'out'],
   ['cash_deposit', 'Cash deposited by shoppers', 'in'],
   ['getme_net_revenue', 'GetMe net revenue', 'accrual'],
+  // Phase 44: GetMe credit customers used on settled orders (GetMe pays
+  // it, like a promo discount; already inside net revenue)
+  ['credit_used', 'GetMe credit used by customers (GetMe cost)', 'accrual'],
 ];
 
 const getFinanceOverview = async (req, res) => {
@@ -113,7 +116,10 @@ const getFinanceOverview = async (req, res) => {
           (
             SELECT COALESCE(SUM(amount - refunded_amount), 0)::float FROM card_payments
             WHERE purpose IN ('order', 'order_extra') AND status = 'paid' AND abandoned_at IS NOT NULL
-          ) AS refunds_to_make
+          ) AS refunds_to_make,
+          -- Phase 43: unspent GetMe credit customers hold (shown on its own,
+          -- not part of totalOwedByGetMe)
+          (SELECT COALESCE(SUM(amount), 0)::float FROM customer_credit_entries) AS credit_outstanding
         `
       ),
       pool.query(
@@ -175,6 +181,7 @@ const getFinanceOverview = async (req, res) => {
         commission: amount('commission'),
         gatewayFees: amount('gateway_fee'),
         netRevenue: amount('getme_net_revenue'),
+        creditUsed: amount('credit_used'),
         shopperPayouts: amount('shopper_payout'),
         reimbursementPayouts: amount('reimbursement_payout'),
         cashDeposits: amount('cash_deposit'),
@@ -203,6 +210,7 @@ const getFinanceOverview = async (req, res) => {
         reimbursementHeld: round2(l.reimbursement_held),
         cashDueFromShoppers: round2(l.cash_due),
         refundsToMake: round2(l.refunds_to_make),
+        creditOutstanding: round2(l.credit_outstanding),
         totalOwedByGetMe: round2(l.earnings_awaiting + l.earnings_payable + l.earnings_held + l.reimbursement_pending + l.reimbursement_owed + l.reimbursement_held + l.refunds_to_make),
       },
       daily: daily.rows.map((row) => ({
@@ -249,6 +257,11 @@ const RECON_SQL = `
       COALESCE(cp.refunded, 0)::float AS card_refunded,
       COALESCE(cp.gateway, 0)::float AS gateway_fee,
       COALESCE(se.cash_collected, 0)::float AS cash_collected,
+      -- Phase 44: GetMe credit that paid part of the order (applied - returned)
+      GREATEST(0, o.credit_applied - COALESCE((
+        SELECT SUM(ce.amount) FROM customer_credit_entries ce
+        WHERE ce.order_id = o.id AND ce.kind = 'reversed' AND ce.client_request_id = 'order:' || o.id || ':credit-return'
+      ), 0))::float AS credit_used,
       COALESCE(se.net_amount, 0)::float AS shopper_earnings,
       se.status AS earnings_status,
       COALESCE(sp.reimbursable, 0)::float AS groceries_reimbursable,
@@ -296,7 +309,7 @@ const RECON_SQL = `
   )
   SELECT *,
     ROUND((card_charged - card_refunded + cash_collected)::numeric, 2)::float AS collected,
-    ROUND((card_charged - card_refunded + cash_collected - GREATEST(0, expected - goodwill_refunds))::numeric, 2)::float AS difference,
+    ROUND((card_charged - card_refunded + cash_collected + credit_used - GREATEST(0, expected - goodwill_refunds))::numeric, 2)::float AS difference,
     ROUND((card_charged - card_refunded + cash_collected - shopper_earnings - groceries_reimbursable - gateway_fee)::numeric, 2)::float AS net_revenue
   FROM base
 `;
@@ -330,6 +343,7 @@ const toReconRow = (row) => {
     cardCharged: round2(row.card_charged),
     cardRefunded: round2(row.card_refunded),
     cashCollected: round2(row.cash_collected),
+    creditUsed: round2(row.credit_used),
     collected: row.collected,
     difference: row.difference,
     shopperEarnings: round2(row.shopper_earnings),

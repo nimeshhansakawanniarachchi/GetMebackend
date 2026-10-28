@@ -18,7 +18,13 @@ const PERMISSIONS = {
   'orders.cancel': { group: 'Orders', label: 'Cancel orders / mark failed delivery' },
   'orders.notes': { group: 'Orders', label: 'Add support notes to orders' },
   'orders.chat': { group: 'Orders', label: 'Read customer-shopper chat of an order' },
+  // Phase 42+
+  'orders.dispatch': { group: 'Orders', label: 'Release an order from its shopper, offer it to a chosen shopper, re-dispatch' },
   'customers.view': { group: 'Customers', label: 'View customer details' },
+  'customers.manage': { group: 'Customers', label: 'Block or restrict customers, set cash-on-delivery limits' },
+  'support.cases': { group: 'Customers', label: 'Work the support case queue (reply, assign, close)' },
+  'support.credit': { group: 'Customers', label: 'Give customers GetMe credit (large amounts need Super Admin approval)' },
+  'incidents.manage': { group: 'Operations', label: 'Handle shopper help requests (incidents)' },
   'shoppers.view': { group: 'Shoppers', label: 'View shoppers' },
   'shoppers.manage': { group: 'Shoppers', label: 'Approve shoppers, review applications and change requests, register shoppers' },
   'shopper_applications.list': { group: 'Shoppers', label: 'See the shopper application list (no identity data)' },
@@ -77,16 +83,19 @@ const ROLE_PERMISSIONS = {
     'shoppers.view', 'shoppers.manage', 'shopper_applications.list',
     'shops.view', 'shops.manage', 'promos.manage', 'pricing.view', 'pricing.review',
     'liveops.view', 'reports.view', 'exports.orders', 'grocery.view',
+    'orders.dispatch', 'customers.manage', 'support.cases', 'incidents.manage',
   ],
   finance: [
     'dashboard.view', 'orders.view', 'customers.view', 'shoppers.view', 'shops.view',
     'pricing.view', 'pricing.review', 'reports.view', 'exports.orders', 'exports.finance',
     'finance.view', 'finance.refund', 'finance.store_bills', 'finance.settlements', 'finance.adjust',
     'finance.withdrawals', 'grocery.view', 'grocery.manage', 'grocery.cards',
+    'support.credit',
   ],
   support: [
     'dashboard.view', 'orders.view', 'orders.notes', 'orders.chat', 'customers.view',
     'shoppers.view', 'shopper_applications.list', 'shops.view', 'pricing.view', 'liveops.view',
+    'support.cases', 'support.credit', 'incidents.manage',
   ],
   // Technical work only: no customer data, money or staff
   developer: ['system.health', 'system.logs'],

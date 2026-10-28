@@ -27,4 +27,7 @@ router.post('/wallet/accounts', requireShopper, wallet.addAccount);
 router.delete('/wallet/accounts/:id', requireShopper, wallet.removeAccount);
 router.patch('/wallet/accounts/:id/default', requireShopper, wallet.makeDefaultAccount);
 
+// Phase 45: cash held for GetMe vs the cash limit (own status only)
+router.get('/cash-limit', requireShopper, require('../dispatch/cashLimit').getMyCashLimit);
+
 module.exports = router;
