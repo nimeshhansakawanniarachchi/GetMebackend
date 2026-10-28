@@ -15,6 +15,7 @@ const { postChatEvent } = require('../utils/chatEvents');
 const { reconcileInBackground } = require('../payments/paymentService');
 const { pendingRequestsBlock } = require('./orderItemRequestsController');
 const { recordDeliveredEarnings } = require('./settlementController');
+const { paymentStateFor } = require('../payments/orderPaymentState');
 
 const {
   createShopperNotification,
@@ -125,7 +126,7 @@ const acceptOrder = async (req, res) => {
   }
 
   const approvalResult = await db.query(
-    'SELECT approval_status FROM shoppers WHERE id = $1',
+    'SELECT approval_status, vehicle_restriction, licence_expiry FROM shoppers WHERE id = $1',
     [shopperId]
   );
 
@@ -134,6 +135,13 @@ const acceptOrder = async (req, res) => {
       success: false,
       message: 'Your account must be approved before you can accept batches.',
     });
+  }
+
+  // Vehicle no longer eligible (phase 35)
+  const vehicleBlock = require('../onboarding/changeRequests').eligibilityBlock(approvalResult.rows[0]);
+
+  if (vehicleBlock) {
+    return res.status(403).json({ success: false, code: vehicleBlock.code, message: vehicleBlock.message });
   }
 
   const client = await db.connect();
@@ -878,6 +886,37 @@ const verifyDeliveryPin = async (req, res) => {
       });
     }
 
+    // Cash collected at the door (body.cashCollectedAmount, sent by
+    // the app after the shopper confirms it): must be what the
+    // customer owes now. If the balance changed (an item refunded
+    // meanwhile) nothing is recorded and the app shows the new amount.
+    // A card order is never collected in cash.
+    const collectedInput = req.body?.cashCollectedAmount;
+
+    if (collectedInput !== undefined && collectedInput !== null) {
+      const paymentState = await paymentStateFor(order);
+      const collected = Number(collectedInput);
+
+      if (order.payment_method !== 'cash') {
+        return res.status(400).json({
+          success: false,
+          code: 'PAID_ONLINE',
+          message: 'This order was not a cash order - do not collect cash',
+          paymentState,
+        });
+      }
+
+      if (!Number.isFinite(collected) || Math.abs(collected - paymentState.amountOwed) > 0.009) {
+        return res.status(409).json({
+          success: false,
+          code: 'CASH_AMOUNT_CHANGED',
+          message: `The amount to collect is now LKR ${paymentState.amountOwed.toFixed(2)}. Collect that amount, then confirm again.`,
+          cashToCollect: paymentState.amountOwed,
+          paymentState,
+        });
+      }
+    }
+
     const updateResult = await db.query(
       `
       UPDATE orders
@@ -937,6 +976,8 @@ const verifyDeliveryPin = async (req, res) => {
       success: true,
       message: 'Delivery completed successfully',
       order: updatedOrder,
+      // Cash orders: now CASH COLLECTED (recorded once, above)
+      paymentState: await paymentStateFor(updatedOrder).catch(() => null),
     });
   } catch (error) {
     console.error('❌ verifyDeliveryPin error:', error);

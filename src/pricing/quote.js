@@ -5,11 +5,12 @@ const { distanceKm } = require('../controllers/shopperPay');
 const { getPricingSettings } = require('./settings');
 const { findSlot } = require('./slots');
 const { evaluatePromo, normalizePromoCode } = require('./promos');
-const { DEFAULT_VEHICLE, vehicleFeesFor } = require('./vehicles');
-const { applyOffersToProducts } = require('./offers');
+const { DEFAULT_VEHICLE } = require('./vehicles');
+const { resolveDeliveryRoute } = require('./deliveryRoute');
+const { deliveryFares } = require('./deliveryFare');
+const { loadLiveOffers, bestOfferFor, purchaseLimitFor } = require('./offers');
 const {
   round2,
-  deliveryFee,
   serviceUnits,
   servicePerUnit,
   serviceFee,
@@ -112,10 +113,28 @@ const buildReplacement = (item, shopId, originalProductId, products) => {
 };
 
 
+// Units an offer counts on a line: pieces for products sold each,
+// packs for kg / L products (offers.js)
+const offerUnitsOf = (productUnit, quantity, amount) =>
+  productUnit === 'item' ? quantity * amount : quantity;
+
 // =====================================================
 // BUILD QUOTE
 // Prices everything from the database. Client prices/fees
 // are never used.
+// items[].seenPackPrice (optional): the pack price the customer was
+// shown (cart). Lines whose price moved since are listed in
+// quote.priceChanges, so checkout can ask before charging more.
+// client + lockProducts: price inside the caller's transaction with
+// the product rows share-locked, so a price edit can't land between
+// pricing and saving the order.
+// Delivery fee: pricing/deliveryFare.js on the ROAD route of the
+// order's shops -> the customer (pricing/deliveryRoute.js).
+//   route: an already resolved route (deliveryRouteFor) - order
+//          creation resolves it before opening its transaction
+//   savedDelivery: { vehicleFees, pricing } of a placed order -
+//          changes to that order keep the fee it was charged
+//          (no new route, no new rates)
 // =====================================================
 
 const buildQuote = async ({
@@ -129,6 +148,10 @@ const buildQuote = async ({
   tipAmount = 0,
   promoCode = null,
   customerId = null,
+  client = pool,
+  lockProducts = false,
+  route = undefined,
+  savedDelivery = null,
 }) => {
   const settings = await getPricingSettings();
   const issues = [];
@@ -189,26 +212,51 @@ const buildQuote = async ({
   ];
 
   const productsResult = productIds.length
-    ? await pool.query(
+    ? await client.query(
         `SELECT id, shop_id, product_name, category, price, unit, stock_quantity, is_available, image_url
-         FROM products WHERE id = ANY($1::int[])`,
+         FROM products WHERE id = ANY($1::int[])
+         ORDER BY id
+         ${lockProducts ? 'FOR SHARE' : ''}`,
         [productIds]
       )
     : { rows: [] };
 
-  // Shop offers (pricing/offers.js): price = offer price,
-  // original_price = shelf price. A scheduled order only gets an
+  // Shop offers (pricing/offers.js). A scheduled order only gets an
   // offer that is still running when its slot starts.
   const slotStart =
     slot && scheduledDate && scheduledStartTime
       ? new Date(`${scheduledDate}T${String(scheduledStartTime).slice(0, 5)}:00`)
       : null;
 
-  const pricedProducts = await applyOffersToProducts(productsResult.rows, {
+  const offers = await loadLiveOffers(productsResult.rows.map((row) => row.shop_id), {
     until: slotStart && !Number.isNaN(slotStart.getTime()) ? slotStart : null,
+    client,
   });
 
-  const products = new Map(pricedProducts.map((row) => [row.id, row]));
+  // price = the price for one unit, as the product lists show it
+  // (replacements use it too); shelf_price = the shop's normal price
+  const products = new Map(
+    productsResult.rows.map((row) => {
+      const best = offers.length ? bestOfferFor(row, offers) : null;
+
+      return [row.id, { ...row, shelf_price: Number(row.price), price: best ? best.price : Number(row.price) }];
+    })
+  );
+
+  // Offer limits ("Limit 4 per order") count every line of a product
+  const unitsByProduct = new Map();
+
+  safeItems.forEach((item) => {
+    const product = item?.custom ? null : products.get(Number(item?.productId));
+    if (!product) return;
+
+    const productUnit = PACK_RULES[product.unit] ? product.unit : 'item';
+    const units = offerUnitsOf(productUnit, Number(item?.quantity) || 0, item?.amount == null ? 1 : Number(item.amount) || 0);
+
+    unitsByProduct.set(product.id, (unitsByProduct.get(product.id) || 0) + units);
+  });
+
+  const priceChanges = [];
 
   const shopIds = [
     ...new Set(
@@ -223,7 +271,7 @@ const buildQuote = async ({
   ];
 
   const shopsResult = shopIds.length
-    ? await pool.query(
+    ? await client.query(
         `SELECT id, shop_name, image_url, latitude, longitude, status, is_open
          FROM shops WHERE id = ANY($1::int[])`,
         [shopIds]
@@ -299,11 +347,15 @@ const buildQuote = async ({
       amount,
       unit: packUnit,
       productUnit,
-      unitPrice: Number(product.price),
+      // Shop's normal price; unitPrice below is what this line pays
+      regularUnitPrice: product.shelf_price,
+      unitPrice: product.shelf_price,
       // Shelf price + offer when one applies (else null)
-      originalUnitPrice: product.original_price != null ? Number(product.original_price) : null,
-      offerId: product.offer?.id || null,
-      offerLabel: product.offer?.label || null,
+      originalUnitPrice: null,
+      offerId: null,
+      offerLabel: null,
+      // Pack price as the product lists show it (the cart's price)
+      listPackPrice: 0,
       packPrice: 0,
       lineTotal: 0,
       savings: 0,
@@ -334,6 +386,27 @@ const buildQuote = async ({
       return line;
     }
 
+    // Best offer for this many units (a "buy 3+" offer needs 3 here)
+    // (from the shop's normal price: product.price is already the list price)
+    const best = offers.length
+      ? bestOfferFor({ ...product, price: product.shelf_price }, offers, { units: offerUnitsOf(productUnit, quantity, amount) })
+      : null;
+
+    if (best) {
+      line.unitPrice = best.price;
+      line.originalUnitPrice = best.originalPrice;
+      line.offerId = best.offer.id;
+      line.offerLabel = best.offer.label;
+    }
+
+    // While an offer with a limit runs, the customer can't buy more
+    const limit = offers.length ? purchaseLimitFor(product, offers) : null;
+
+    if (limit != null && unitsByProduct.get(product.id) > limit && !issues.some((i) => i.code === 'purchase_limit' && i.productId === product.id)) {
+      issues.push(issue('purchase_limit', `Limit ${limit} of ${product.product_name} per order while the offer runs`, { index, productId: product.id, limit }));
+    }
+
+    line.listPackPrice = round2(Number(product.price) * amount * rule.factor);
     line.packPrice = round2(line.unitPrice * amount * rule.factor);
     line.lineTotal = round2(line.packPrice * quantity);
 
@@ -343,11 +416,26 @@ const buildQuote = async ({
       );
     }
 
+    // The customer saw a different price for this pack: list it
+    const seen = Number(item?.seenPackPrice);
+
+    if (item?.seenPackPrice != null && item.seenPackPrice !== '' && Number.isFinite(seen) && Math.abs(seen - line.listPackPrice) > 0.009) {
+      priceChanges.push({
+        index,
+        productId: product.id,
+        name: product.product_name,
+        oldPackPrice: round2(seen),
+        newPackPrice: line.listPackPrice,
+        direction: line.listPackPrice > seen ? 'up' : 'down',
+      });
+    }
+
     return line;
   });
 
   // ---------------------------------------------------
-  // Shops: availability + distance
+  // Shops: availability (+ distance as the crow flies, for
+  // display only - the fee uses the road route below)
   // ---------------------------------------------------
 
   const shopSummaries = shopIds
@@ -361,10 +449,6 @@ const buildQuote = async ({
 
       if (shop.status !== 'approved' || shop.is_open === false) {
         issues.push(issue('shop_unavailable', `${shop.shop_name} is not taking orders right now`, { shopId: id }));
-      }
-
-      if (km != null && km > settings.delivery.maxKm) {
-        issues.push(issue('too_far', `${shop.shop_name} doesn't deliver to this address (${km} km away)`, { shopId: id }));
       }
 
       return {
@@ -387,14 +471,70 @@ const buildQuote = async ({
   // Saved through shop offers; itemsTotal already has it taken off
   const offerSavings = round2(lines.reduce((sum, line) => sum + (line.savings || 0), 0));
 
-  const distances = shopSummaries.map((shop) => shop.distanceKm).filter(Number.isFinite);
-  const farthestKm = distances.length ? Math.max(...distances) : null;
-
+  // ---------------------------------------------------
+  // Delivery fee (road route; every vehicle's fare)
   // Priced for the default vehicle (Bike); the customer picks the
-  // vehicle on Find a shopper, which re-prices from vehicleFees
-  const baseDelivery = deliveryFee(settings, farthestKm, Math.max(1, shopSummaries.length)) ?? 0;
-  const vehicleFees = vehicleFeesFor(settings, baseDelivery);
-  const delivery = vehicleFees[DEFAULT_VEHICLE];
+  // vehicle on Find a shopper, which re-prices from vehicleFees.
+  // Time rules use the delivery time: the slot start for a
+  // scheduled order, now otherwise.
+  // ---------------------------------------------------
+
+  const fareAt = slotStart && !Number.isNaN(slotStart.getTime()) ? slotStart : new Date();
+  let vehicleFees = {};
+  let deliveryInfo = null;
+
+  if (savedDelivery?.vehicleFees) {
+    vehicleFees = savedDelivery.vehicleFees;
+    deliveryInfo = savedDelivery.pricing || null;
+  } else if (hasLocation && shopSummaries.length > 0) {
+    const resolved =
+      route !== undefined
+        ? route
+        : await resolveDeliveryRoute({
+            shops: shopSummaries.map((shop) => shops.get(shop.id)).map((shop) => ({ id: shop.id, latitude: shop.latitude, longitude: shop.longitude })),
+            destination: { latitude, longitude },
+          });
+
+    if (!resolved?.ok) {
+      issues.push(issue(resolved?.code || 'route_unavailable', resolved?.message || "We couldn't work out the delivery route right now. Please try again in a moment."));
+    } else {
+      if (resolved.distanceKm > Number(settings.delivery.maxKm)) {
+        issues.push(issue('too_far', `This address is ${resolved.distanceKm} km from the store by road. GetMe delivers up to ${settings.delivery.maxKm} km.`, { distanceKm: resolved.distanceKm }));
+      }
+
+      // Live traffic only for a delivery starting now
+      const live = resolved.traffic && option !== 'scheduled';
+      const priced = deliveryFares(settings, {
+        route: { distanceKm: resolved.distanceKm, carMinutes: live ? resolved.carMinutes : resolved.typicalCarMinutes },
+        shopCount: shopSummaries.length,
+        at: fareAt,
+      });
+
+      vehicleFees = priced.vehicleFees;
+      deliveryInfo = {
+        route: {
+          source: resolved.source,
+          distanceKm: resolved.distanceKm,
+          // 'live_traffic' = Google with current traffic;
+          // 'typical' = usual travel time (no live traffic)
+          timeBasis: live ? 'live_traffic' : 'typical',
+          carMinutes: live ? resolved.carMinutes : resolved.typicalCarMinutes,
+          shopOrder: resolved.shopOrder,
+          legs: resolved.legs,
+          computedAt: resolved.computedAt,
+        },
+        shopCount: shopSummaries.length,
+        pricedAt: new Date().toISOString(),
+        fareTime: fareAt.toISOString(),
+        settingsVersionId: settings.versionId ?? null,
+        fares: priced.fares,
+      };
+    }
+  }
+
+  const delivery = Number(vehicleFees[DEFAULT_VEHICLE]) || 0;
+  const roadKm = deliveryInfo?.route?.distanceKm ?? null;
+  const bikeMinutes = deliveryInfo?.fares?.[DEFAULT_VEHICLE]?.estimatedTravelMinutes;
   const fast = option === 'fast' ? settings.fastFee : 0;
   // LKR 50 (settings) per item unit, paid to the shopper
   const units = serviceUnits(lines);
@@ -439,7 +579,7 @@ const buildQuote = async ({
     0
   );
 
-  const priorityEta = estimateMinutes(farthestKm, totalPacks, Math.max(1, shopSummaries.length));
+  const priorityEta = estimateMinutes(roadKm, totalPacks, Math.max(1, shopSummaries.length), bikeMinutes);
   const extraMinutes = Number(settings.standardExtraMinutes) || 0;
   const standardEta = { min: priorityEta.min + extraMinutes, max: priorityEta.max + extraMinutes };
 
@@ -450,9 +590,14 @@ const buildQuote = async ({
     shops: shopSummaries,
     itemsTotal,
     offerSavings,
+    // Lines priced differently from what the customer last saw
+    priceChanges,
     hasCustomItems: lines.some((line) => line.custom),
     deliveryFee: delivery,
     vehicleFees,
+    // Route, travel time and every vehicle's fare breakdown
+    // (saved on the order as orders.delivery_pricing)
+    delivery: deliveryInfo,
     fastDeliveryFee: fast,
     serviceFee: service,
     serviceUnits: units,
@@ -467,7 +612,8 @@ const buildQuote = async ({
     windowDiscount,
     savings: round2(discount + windowDiscount),
     totalAmount: totals.totalAmount,
-    distanceKm: farthestKm,
+    // Road km of the delivery route (null until it's known)
+    distanceKm: roadKm,
     estimatedMinutes: option === 'standard' ? standardEta : priorityEta,
     // What the checkout shows on each option card
     options: {

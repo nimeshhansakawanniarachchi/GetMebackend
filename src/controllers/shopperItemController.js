@@ -8,6 +8,7 @@ const { postChatEvent } = require('../utils/chatEvents');
 const { reconcileInBackground } = require('../payments/paymentService');
 const { serviceUnitsSql } = require('../pricing/fees');
 const { deductForOrderItem } = require('../inventory/stockService');
+const { itemHasPendingReport } = require('./orderPriceReportsController');
 
 // Barcodes compare without spaces or leading zeros (UPC-A and
 // EAN-13 encode the same code with an extra 0); empty -> null.
@@ -759,6 +760,16 @@ const updateItemShoppingStatus = async (req, res) => {
 
     if (await rejectInactiveOrder(res, item.order_id)) {
       return undefined;
+    }
+
+    // The customer is deciding on a higher shelf price: wait for them
+    if (nextStatus !== 'pending' && (await itemHasPendingReport(itemId))) {
+      return res.status(409).json({
+        success: false,
+        code: 'PRICE_REPORT_PENDING',
+        message: 'The customer is still answering the price change for this item. Wait for their answer.',
+        itemId,
+      });
     }
 
     // -------------------------------------------------

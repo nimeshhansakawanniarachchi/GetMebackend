@@ -18,8 +18,15 @@ const { pendingRequestsBlock } = require('./orderItemRequestsController');
 //   uploaded (lockStorePaymentForBill), then it is final.
 // Admin:
 //   GET   /api/admin/store-payments?status=review|owed|reimbursed
-//   PATCH /api/admin/store-payments/:id/review    { action: approve|query, note }
-//   PATCH /api/admin/store-payments/:id/reimburse { reference }
+//   PATCH /api/admin/store-payments/:id/review    { action: approve|query|release, note }
+//   PATCH /api/admin/store-payments/:id/reimburse -> 409 USE_WITHDRAWALS
+//         (phase 32: reimbursements are paid only through shopper
+//         withdrawals, shopperWallet.changeWithdrawal 'pay')
+// Phase 32 checks before a reimbursement is released
+// (settlementController.refreshOrderSettlement): the customer's payment
+// is confirmed by the backend (customer_payment_check), and a receipt
+// photo (SHA-256) or till reference already used on another order
+// sends the store payment to admin review (duplicate_flags).
 //
 // Expected amount = the shop's bought items as priced for the
 // customer (same rules as the Shopper App's checkout total). A
@@ -34,6 +41,10 @@ const METHODS = ['cash', 'card', 'lankaqr'];
 
 // settlementController requires this file; load it when first used
 const settlement = () => require('./settlementController');
+const wallet = () => require('../wallet/shopperWallet');
+
+// Reviews a bill can have and still be reimbursed (settlementController)
+const APPROVED_REVIEWS = ['ok', 'approved'];
 
 const METHOD_LABELS = {
   cash: 'Cash',
@@ -70,10 +81,14 @@ const reviewTolerance = (expected) => {
 // More than this over the expected cost is refused as a typo
 const hardLimit = (expected) => round2(expected + Math.max(5000, expected * 0.5));
 
-// Line total for one bought item (ShopperApp utils/pricing getLineTotal)
+// Line total for one bought item (ShopperApp utils/pricing getLineTotal).
+// A shelf price the shopper reported (order_item_price_reports) is
+// what the till charges, even when GetMe absorbed the difference.
 const lineTotal = (item) => {
   const status = String(item.shopping_status || '').toLowerCase();
-  const unitPrice = item.unit_price != null ? Number(item.unit_price) : null;
+  const orderUnit = item.unit_price != null ? Number(item.unit_price) : null;
+  const shelfUnit = item.shelf_unit_price != null && status !== 'replaced' ? Number(item.shelf_unit_price) : null;
+  const unitPrice = shelfUnit ?? orderUnit;
   const foundWeight = Number(item.found_weight);
 
   if (foundWeight > 0 && unitPrice !== null) {
@@ -81,10 +96,13 @@ const lineTotal = (item) => {
     return round2(unitPrice * foundWeight * factor);
   }
 
+  const orderPack = Number(item.price ?? item.unit_price ?? 0);
   const pack =
     status === 'replaced' && item.replacement_product_price != null
       ? Number(item.replacement_product_price)
-      : Number(item.price ?? item.unit_price ?? 0);
+      : shelfUnit != null && orderUnit > 0
+      ? round2((orderPack / orderUnit) * shelfUnit)
+      : orderPack;
 
   const found = Number(item.found_quantity);
   const quantity = found > 0 ? found : Number(item.quantity) > 0 ? Number(item.quantity) : 1;
@@ -127,12 +145,22 @@ const toPublic = (row) =>
         reimbursementReference: row.reimbursement_reference,
         reimbursedAt: row.reimbursed_at,
         locked: Boolean(row.locked_at),
+        customerPaymentCheck: row.customer_payment_check,
+        customerPaymentNote: row.customer_payment_note || null,
+        duplicateFlags: Array.isArray(row.duplicate_flags) ? row.duplicate_flags : [],
+        reimbursementWithdrawalId: row.reimbursement_withdrawal_id != null ? Number(row.reimbursement_withdrawal_id) : null,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         // admin list joins
         shopName: row.shop_name ?? undefined,
         shopperName: row.shopper_name ?? undefined,
         billCount: row.bill_count != null ? Number(row.bill_count) : undefined,
+        // Order + customer payment, to compare with the receipt
+        orderStatus: row.order_status ?? undefined,
+        orderPaymentMethod: row.order_payment_method ?? undefined,
+        orderTotal: row.order_total != null ? Number(row.order_total) : undefined,
+        orderItemsTotal: row.order_items_total != null ? Number(row.order_items_total) : undefined,
+        customerPaid: row.customer_paid != null ? Number(row.customer_paid) : undefined,
       }
     : null;
 
@@ -392,21 +420,96 @@ const saveStorePayment = async (req, res) => {
   }
 };
 
+// Same receipt photo (SHA-256 of the file) or same till reference at
+// the same shop already used on another order. Not refused (one till
+// receipt can honestly cover two orders of a batch): an admin checks.
+const findDuplicates = async (client, payment, hashes = []) => {
+  const flags = [];
+
+  if (hashes.length > 0) {
+    const photos = (
+      await client.query(
+        `
+        SELECT DISTINCT order_id, shop_id FROM order_shop_bills
+        WHERE bill_hashes && $1::text[] AND NOT (order_id = $2 AND shop_id = $3)
+        ORDER BY order_id
+        LIMIT 5
+        `,
+        [hashes, payment.order_id, payment.shop_id]
+      )
+    ).rows;
+
+    photos.forEach((other) => flags.push({ type: 'receipt_photo', orderId: Number(other.order_id), shopId: Number(other.shop_id) }));
+  }
+
+  if (payment.reference && payment.reference.trim().length >= 4) {
+    const references = (
+      await client.query(
+        `
+        SELECT order_id, shop_id FROM store_payments
+        WHERE shop_id = $1 AND LOWER(reference) = LOWER($2) AND order_id <> $3
+        ORDER BY order_id
+        LIMIT 5
+        `,
+        [payment.shop_id, payment.reference.trim(), payment.order_id]
+      )
+    ).rows;
+
+    references.forEach((other) => flags.push({ type: 'reference', orderId: Number(other.order_id), shopId: Number(other.shop_id) }));
+  }
+
+  return flags;
+};
+
+const duplicateNote = (flags) =>
+  `Possible duplicate: ${flags
+    .map((flag) => `${flag.type === 'receipt_photo' ? 'same receipt photo as' : 'same till reference as'} order #${flag.orderId}`)
+    .join('; ')}`.slice(0, 300);
+
 // Bill upload (shopperPaymentController.uploadBill): the payment must
-// be recorded first; the bill makes it final.
+// be recorded first; the bill makes it final. hashes = SHA-256 of the
+// receipt photos (duplicate check).
 // -> { error } (409 reply body) or { row }
-const lockStorePaymentForBill = async (orderId, shopId, io) => {
-  const row = (
-    await pool.query(
-      `
-      UPDATE store_payments
-      SET locked_at = COALESCE(locked_at, NOW()), updated_at = NOW()
-      WHERE order_id = $1 AND shop_id = $2
-      RETURNING *
-      `,
-      [orderId, shopId]
-    )
-  ).rows[0];
+const lockStorePaymentForBill = async (orderId, shopId, io, { hashes = [] } = {}) => {
+  const client = await pool.connect();
+  let row;
+
+  try {
+    await client.query('BEGIN');
+
+    const current = (
+      await client.query('SELECT * FROM store_payments WHERE order_id = $1 AND shop_id = $2 FOR UPDATE', [orderId, shopId])
+    ).rows[0];
+
+    if (current) {
+      const flags = await findDuplicates(client, current, hashes);
+      // A duplicate goes to review unless an admin already approved it
+      const review = flags.length > 0 && current.review_status !== 'approved';
+
+      row = (
+        await client.query(
+          `
+          UPDATE store_payments
+          SET locked_at = COALESCE(locked_at, NOW()),
+              duplicate_flags = $3::jsonb,
+              review_status = CASE WHEN $4::boolean THEN 'needs_review' ELSE review_status END,
+              review_note = CASE WHEN $4::boolean THEN $5::varchar ELSE review_note END,
+              updated_at = NOW()
+          WHERE id = $1 AND shop_id = $2
+          RETURNING *
+          `,
+          [current.id, shopId, JSON.stringify(flags), review, review ? duplicateNote(flags) : null]
+        )
+      ).rows[0];
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 
   if (!row) {
     return {
@@ -434,7 +537,12 @@ const hasStorePayment = async (orderId, shopId) =>
 // =====================================================
 
 const STATUS_FILTERS = {
-  review: "sp.review_status IN ('needs_review', 'queried')",
+  // Needs an admin: bill difference / query / duplicate / customer
+  // payment not confirmed
+  review: "(sp.review_status IN ('needs_review', 'queried') OR (sp.customer_payment_check = 'unconfirmed' AND sp.reimbursement_status = 'held'))",
+  duplicates: "jsonb_array_length(sp.duplicate_flags) > 0",
+  unpaid: "sp.customer_payment_check = 'unconfirmed' AND sp.reimbursement_status = 'held'",
+  pending: "sp.reimbursement_status = 'pending'",
   owed: "sp.reimbursement_status = 'owed'",
   reimbursed: "sp.reimbursement_status = 'reimbursed'",
 };
@@ -452,6 +560,16 @@ const listStorePayments = async (req, res) => {
           sp.*,
           s.shop_name,
           sh.full_name AS shopper_name,
+          o.status AS order_status,
+          o.payment_method AS order_payment_method,
+          o.total_amount AS order_total,
+          o.items_total AS order_items_total,
+          (
+            SELECT COALESCE(SUM(cp.amount - cp.refunded_amount), 0)
+            FROM card_payments cp
+            WHERE cp.order_id = sp.order_id AND cp.purpose IN ('order', 'order_extra')
+              AND cp.status IN ('paid', 'partially_refunded')
+          ) AS customer_paid,
           (
             SELECT COALESCE(SUM(GREATEST(1, COALESCE(jsonb_array_length(b.bill_urls), 0))), 0)
             FROM order_shop_bills b
@@ -460,6 +578,7 @@ const listStorePayments = async (req, res) => {
         FROM store_payments sp
         LEFT JOIN shops s ON s.id = sp.shop_id
         LEFT JOIN shoppers sh ON sh.id = sp.shopper_id
+        LEFT JOIN orders o ON o.id = sp.order_id
         WHERE ${filter}
         ORDER BY (sp.review_status = 'needs_review') DESC, sp.created_at DESC
         LIMIT $1 OFFSET $2
@@ -471,7 +590,11 @@ const listStorePayments = async (req, res) => {
         SELECT
           COALESCE(SUM(amount_paid) FILTER (WHERE reimbursement_status = 'owed'), 0)::float AS owed,
           COALESCE(SUM(amount_paid) FILTER (WHERE reimbursement_status = 'held'), 0)::float AS held,
-          COUNT(*) FILTER (WHERE review_status IN ('needs_review', 'queried'))::int AS to_review,
+          COUNT(*) FILTER (WHERE review_status IN ('needs_review', 'queried')
+            OR (customer_payment_check = 'unconfirmed' AND reimbursement_status = 'held'))::int AS to_review,
+          COUNT(*) FILTER (WHERE jsonb_array_length(duplicate_flags) > 0)::int AS duplicates,
+          COUNT(*) FILTER (WHERE customer_payment_check = 'unconfirmed' AND reimbursement_status = 'held')::int AS unpaid,
+          COALESCE(SUM(amount_paid) FILTER (WHERE reimbursement_status = 'pending'), 0)::float AS pending,
           COALESCE(SUM(amount_paid) FILTER (
             WHERE reimbursement_status = 'reimbursed' AND reimbursed_at >= date_trunc('month', NOW())
           ), 0)::float AS reimbursed_this_month
@@ -494,23 +617,88 @@ const listStorePayments = async (req, res) => {
 
 // approve: the amount is accepted and can be reimbursed
 // query: held until the shopper sorts it out (note says why)
+// release: the customer's payment isn't confirmed (e.g. a cash order
+//          cancelled after purchase) but GetMe reimburses the shopper
+//          anyway; who and why are recorded
 const reviewStorePayment = async (req, res) => {
   const id = toId(req.params.id);
   const action = req.body?.action;
   const note = String(req.body?.note || '').trim().slice(0, 300) || null;
 
-  if (!id || !['approve', 'query'].includes(action)) {
-    return res.status(400).json({ success: false, message: 'Choose approve or query' });
+  if (!id || !['approve', 'query', 'release'].includes(action)) {
+    return res.status(400).json({ success: false, message: 'Choose approve, query or release' });
   }
 
   if (action === 'query' && !note) {
     return res.status(400).json({ success: false, message: 'Say what needs checking' });
   }
 
+  if (action === 'release' && (!note || note.length < 3)) {
+    return res.status(400).json({ success: false, message: 'Say why GetMe reimburses it without the customer payment' });
+  }
+
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
+
+    const before = (await client.query('SELECT * FROM store_payments WHERE id = $1', [id])).rows[0];
+
+    if (!before) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Store payment not found' });
+    }
+
+    // Same lock as withdrawals: a query can't take back grocery money
+    // the shopper already withdrew or requested
+    await client.query('SELECT id FROM shoppers WHERE id = $1 FOR UPDATE', [before.shopper_id]);
+
+    if (action === 'query' && before.reimbursement_status === 'owed') {
+      const room = await wallet().reimbursementRoom(before.shopper_id, client);
+
+      if (room < Number(before.amount_paid) - 0.005) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          code: 'ALREADY_WITHDRAWN',
+          message: `The shopper has already withdrawn or requested this reimbursement. Only LKR ${Math.max(0, room).toFixed(2)} of their grocery reimbursement can still be held.`,
+        });
+      }
+    }
+
+    if (action === 'release') {
+      const released = (
+        await client.query(
+          `
+          UPDATE store_payments
+          SET customer_payment_check = 'overridden', customer_payment_note = $2,
+              customer_payment_override_by = $3, customer_payment_override_at = NOW(), updated_at = NOW()
+          WHERE id = $1 AND customer_payment_check = 'unconfirmed' AND reimbursement_status <> 'reimbursed'
+          RETURNING *
+          `,
+          [id, note, req.admin.adminId]
+        )
+      ).rows[0];
+
+      if (!released) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, message: 'Only a reimbursement waiting for the customer payment can be released' });
+      }
+
+      await client.query('COMMIT');
+
+      const io = req.app.get('io');
+      announce(io, released);
+      await settlement().refreshOrderSettlement(released.order_id, io);
+
+      return res.json({
+        success: true,
+        message: released.locked_at && APPROVED_REVIEWS.includes(released.review_status)
+          ? 'Released. The shopper can withdraw it.'
+          : 'Released. It is paid once the bill is approved.',
+        storePayment: toPublic(released),
+      });
+    }
 
     const row = (
       await client.query(
@@ -571,8 +759,19 @@ const reviewStorePayment = async (req, res) => {
   }
 };
 
+// Phase 32: reimbursements are paid only through the shopper's
+// withdrawal requests (owner's rule 2026-10-28), so the same money
+// can't go out twice. The old direct transfer is kept below, unused.
+const reimburseStorePayment = async (req, res) =>
+  res.status(409).json({
+    success: false,
+    code: 'USE_WITHDRAWALS',
+    message: 'Grocery reimbursements are paid through shopper withdrawal requests (Withdrawals page)',
+  });
+
 // The bank transfer to the shopper is done (reference from the bank)
-const reimburseStorePayment = async (req, res) => {
+// eslint-disable-next-line no-unused-vars
+const reimburseStorePaymentDirect = async (req, res) => {
   const id = toId(req.params.id);
   const reference = String(req.body?.reference || '').trim().slice(0, 60);
 
@@ -673,6 +872,7 @@ const reimburseStorePayment = async (req, res) => {
 
 module.exports = {
   METHODS,
+  METHOD_LABELS,
   syncOrderReimbursement,
   getStorePayment,
   saveStorePayment,

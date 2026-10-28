@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 
 const itemRequests = require('../controllers/orderItemRequestsController');
+const priceReports = require('../controllers/orderPriceReportsController');
 const storePayments = require('../controllers/storePaymentController');
 
 const router = express.Router();
@@ -84,7 +85,9 @@ const {
 // AUTH MIDDLEWARE
 // =====================================================
 
-const authMiddleware = (req, res, next) => {
+const { isSessionCurrent, SESSION_ENDED } = require('../utils/shopperSession');
+
+const authMiddleware = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
@@ -130,6 +133,11 @@ const authMiddleware = (req, res, next) => {
         success: false,
         message: 'Invalid shopper token',
       });
+    }
+
+    // A token from before a phone change / recovery is no longer valid
+    if (!(await isSessionCurrent(decoded))) {
+      return res.status(401).json(SESSION_ENDED);
     }
 
     req.shopper = decoded;
@@ -541,6 +549,12 @@ router.post('/orders/:orderId/item-requests', authMiddleware, itemRequests.shopp
 router.post('/orders/:orderId/item-requests/:requestId/accept', authMiddleware, itemRequests.shopperAcceptRequest);
 router.post('/orders/:orderId/item-requests/:requestId/reject', authMiddleware, itemRequests.shopperRejectRequest);
 router.post('/orders/:orderId/item-requests/:requestId/cancel', authMiddleware, itemRequests.shopperCancelRequest);
+
+// Shelf price differs from the order price (orderPriceReportsController)
+// FormData: shelfPrice, note?, photo? (the shelf tag)
+router.get('/orders/:orderId/price-reports', authMiddleware, priceReports.shopperListReports);
+router.post('/orders/:orderId/items/:itemId/price-report', authMiddleware, uploadItem.single('photo'), priceReports.shopperReportPrice);
+router.post('/orders/:orderId/price-reports/:reportId/cancel', authMiddleware, priceReports.shopperCancelReport);
 
 // =====================================================
 // STORE PAYMENT (shopper paid the till; GetMe reimburses)

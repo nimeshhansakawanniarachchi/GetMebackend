@@ -2,6 +2,10 @@ const pool = require('../../config/db');
 
 const { OFFER_SELECT, toOffer } = require('../shop/shopOfferController');
 const { broadcastCatalogChange } = require('../../realtime');
+const { recordOfferChange } = require('../../pricing/history');
+
+// Who made an admin change, for price / offer history
+const adminActor = (req) => ({ type: 'admin', id: req.admin?.adminId ?? null, name: req.admin?.fullName || 'GetMe admin' });
 
 // =====================================================
 // SHOP OFFERS (admin): every shop's offers, and a pause
@@ -56,15 +60,28 @@ const setOfferPaused = async (req, res) => {
     const paused = req.body.paused;
     const note = paused && req.body?.note ? String(req.body.note).trim().slice(0, 300) : null;
 
+    const before = (await pool.query('SELECT * FROM product_offers WHERE id = $1', [offerId])).rows[0];
+
     const result = await pool.query(
       `
       UPDATE product_offers
       SET paused_by_admin = $2, admin_note = $3, updated_at = NOW()
       WHERE id = $1
-      RETURNING id, shop_id
+      RETURNING *
       `,
       [offerId, paused, note]
     );
+
+    if (result.rows[0]) {
+      await recordOfferChange(pool, {
+        offerId,
+        shopId: result.rows[0].shop_id,
+        action: paused ? 'pause' : 'resume',
+        before,
+        after: result.rows[0],
+        actor: adminActor(req),
+      });
+    }
 
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Offer not found' });
@@ -84,6 +101,7 @@ const setOfferPaused = async (req, res) => {
 };
 
 module.exports = {
+  adminActor,
   listOffers,
   setOfferPaused,
 };

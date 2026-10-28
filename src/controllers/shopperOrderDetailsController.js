@@ -874,6 +874,8 @@
 
 
 const db = require('../config/db');
+const { paymentStateFor } = require('../payments/orderPaymentState');
+const { moneyFlowsFor } = require('../payments/orderMoneyFlows');
 
 // =====================================================
 // GET SHOPPER ID
@@ -1400,11 +1402,21 @@ const getMyOrderById = async (req, res) => {
     // 13. SEND RESPONSE
     // ===================================================
 
+    // Customer payment from the real records (card charges /
+    // refunds, cash collected) - payments/orderPaymentState.js
+    const paymentState = await paymentStateFor(order);
+    const moneyFlows = (await moneyFlowsFor([order], shopperId)).get(Number(order.id)) || null;
+
     return res.status(200).json({
       success: true,
 
       order: {
         ...order,
+
+        paymentState,
+
+        // Store payments + reimbursement (payments/orderMoneyFlows.js)
+        moneyFlows,
 
         id: Number(order.id),
         orderId: Number(order.id),

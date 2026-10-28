@@ -13,6 +13,8 @@ const { emitToAdmins } = require('../realtime');
 
 const { normalizeSriLankanMobile } = require('../utils/phone');
 
+const { signShopperToken } = require('../utils/shopperSession');
+
 const router = express.Router();
 
 
@@ -147,6 +149,7 @@ router.post('/register', loginRateLimit, async (req, res) => {
       ($1, $2, $3, $4, 'offline', 'pending')
       RETURNING
         id,
+        shopper_code,
         full_name,
         mobile,
         email,
@@ -220,6 +223,9 @@ router.post('/register', loginRateLimit, async (req, res) => {
 
         id:
           shopper.id,
+
+        shopperCode:
+          shopper.shopper_code,
 
         fullName:
           shopper.full_name,
@@ -326,6 +332,9 @@ router.post('/login', loginRateLimit, async (req, res) => {
           password_hash,
           status,
           approval_status,
+          auth_version,
+          shopper_code,
+          activated_at,
           latitude,
           longitude,
           created_at
@@ -362,6 +371,9 @@ router.post('/login', loginRateLimit, async (req, res) => {
           password_hash,
           status,
           approval_status,
+          auth_version,
+          shopper_code,
+          activated_at,
           latitude,
           longitude,
           created_at
@@ -403,6 +415,15 @@ router.post('/login', loginRateLimit, async (req, res) => {
     // CHECK PASSWORD
     // ================================================
 
+    // Registered by GetMe and not activated yet: no password exists
+    if (!shopper.activated_at) {
+      return res.status(403).json({
+        success: false,
+        code: 'ACCOUNT_NOT_ACTIVATED',
+        message: 'Activate your account first with the code GetMe gave you (Activate account on the sign-in screen).',
+      });
+    }
+
     const passwordMatch =
       await bcrypt.compare(
         password,
@@ -429,8 +450,13 @@ router.post('/login', loginRateLimit, async (req, res) => {
     // Pending shoppers may log in but can't go online
     // ================================================
 
+    // A rejected applicant (phase 34) may sign in to read the decision
+    const hasApplication =
+      shopper.approval_status === 'rejected' &&
+      (await db.query('SELECT 1 FROM shopper_applications WHERE shopper_id = $1', [shopper.id])).rows.length > 0;
+
     if (
-      shopper.approval_status === 'rejected' ||
+      (shopper.approval_status === 'rejected' && !hasApplication) ||
       shopper.approval_status === 'suspended'
     ) {
 
@@ -452,26 +478,8 @@ router.post('/login', loginRateLimit, async (req, res) => {
     // CREATE JWT
     // ================================================
 
-    const token =
-      jwt.sign(
-
-        {
-          shopperId:
-            shopper.id,
-
-          email:
-            shopper.email,
-
-        },
-
-        process.env.JWT_SECRET,
-
-        {
-          expiresIn:
-            '7d',
-        }
-
-      );
+    // Carries the session version (phase 35, utils/shopperSession.js)
+    const token = signShopperToken(shopper);
 
 
     console.log(
@@ -516,6 +524,9 @@ router.post('/login', loginRateLimit, async (req, res) => {
       token,
 
       shopper: {
+
+        shopperCode:
+          shopper.shopper_code,
 
         id:
           shopper.id,

@@ -4,33 +4,8 @@
 
 const round2 = (value) => Math.round(Number(value) * 100) / 100;
 
-// Distance from the farthest shop -> base fee + per-km tiers,
-// plus a fixed fee for every extra shop the shopper visits.
-const deliveryFee = (settings, farthestKm, shopCount = 1) => {
-  const d = settings.delivery;
-
-  if (!Number.isFinite(farthestKm)) {
-    return null;
-  }
-
-  let fee = d.baseFee;
-  let coveredKm = d.baseKm;
-
-  for (const tier of d.tiers) {
-    if (farthestKm <= coveredKm) {
-      break;
-    }
-
-    const tierEnd = tier.uptoKm == null ? farthestKm : Math.min(farthestKm, tier.uptoKm);
-
-    fee += Math.max(0, tierEnd - coveredKm) * tier.perKm;
-    coveredKm = tierEnd;
-  }
-
-  fee += Math.max(0, shopCount - 1) * d.extraShopFee;
-
-  return Math.ceil(fee);
-};
+// The delivery fee is priced on the road route by
+// pricing/deliveryFare.js (per vehicle, time rules).
 
 // Service fee: a fixed amount per item unit (each pack / piece
 // ordered; a loose weighed line counts once). Paid to the shopper.
@@ -98,18 +73,21 @@ const customerTotals = ({
   return { feeBase, getmeFee, totalAmount: round2(feeBase + getmeFee + (Number(tip) || 0)) };
 };
 
-// Rough door-to-door estimate in minutes
-const estimateMinutes = (farthestKm, totalPacks, shopCount = 1) => {
-  const km = Number.isFinite(farthestKm) ? farthestKm : 5;
+// Rough door-to-door estimate in minutes. travelMinutes: the road
+// route's drive time when known (else ~4 min per km)
+const estimateMinutes = (routeKm, totalPacks, shopCount = 1, travelMinutes = null) => {
+  const km = Number.isFinite(routeKm) ? routeKm : 5;
   const shopping = Math.min(25, Math.ceil(totalPacks / 3) * 5) + (shopCount - 1) * 10;
-  const min = 15 + shopping + Math.max(10, Math.ceil(km * 4)) + 10;
+  const travel = Number.isFinite(travelMinutes) && travelMinutes > 0
+    ? Math.ceil(travelMinutes)
+    : Math.max(10, Math.ceil(km * 4));
+  const min = 15 + shopping + travel + 10;
 
   return { min, max: min + 15 };
 };
 
 module.exports = {
   round2,
-  deliveryFee,
   serviceUnits,
   serviceUnitsSql,
   servicePerUnit,

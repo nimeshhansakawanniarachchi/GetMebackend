@@ -394,6 +394,7 @@ var path = require('path');
 var cookieParser = require('cookie-parser');
 var logger = require('morgan');
 var cors = require('cors');
+var { requireSignedBill, signBillLinksInJson } = require('./src/utils/billUrls');
 
 require('dotenv').config();
 
@@ -622,11 +623,15 @@ app.use(
 
 // ==================================================
 // SHOPPER BILL PHOTOS
+// Not public: only signed links work (src/utils/billUrls.js). API
+// responses sign the bill links they return to callers allowed to
+// see that order.
 // ==================================================
 
 app.use(
   '/uploads/bills',
-  express.static(shopperBillsPath)
+  requireSignedBill,
+  express.static(shopperBillsPath, { cacheControl: false })
 );
 
 // ==================================================
@@ -665,6 +670,9 @@ app.use(
 // ==================================================
 // ROUTES
 // ==================================================
+
+// Bill photo links in API answers are signed (see SHOPPER BILL PHOTOS)
+app.use('/api', signBillLinksInJson);
 
 app.use('/', indexRouter);
 
@@ -716,7 +724,26 @@ app.use('/api/admin', adminRoutes);
 // SHOPPER AUTH
 // ==================================================
 
+// Step-by-step registration + application (phase 34)
+app.use('/api/shopper', require('./src/routes/shopperApplicationRoutes'));
+
+// Protected profile: change requests, phone change, lost-phone recovery (phase 35)
+app.use('/api/shopper', require('./src/routes/shopperProfileProtectionRoutes'));
+
 app.use('/api/shopper/auth', shopperAuthRoutes);
+
+// Applicant documents: rejected / idle drafts deleted after 90 days
+{
+  const runRetention = () =>
+    require('./src/onboarding/applications')
+      .retentionSweep()
+      .then((r) => {
+        if (r.documents) console.log(`🧹 Application documents deleted: ${r.documents} (${r.applications} applications)`);
+      })
+      .catch((error) => console.error('❌ APPLICATION RETENTION:', error.message));
+  setTimeout(runRetention, 60 * 1000).unref();
+  setInterval(runRetention, 24 * 60 * 60 * 1000).unref();
+}
 
 // ==================================================
 // SHOPPER LOCATION
@@ -735,6 +762,9 @@ app.use('/api/shopper', shopperOrderRoutes);
 // ==================================================
 
 app.use('/api/shopper', shopperAccountRoutes);
+
+// Shopper wallet: earnings balance, bank accounts, withdrawals
+app.use('/api/shopper', require('./src/routes/shopperWalletRoutes'));
 
 // ==================================================
 // CHAT API

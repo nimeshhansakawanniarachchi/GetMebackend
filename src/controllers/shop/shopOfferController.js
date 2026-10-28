@@ -5,6 +5,25 @@ const {
   offerStatus,
   validateOffer,
 } = require('../../pricing/offers');
+const { recordOfferChange } = require('../../pricing/history');
+const { actorOf } = require('../../middleware/shopAccess');
+
+// Runs fn(client) in a transaction (offer + its history row together)
+const inTransaction = async (fn) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+};
 
 // =====================================================
 // SHOP OFFERS (GetMe-Shop "Offers" page)
@@ -66,6 +85,11 @@ const toOffer = (row) => ({
   isActive: row.is_active,
   pausedByAdmin: row.paused_by_admin,
   adminNote: row.admin_note,
+  // Needs N+ units on the line; customers can buy at most maxPerOrder
+  minQuantity: Number(row.min_quantity || 1),
+  maxPerOrder: row.max_per_order == null ? null : Number(row.max_per_order),
+  // portal | import (Sale price column)
+  source: row.source || 'portal',
   // live | scheduled | ended | off | paused_by_admin
   status: offerStatus(row),
   usedOrders: Number(row.used_orders || 0),
@@ -138,7 +162,7 @@ const getOffers = async (req, res) => {
 // CREATE
 // POST /api/shop/offers
 // { scope, productId?, category?, discountType, discountValue,
-//   title?, startsAt?, endsAt?, isActive? }
+//   title?, startsAt?, endsAt?, isActive?, minQuantity?, maxPerOrder? }
 // =====================================================
 
 const createOffer = async (req, res) => {
@@ -156,31 +180,42 @@ const createOffer = async (req, res) => {
       return res.status(400).json({ success: false, message: errors[0], errors });
     }
 
-    const result = await pool.query(
-      `
-      INSERT INTO product_offers (
-        shop_id, scope, product_id, category,
-        discount_type, discount_value, title,
-        starts_at, ends_at, is_active
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-      RETURNING id
-      `,
-      [
-        shopId,
-        value.scope,
-        value.productId,
-        value.category,
-        value.discountType,
-        value.discountValue,
-        value.title,
-        value.startsAt,
-        value.endsAt,
-        value.isActive,
-      ]
-    );
+    const created = await inTransaction(async (client) => {
+      const row = (
+        await client.query(
+          `
+          INSERT INTO product_offers (
+            shop_id, scope, product_id, category,
+            discount_type, discount_value, title,
+            starts_at, ends_at, is_active,
+            min_quantity, max_per_order
+          )
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          RETURNING *
+          `,
+          [
+            shopId,
+            value.scope,
+            value.productId,
+            value.category,
+            value.discountType,
+            value.discountValue,
+            value.title,
+            value.startsAt,
+            value.endsAt,
+            value.isActive,
+            value.minQuantity,
+            value.maxPerOrder,
+          ]
+        )
+      ).rows[0];
 
-    const offer = await loadOwnOffer(result.rows[0].id, shopId);
+      await recordOfferChange(client, { offerId: row.id, shopId, action: 'create', after: row, actor: actorOf(req) });
+
+      return row;
+    });
+
+    const offer = await loadOwnOffer(created.id, shopId);
 
     return res.status(201).json({
       success: true,
@@ -228,6 +263,8 @@ const updateOffer = async (req, res) => {
       startsAt: has('startsAt') ? body.startsAt : existing.starts_at,
       endsAt: has('endsAt') ? body.endsAt : existing.ends_at,
       isActive: has('isActive') ? body.isActive : existing.is_active,
+      minQuantity: has('minQuantity') ? body.minQuantity : existing.min_quantity,
+      maxPerOrder: has('maxPerOrder') ? body.maxPerOrder : existing.max_per_order,
     };
 
     const product =
@@ -241,36 +278,47 @@ const updateOffer = async (req, res) => {
       return res.status(400).json({ success: false, message: errors[0], errors });
     }
 
-    await pool.query(
-      `
-      UPDATE product_offers
-      SET
-        scope = $3,
-        product_id = $4,
-        category = $5,
-        discount_type = $6,
-        discount_value = $7,
-        title = $8,
-        starts_at = $9,
-        ends_at = $10,
-        is_active = $11,
-        updated_at = NOW()
-      WHERE id = $1 AND shop_id = $2
-      `,
-      [
-        offerId,
-        shopId,
-        value.scope,
-        value.productId,
-        value.category,
-        value.discountType,
-        value.discountValue,
-        value.title,
-        value.startsAt,
-        value.endsAt,
-        value.isActive,
-      ]
-    );
+    await inTransaction(async (client) => {
+      const updated = (
+        await client.query(
+          `
+          UPDATE product_offers
+          SET
+            scope = $3,
+            product_id = $4,
+            category = $5,
+            discount_type = $6,
+            discount_value = $7,
+            title = $8,
+            starts_at = $9,
+            ends_at = $10,
+            is_active = $11,
+            min_quantity = $12,
+            max_per_order = $13,
+            updated_at = NOW()
+          WHERE id = $1 AND shop_id = $2
+          RETURNING *
+          `,
+          [
+            offerId,
+            shopId,
+            value.scope,
+            value.productId,
+            value.category,
+            value.discountType,
+            value.discountValue,
+            value.title,
+            value.startsAt,
+            value.endsAt,
+            value.isActive,
+            value.minQuantity,
+            value.maxPerOrder,
+          ]
+        )
+      ).rows[0];
+
+      await recordOfferChange(client, { offerId, shopId, action: 'update', before: existing, after: updated, actor: actorOf(req) });
+    });
 
     const offer = await loadOwnOffer(offerId, shopId);
 
@@ -299,10 +347,18 @@ const deleteOffer = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid offer ID' });
     }
 
-    const result = await pool.query(
-      'DELETE FROM product_offers WHERE id = $1 AND shop_id = $2 RETURNING id',
-      [offerId, req.shop.shopId]
-    );
+    const result = await inTransaction(async (client) => {
+      const deleted = await client.query(
+        'DELETE FROM product_offers WHERE id = $1 AND shop_id = $2 RETURNING *',
+        [offerId, req.shop.shopId]
+      );
+
+      if (deleted.rows[0]) {
+        await recordOfferChange(client, { offerId, shopId: req.shop.shopId, action: 'delete', before: deleted.rows[0], actor: actorOf(req) });
+      }
+
+      return deleted;
+    });
 
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Offer not found' });

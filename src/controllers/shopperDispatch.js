@@ -80,6 +80,9 @@ const getEligibleShoppers = async (
       INNER JOIN orders o ON o.id = $1
       WHERE sh.status = 'online'
         AND sh.approval_status = 'approved'
+        -- phase 35: no restricted vehicle / expired licence
+        AND sh.vehicle_restriction IS NULL
+        AND (sh.licence_expiry IS NULL OR sh.licence_expiry >= CURRENT_DATE)
         AND sh.latitude IS NOT NULL
         AND sh.longitude IS NOT NULL
         -- Busy shoppers (any unfinished order) aren't offered more

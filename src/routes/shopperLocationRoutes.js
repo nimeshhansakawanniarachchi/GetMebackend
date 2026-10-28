@@ -5,6 +5,8 @@ const db = require('../config/db');
 
 const { emitToAdmins, emitToLiveOps } = require('../realtime');
 
+const { isSessionCurrent, SESSION_ENDED } = require('../utils/shopperSession');
+
 const router = express.Router();
 
 
@@ -77,6 +79,11 @@ router.post('/location', async (req, res) => {
 
     const shopperId =
       decoded.shopperId;
+
+    // A token from before a phone change / recovery is no longer valid
+    if (shopperId && !(await isSessionCurrent(decoded))) {
+      return res.status(401).json(SESSION_ENDED);
+    }
 
 
     if (!shopperId) {
@@ -425,6 +432,11 @@ router.post('/status', async (req, res) => {
     const shopperId =
       decoded.shopperId;
 
+    // A token from before a phone change / recovery is no longer valid
+    if (shopperId && !(await isSessionCurrent(decoded))) {
+      return res.status(401).json(SESSION_ENDED);
+    }
+
 
     if (!shopperId) {
 
@@ -489,7 +501,7 @@ router.post('/status', async (req, res) => {
 
       const approvalResult =
         await db.query(
-          'SELECT approval_status FROM shoppers WHERE id = $1',
+          'SELECT approval_status, vehicle_restriction, licence_expiry FROM shoppers WHERE id = $1',
           [shopperId]
         );
 
@@ -511,6 +523,14 @@ router.post('/status', async (req, res) => {
 
         });
 
+      }
+
+      // Vehicle no longer eligible (phase 35)
+      const vehicleBlock =
+        require('../onboarding/changeRequests').eligibilityBlock(approvalResult.rows[0]);
+
+      if (vehicleBlock) {
+        return res.status(403).json({ success: false, code: vehicleBlock.code, message: vehicleBlock.message });
       }
 
     }

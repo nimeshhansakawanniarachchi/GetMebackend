@@ -44,6 +44,12 @@ const {
   customerCancelRequest,
 } = require('../controllers/orderItemRequestsController');
 
+const {
+  customerListReports,
+  customerApproveReport,
+  customerDeclineReport,
+} = require('../controllers/orderPriceReportsController');
+
 const router = express.Router();
 
 
@@ -229,6 +235,11 @@ router.post('/orders/:orderId/item-requests', authMiddleware, customerRequestIte
 router.post('/orders/:orderId/item-requests/:requestId/approve', authMiddleware, customerApproveItem);
 router.post('/orders/:orderId/item-requests/:requestId/decline', authMiddleware, customerDeclineItem);
 router.post('/orders/:orderId/item-requests/:requestId/cancel', authMiddleware, customerCancelRequest);
+
+// Shelf price changes the shopper reported (orderPriceReportsController)
+router.get('/orders/:orderId/price-reports', authMiddleware, customerListReports);
+router.post('/orders/:orderId/price-reports/:reportId/approve', authMiddleware, customerApproveReport);
+router.post('/orders/:orderId/price-reports/:reportId/decline', authMiddleware, customerDeclineReport);
 
 router.get(
   '/order-ratings',

@@ -118,6 +118,7 @@ const AUDITED = {
     return `Product ${parts.join(', ') || 'updated'}`;
   }],
   'DELETE /products/:id': ['product.delete', 'product', () => 'Deleted (or hid) a product'],
+  'PATCH /products/:id/price': ['product.price', 'product', (req) => `Price set to ${money(req.body?.price)}`],
   'POST /products/:id/stock': ['stock.adjust', 'product', (req) => `Stock ${req.body?.mode || 'change'} ${req.body?.quantity ?? ''} (${req.body?.reason || 'no reason'})`],
   'POST /products/import': ['product.import', 'import', (req) => `Product import (${req.body?.mode || 'import'})`],
   'POST /offers': ['offer.create', 'offer', (req) => `Created offer ${req.body?.title || ''}`],

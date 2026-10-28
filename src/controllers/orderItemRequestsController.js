@@ -123,12 +123,39 @@ const pendingRequestsFor = async (orderId, shopId = null, client = pool) => {
   return result.rows[0].count;
 };
 
+// Shelf price changes the customer hasn't answered (orderPriceReportsController)
+const pendingPriceReportsFor = async (orderId, shopId = null, client = pool) =>
+  (
+    await client.query(
+      `
+      SELECT COUNT(*)::int AS count
+      FROM order_item_price_reports
+      WHERE order_id = $1 AND status = 'pending'
+        AND ($2::int IS NULL OR shop_id = $2::int)
+      `,
+      [orderId, shopId]
+    )
+  ).rows[0].count;
+
 // 409 reply for checkout / delivery while requests wait (null = go on)
 const pendingRequestsBlock = async (orderId, shopId = null) => {
   const count = await pendingRequestsFor(orderId, shopId);
+  const priceCount = await pendingPriceReportsFor(orderId, shopId);
+
+  if (count === 0 && priceCount === 0) {
+    return null;
+  }
 
   if (count === 0) {
-    return null;
+    return {
+      success: false,
+      code: 'PRICE_REPORTS_PENDING',
+      pendingCount: priceCount,
+      message:
+        priceCount === 1
+          ? 'The customer is still answering a price change. Wait for their answer before checking out.'
+          : `The customer is still answering ${priceCount} price changes. Wait for their answers before checking out.`,
+    };
   }
 
   return {
@@ -188,6 +215,11 @@ const lockShoppingOrder = async (client, where, values) => {
 // own, not-yet-checked-out shops
 const priceNewItems = async (client, order, items) => {
   const quote = await buildQuote({
+    // Only the item lines are used: keep the order's delivery fee
+    // (no route lookup)
+    savedDelivery: order.vehicle_fees
+      ? { vehicleFees: order.vehicle_fees, pricing: order.delivery_pricing }
+      : null,
     customerId: order.customer_id,
     deliveryLatitude: Number(order.delivery_latitude),
     deliveryLongitude: Number(order.delivery_longitude),

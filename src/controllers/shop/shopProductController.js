@@ -1,7 +1,8 @@
 const pool = require('../../config/db');
 const { recordChange } = require('../../inventory/stockService');
 const { actorOf } = require('../../middleware/shopAccess');
-const { applyOffersToProducts } = require('../../pricing/offers');
+const { applyOffersToProducts, offerStatus } = require('../../pricing/offers');
+const { recordPriceChange, isSuspiciousChange, changePercent } = require('../../pricing/history');
 
 const { toProduct } = require('./shopFormat');
 const {
@@ -234,14 +235,36 @@ const withOfferPrices = async (rows) => {
   return rows.map((row, i) => ({
     ...toProduct(row),
     customerPrice: Number(priced[i].price),
-    offer: priced[i].offer ? { id: priced[i].offer.id, label: priced[i].offer.label || priced[i].offer.title || 'Offer' } : null,
+    offer: priced[i].offer
+      ? {
+          id: priced[i].offer.id,
+          label: priced[i].offer.label || priced[i].offer.title || 'Offer',
+          endsAt: priced[i].offer.endsAt || null,
+          maxPerOrder: priced[i].offer.maxPerOrder ?? null,
+        }
+      : null,
+    bulkOffer: priced[i].bulk_offer || null,
+    purchaseLimit: priced[i].purchase_limit ?? null,
   }));
 };
+
+// An offer row `o` covers product row `p` (same rules as offers.appliesTo)
+const OFFER_COVERS_SQL = `
+  o.shop_id = p.shop_id
+  AND (
+    o.scope = 'shop'
+    OR (o.scope = 'product' AND o.product_id = p.id)
+    OR (o.scope = 'category' AND LOWER(TRIM(o.category)) = LOWER(TRIM(p.category)))
+  )`;
+
+const OFFER_LIVE_SQL = 'o.is_active AND NOT o.paused_by_admin AND o.starts_at <= NOW() AND (o.ends_at IS NULL OR o.ends_at > NOW())';
+const OFFER_SCHEDULED_SQL = 'o.is_active AND NOT o.paused_by_admin AND o.starts_at > NOW()';
 
 // GET /api/shop/products
 //   no ?page          -> every product (original response)
 //   ?page=&pageSize=&search=&category=&availability=available|hidden|live
 //   &stock=low|out|in&sort=newest|name|price_asc|price_desc|stock_asc|stock_desc|updated
+//   &minPrice=&maxPrice= (normal price, Rs) &offer=live|scheduled|none
 const getProducts = async (req, res) => {
   try {
     if (req.query.page === undefined) {
@@ -286,13 +309,31 @@ const getProducts = async (req, res) => {
       where.push(req.query.stock === 'low' ? `stock_quantity BETWEEN 1 AND $${params.length}` : `stock_quantity > $${params.length}`);
     }
 
+    const minPrice = Number(req.query.minPrice);
+    const maxPrice = Number(req.query.maxPrice);
+
+    if (req.query.minPrice !== undefined && req.query.minPrice !== '' && Number.isFinite(minPrice)) {
+      params.push(minPrice);
+      where.push(`price >= $${params.length}`);
+    }
+
+    if (req.query.maxPrice !== undefined && req.query.maxPrice !== '' && Number.isFinite(maxPrice)) {
+      params.push(maxPrice);
+      where.push(`price <= $${params.length}`);
+    }
+
+    if (req.query.offer === 'live') where.push(`EXISTS (SELECT 1 FROM product_offers o WHERE ${OFFER_COVERS_SQL} AND ${OFFER_LIVE_SQL})`);
+    if (req.query.offer === 'scheduled') where.push(`EXISTS (SELECT 1 FROM product_offers o WHERE ${OFFER_COVERS_SQL} AND ${OFFER_SCHEDULED_SQL})`);
+    if (req.query.offer === 'none') where.push(`NOT EXISTS (SELECT 1 FROM product_offers o WHERE ${OFFER_COVERS_SQL} AND ${OFFER_LIVE_SQL})`);
+
+    // Unqualified columns below belong to the product (alias p)
     const whereSql = where.join(' AND ');
     const order = PRODUCT_SORTS[req.query.sort] || PRODUCT_SORTS.newest;
 
     const [count, rows, summary, categories] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS total FROM products WHERE ${whereSql}`, params),
+      pool.query(`SELECT COUNT(*)::int AS total FROM products p WHERE ${whereSql}`, params),
       pool.query(
-        `SELECT * FROM products WHERE ${whereSql} ORDER BY ${order} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        `SELECT * FROM products p WHERE ${whereSql} ORDER BY ${order} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
         [...params, pageSize, (page - 1) * pageSize]
       ),
       pool.query(
@@ -432,6 +473,14 @@ const addProduct = async (req, res) => {
         actor: actorOf(req),
       });
 
+      await recordPriceChange(client, {
+        shopId: req.shop.shopId,
+        productId: result.rows[0].id,
+        newPrice: value.price,
+        source: 'created',
+        actor: actorOf(req),
+      });
+
       await client.query('COMMIT');
 
       return res.status(201).json({
@@ -498,9 +547,9 @@ const updateProduct = async (req, res) => {
     try {
       await client.query('BEGIN');
 
-      // Stock before the edit (stock history)
+      // Stock + price before the edit (stock and price history)
       const before = (
-        await client.query('SELECT stock_quantity FROM products WHERE id = $1 AND shop_id = $2 FOR UPDATE', [productId, req.shop.shopId])
+        await client.query('SELECT stock_quantity, price FROM products WHERE id = $1 AND shop_id = $2 FOR UPDATE', [productId, req.shop.shopId])
       ).rows[0];
 
       // Adding / changing / removing the barcode re-links the catalogue
@@ -551,6 +600,15 @@ const updateProduct = async (req, res) => {
           before: before.stock_quantity,
           after: value.stockQuantity,
           reason: 'edit',
+          actor: actorOf(req),
+        });
+
+        await recordPriceChange(client, {
+          shopId: req.shop.shopId,
+          productId,
+          oldPrice: before.price,
+          newPrice: value.price,
+          source: 'manual',
           actor: actorOf(req),
         });
       }
@@ -740,13 +798,181 @@ const deleteProduct = async (req, res) => {
   }
 };
 
+// =====================================================
+// QUICK PRICE CHANGE
+// PATCH /api/shop/products/:id/price { price, note? } (managers)
+// Same checks as the product form; the row is locked so two edits
+// (or an edit and a checkout) don't interleave.
+// =====================================================
+
+const MAX_PRICE = 10000000;
+
+const patchProductPrice = async (req, res) => {
+  const productId = productIdOf(req);
+  const price = Number(req.body?.price);
+  const note = req.body?.note ? String(req.body.note).trim().slice(0, 300) : null;
+
+  if (!productId) {
+    return res.status(400).json({ success: false, message: 'Invalid product ID' });
+  }
+
+  if (req.body?.price === '' || req.body?.price == null || !Number.isFinite(price) || price < 0 || price > MAX_PRICE) {
+    return res.status(400).json({ success: false, message: 'Enter a valid price (0 or more)' });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const before = (
+      await client.query('SELECT * FROM products WHERE id = $1 AND shop_id = $2 FOR UPDATE', [productId, req.shop.shopId])
+    ).rows[0];
+
+    if (!before) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+
+    const rounded = Math.round(price * 100) / 100;
+    const result = await client.query(
+      'UPDATE products SET price = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND shop_id = $3 RETURNING *',
+      [rounded, productId, req.shop.shopId]
+    );
+
+    await recordPriceChange(client, {
+      shopId: req.shop.shopId,
+      productId,
+      oldPrice: before.price,
+      newPrice: rounded,
+      source: 'manual',
+      actor: actorOf(req),
+      note,
+    });
+
+    await client.query('COMMIT');
+
+    const [product] = await withOfferPrices(result.rows);
+
+    return res.json({
+      success: true,
+      message: Number(before.price) === rounded ? 'Price unchanged' : 'Price updated',
+      product,
+      change: {
+        oldPrice: Number(before.price),
+        newPrice: rounded,
+        percent: changePercent(before.price, rounded),
+        // Big jumps are fine but worth a second look
+        unusual: isSuspiciousChange(before.price, rounded),
+      },
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('❌ patchProductPrice error:', error.message);
+
+    return res.status(500).json({ success: false, message: 'Unable to update the price' });
+  } finally {
+    client.release();
+  }
+};
+
+
+// =====================================================
+// PRICE HISTORY
+// GET /api/shop/products/:id/price-history
+// -> { prices: [...], offers: [...] } newest first; offers = history
+//    of offers that cover this product (product, category, shop)
+// =====================================================
+
+const toPriceChange = (row) => ({
+  id: Number(row.id),
+  oldPrice: row.old_price == null ? null : Number(row.old_price),
+  newPrice: Number(row.new_price),
+  percent: changePercent(row.old_price, row.new_price),
+  source: row.source,
+  note: row.note,
+  actorType: row.actor_type,
+  actorName: row.actor_name,
+  at: row.created_at,
+});
+
+const getProductPriceHistory = async (req, res) => {
+  try {
+    const productId = productIdOf(req);
+
+    if (!productId) {
+      return res.status(400).json({ success: false, message: 'Invalid product ID' });
+    }
+
+    const product = (
+      await pool.query('SELECT * FROM products WHERE id = $1 AND shop_id = $2', [productId, req.shop.shopId])
+    ).rows[0];
+
+    if (!product) {
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+
+    const [prices, offers] = await Promise.all([
+      pool.query(
+        'SELECT * FROM product_price_history WHERE product_id = $1 AND shop_id = $2 ORDER BY created_at DESC, id DESC LIMIT 100',
+        [productId, req.shop.shopId]
+      ),
+      pool.query(
+        `
+        SELECT o.*,
+          (SELECT json_agg(h ORDER BY h.created_at DESC)
+           FROM (SELECT action, before, after, actor_type, actor_name, created_at
+                 FROM product_offer_history WHERE offer_id = o.id
+                 ORDER BY created_at DESC LIMIT 20) h) AS history
+        FROM product_offers o
+        WHERE o.shop_id = $1
+          AND (
+            o.scope = 'shop'
+            OR (o.scope = 'product' AND o.product_id = $2)
+            OR (o.scope = 'category' AND LOWER(TRIM(o.category)) = LOWER(TRIM($3)))
+          )
+        ORDER BY o.starts_at DESC
+        LIMIT 50
+        `,
+        [req.shop.shopId, productId, product.category || '']
+      ),
+    ]);
+
+    return res.json({
+      success: true,
+      product: toProduct(product),
+      prices: prices.rows.map(toPriceChange),
+      offers: offers.rows.map((offer) => ({
+        id: Number(offer.id),
+        scope: offer.scope,
+        discountType: offer.discount_type,
+        discountValue: Number(offer.discount_value),
+        title: offer.title,
+        startsAt: offer.starts_at,
+        endsAt: offer.ends_at,
+        minQuantity: offer.min_quantity,
+        maxPerOrder: offer.max_per_order,
+        status: offerStatus(offer),
+        history: offer.history || [],
+      })),
+    });
+  } catch (error) {
+    console.error('❌ getProductPriceHistory error:', error.message);
+
+    return res.status(500).json({ success: false, message: 'Unable to load the price history' });
+  }
+};
+
 module.exports = {
   getProducts,
   getProduct,
   addProduct,
   updateProduct,
   patchProduct,
+  patchProductPrice,
+  getProductPriceHistory,
   deleteProduct,
+  toPriceChange,
   lookupBarcode,
   // Shared with the bulk import
   readProduct,

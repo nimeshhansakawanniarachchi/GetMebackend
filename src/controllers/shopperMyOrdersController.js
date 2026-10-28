@@ -5,6 +5,8 @@
 
 const pool = require('../config/db');
 const { SHOPPER_PAY_SQL } = require('./shopperPay');
+const { paymentStatesFor } = require('../payments/orderPaymentState');
+const { moneyFlowsFor } = require('../payments/orderMoneyFlows');
 
 // =====================================================
 // GET SHOPPER ID
@@ -279,9 +281,19 @@ const getMyOrders = async (req, res) => {
 
     res.set('Cache-Control', 'no-store');
 
+    // Each order's customer payment from the real records
+    // (payments/orderPaymentState.js)
+    const paymentStates = await paymentStatesFor(orders);
+    const moneyFlows = await moneyFlowsFor(orders, shopperId);
+
     return res.status(200).json({
       success: true,
-      orders,
+      orders: orders.map((order) => ({
+        ...order,
+        paymentState: paymentStates.get(Number(order.id)) || null,
+        // Store payments + reimbursement (payments/orderMoneyFlows.js)
+        moneyFlows: moneyFlows.get(Number(order.id)) || null,
+      })),
     });
   } catch (error) {
     console.error('❌ getMyOrders error:', error);

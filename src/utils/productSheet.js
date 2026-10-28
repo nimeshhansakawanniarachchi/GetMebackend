@@ -11,7 +11,9 @@ const JSZip = require('jszip');
 
 const { barcodeFormat } = require('./barcode');
 
-const MAX_ROWS = 2000;
+// Big supermarkets list ~7,000 products and re-import their whole
+// export to change prices; the 20MB upload limit still applies
+const MAX_ROWS = 10000;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 // Pictures in this column become the product photo ("Barcode Image"
@@ -31,7 +33,13 @@ const COLUMNS = [
   { key: 'size', header: 'Size', width: 12, aliases: [] },
   { key: 'description', header: 'Description', width: 40, aliases: ['productdescription'] },
   { key: 'isAvailable', header: 'Available', width: 11, aliases: ['isavailable'] },
+  // Optional sale (a sale-price offer on this product, phase 29)
+  { key: 'salePrice', header: 'Sale price', width: 12, aliases: ['promoprice', 'promotionalprice', 'offerprice', 'discountedprice'] },
+  { key: 'saleStarts', header: 'Sale starts', width: 18, aliases: ['salestart', 'offerstarts', 'promostarts'] },
+  { key: 'saleEnds', header: 'Sale ends', width: 18, aliases: ['saleend', 'offerends', 'promoends'] },
 ];
+
+const SALE_DATE_FIELDS = ['saleStarts', 'saleEnds'];
 
 // "Price (Rs) *" -> "price", "OPENING STOCK" -> "openingstock"
 const headerKey = (value) =>
@@ -150,9 +158,16 @@ const rowFields = (raw) => {
       size: String(raw.size ?? ''),
       description: String(raw.description ?? ''),
       isAvailable: available.isAvailable,
+      salePrice: raw.salePrice === '' || raw.salePrice == null ? '' : String(raw.salePrice).trim(),
+      saleStarts: raw.saleStarts ?? '',
+      saleEnds: raw.saleEnds ?? '',
     },
   };
 };
+
+// Excel date cells arrive as UTC dates holding the typed (Sri Lanka)
+// time; keep them as "YYYY-MM-DDTHH:MM:SS" with no zone
+const saleDateCell = (value) => (value instanceof Date ? value.toISOString().slice(0, 19) : cellValue(value));
 
 // ---------- Pictures placed over cells ----------
 // Read straight from the package: exceljs can't parse drawings written
@@ -419,7 +434,8 @@ const readProductSheet = async (buffer, fileName) => {
     const raw = {};
 
     header.fields.forEach((field, columnNumber) => {
-      raw[field] = cellValue(sheet.getRow(rowNumber).getCell(columnNumber).value);
+      const value = sheet.getRow(rowNumber).getCell(columnNumber).value;
+      raw[field] = SALE_DATE_FIELDS.includes(field) ? saleDateCell(value) : cellValue(value);
     });
 
     if (Object.values(raw).every((value) => value === '')) continue;
@@ -454,6 +470,9 @@ const TEMPLATE_HELP = [
   ['Size', 'Optional, e.g. 400g, 1L'],
   ['Description', 'Optional'],
   ['Available', 'Yes (default) or No to hide it from customers'],
+  ['Sale price', 'Optional. A promotional price below the normal price (at most 90% off). Creates or updates the sale offer on this product. Write "none" to end a sale made by an earlier import. Blank keeps the current offers'],
+  ['Sale starts', 'Optional, e.g. 2026-11-01 08:00 (Sri Lanka time). Blank = now'],
+  ['Sale ends', 'Optional, e.g. 2026-11-07 or 2026-11-07 21:00. A date alone means the end of that day. Blank = no end date'],
   ['Photo', 'Optional. Excel: click the cell, then Insert > Pictures > Place in Cell (or Place over Cells, or paste a picture onto it). WPS: Insert > Picture > Embed in Cell, or float it over the cell. JPG, PNG or WEBP, up to 5MB'],
   ['', ''],
   ['No photo?', 'Products with a known manufacturer barcode get the GetMe catalogue photo. Add or change photos later in Products > Edit'],

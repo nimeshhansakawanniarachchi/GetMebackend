@@ -284,7 +284,7 @@ const listShoppers = async (req, res) => {
 
     if (like) {
       params.push(like);
-      where.push(`(LOWER(s.full_name) LIKE $${params.length} OR LOWER(s.email) LIKE $${params.length} OR s.mobile LIKE $${params.length})`);
+      where.push(`(LOWER(s.full_name) LIKE $${params.length} OR LOWER(s.email) LIKE $${params.length} OR s.mobile LIKE $${params.length} OR LOWER(s.shopper_code) LIKE $${params.length})`);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -299,9 +299,10 @@ const listShoppers = async (req, res) => {
     const result = await pool.query(
       `
       SELECT
-        s.id, s.full_name, s.mobile, s.email, s.status, s.approval_status,
+        s.id, s.shopper_code, s.full_name, s.mobile, s.email, s.status, s.approval_status,
         s.vehicle_type, s.vehicle_number, s.latitude, s.longitude,
-        s.created_at, s.updated_at,
+        s.created_at, s.updated_at, s.registration_channel, s.activated_at,
+        (SELECT full_name FROM admins WHERE id = s.registered_by_admin) AS registered_by_name,
         COUNT(o.id) FILTER (WHERE o.status = 'delivered')::int AS deliveries,
         COALESCE(SUM(${SHOPPER_PAY_SQL}) FILTER (WHERE o.status = 'delivered'), 0)::float AS earnings,
         COUNT(o.id) FILTER (
@@ -324,6 +325,10 @@ const listShoppers = async (req, res) => {
       ...pageMeta(paging, countResult.rows[0].total),
       shoppers: result.rows.map((row) => ({
         id: row.id,
+        shopperCode: row.shopper_code,
+        registrationChannel: row.registration_channel,
+        registeredBy: row.registered_by_name || null,
+        activated: Boolean(row.activated_at),
         fullName: row.full_name,
         mobile: row.mobile,
         email: row.email,

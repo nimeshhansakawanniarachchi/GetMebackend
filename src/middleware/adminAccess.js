@@ -41,7 +41,9 @@ const allowRoles = (...roles) => (req, res, next) => {
 };
 
 // Never store secrets or PINs in the log
-const SECRET_KEY = /pass|token|secret|pin|cvv|card_?number/i;
+// Never kept in the audit log: credentials and (phase 37) identity /
+// bank numbers an admin may send when registering a shopper
+const SECRET_KEY = /pass|token|secret|pin|cvv|card_?number|account_?number|nic|licen[cs]e_?number|otp|proof/i;
 
 const sanitize = (value, depth = 0) => {
   if (value == null || depth > 3) return value ?? null;
@@ -99,15 +101,41 @@ const AUDITED = {
   'PATCH /products/:id/availability': ['product.availability', 'product', (req) =>
     req.body?.isAvailable === false ? 'Marked unavailable' : 'Marked available'],
   'PATCH /offers/:id/pause': ['offer.pause', 'offer', (req) => (req.body?.paused === false ? 'Resumed offer' : 'Paused offer')],
+  'PATCH /pricing/reports/:id': ['pricing.report_review', 'price_report', (req) => (req.body?.adminStatus === 'open' ? 'Reopened a shelf price report' : 'Resolved a shelf price report')],
   'PATCH /store-payments/:id/review': ['store_payment.review', 'store_payment', (req) =>
-    `${req.body?.action === 'approve' ? 'Approved' : 'Queried'} store bill${req.body?.note ? `: ${req.body.note}` : ''}`],
+    `${{ approve: 'Approved', query: 'Queried', release: 'Released without customer payment' }[req.body?.action] || 'Reviewed'} store bill${req.body?.note ? `: ${req.body.note}` : ''}`],
   'PATCH /store-payments/:id/reimburse': ['store_payment.reimburse', 'store_payment', (req) => `Reimbursed (ref ${req.body?.reference || ''})`],
+  'POST /shopper-registrations': ['shopper.register', 'shopper', (req) => `Registered a shopper: ${String(req.body?.fullName || '').slice(0, 80)}`],
+  'PATCH /shopper-registrations/:applicationId/steps': ['shopper.register_edit', 'shopper_application', (req) => `Edited the ${req.body?.step || ''} step of a registration`],
+  'POST /shopper-registrations/:applicationId/documents': ['shopper.register_document', 'shopper_application', (req) => `Uploaded ${req.body?.docType || 'a document'} for a registration`],
+  'POST /shopper-registrations/:applicationId/submit': ['shopper.register_submit', 'shopper_application', () => 'Submitted a registration for review (consent recorded)'],
+  'POST /shoppers/:id/activation-code': ['shopper.activation_code', 'shopper', () => 'Issued an activation code'],
+  'PATCH /shopper-applications/:id/documents/:docId': ['shopper_application.document_review', 'shopper_application', (req) =>
+    `${req.body?.decision === 'reject' ? 'Rejected' : 'Accepted'} an application document${req.body?.note ? `: ${String(req.body.note).slice(0, 120)}` : ''}`],
+  'PATCH /shopper-change-requests/:id/documents/:docId': ['shopper_change.document_review', 'shopper_change_request', (req) =>
+    `${req.body?.decision === 'reject' ? 'Rejected' : 'Accepted'} a change request document${req.body?.note ? `: ${String(req.body.note).slice(0, 120)}` : ''}`],
+  'PATCH /shopper-change-requests/:id': ['shopper_change.review', 'shopper_change_request', (req) =>
+    `${{ approve: 'Approved', reject: 'Rejected', request_info: 'Requested more information on' }[req.body?.action] || 'Updated'} a shopper change request${req.body?.reason ? `: ${String(req.body.reason).slice(0, 120)}` : ''}`],
+  'PATCH /shoppers/:id/vehicle-restriction': ['shopper.vehicle_restriction', 'shopper', (req) =>
+    req.body?.restricted === false ? 'Lifted the vehicle restriction' : `Restricted the vehicle: ${String(req.body?.reason || '').slice(0, 120)}`],
+  'PATCH /shopper-applications/:id': ['shopper_application.review', 'shopper_application', (req) =>
+    `${{ start_review: 'Started review of', request_info: 'Requested more information on', approve: 'Approved', reject: 'Rejected', confirm_phone: 'Confirmed the phone number on', delete_documents: 'Deleted the documents of' }[req.body?.action] || 'Updated'} shopper application${req.body?.reason ? `: ${String(req.body.reason).slice(0, 120)}` : ''}`],
+  'POST /settlements/shoppers/:shopperId/cash-settlements': ['shopper.cash_handover', 'shopper', (req) =>
+    `Recorded cash hand-over of Rs ${Number(req.body?.amount || 0).toFixed(2)}${req.body?.reference ? ` (receipt ${req.body.reference})` : ''}`],
   'POST /settlements/shoppers/:shopperId/payouts': ['shopper.payout', 'shopper', (req) =>
     `Recorded ${req.body?.kind || 'payout'} ${money(req.body?.amount)} (ref ${req.body?.reference || ''})`],
   'PATCH /settlements/earnings/:orderId/dispute': ['earning.hold', 'order', (req) => `Earnings on hold: ${req.body?.note || ''}`],
   'PATCH /settlements/earnings/:orderId/resolve': ['earning.resolve', 'order', (req) => `Earnings ${req.body?.action === 'void' ? 'voided' : 'released'}`],
   'PATCH /settlements/earnings/:orderId/adjust': ['earning.adjust', 'order', (req) => `Adjustment ${money(req.body?.amount)}: ${req.body?.note || ''}`],
-  'PUT /settings/pricing': ['settings.pricing', 'settings', () => 'Updated fees & pricing'],
+  'PATCH /withdrawals/:id': ['withdrawal.update', 'withdrawal', (req) => {
+    const what = { approve: 'Approved', process: 'Marked processing', pay: 'Recorded payout', fail: 'Marked failed', reject: 'Rejected' }[req.body?.action] || 'Updated';
+    return `${what} withdrawal #${req.params.id}${req.body?.reference ? ` (ref ${String(req.body.reference).slice(0, 60)})` : ''}${req.body?.reason ? `: ${String(req.body.reason).slice(0, 200)}` : ''}`;
+  }],
+  'PATCH /payout-accounts/:id': ['payout_account.review', 'payout_account', (req) =>
+    `${req.body?.action === 'verify' ? 'Verified' : 'Rejected'} bank account #${req.params.id}${req.body?.note ? `: ${String(req.body.note).slice(0, 200)}` : ''}`],
+  'PUT /settings/pricing': ['settings.pricing', 'settings', (req) =>
+    req.body?.effectiveFrom ? `Scheduled fees & pricing from ${String(req.body.effectiveFrom).slice(0, 25)}` : 'Updated fees & pricing'],
+  'DELETE /settings/pricing/versions/:id': ['settings.pricing_cancel', 'pricing_version', (req) => `Cancelled scheduled pricing #${req.params.id}`],
   'POST /promos': ['promo.create', 'promo', (req) => `Created promo ${req.body?.code || ''}`],
   'PATCH /promos/:id': ['promo.update', 'promo', () => 'Updated promo'],
   'POST /admins': ['admin.create', 'admin', (req) => `Created ${req.body?.role || 'owner'} admin ${req.body?.email || ''}`],

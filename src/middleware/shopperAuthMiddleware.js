@@ -4,7 +4,9 @@ const jwt = require('jsonwebtoken');
 // SHOPPER JWT AUTH MIDDLEWARE
 // ==================================================
 
-const shopperAuthMiddleware = (req, res, next) => {
+const { isSessionCurrent, SESSION_ENDED } = require('../utils/shopperSession');
+
+const shopperAuthMiddleware = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
@@ -45,6 +47,11 @@ const shopperAuthMiddleware = (req, res, next) => {
       token,
       process.env.JWT_SECRET
     );
+
+    // A token from before a phone change / recovery is no longer valid
+    if (decoded?.shopperId != null && !(await isSessionCurrent(decoded))) {
+      return res.status(401).json(SESSION_ENDED);
+    }
 
     // ==================================================
     // SAVE SHOPPER DATA

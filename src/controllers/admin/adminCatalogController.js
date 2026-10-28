@@ -3,6 +3,7 @@ const pool = require('../../config/db');
 const { readPage, pageMeta } = require('../../utils/pagination');
 
 const { emitToAdmins, broadcastCatalogChange } = require('../../realtime');
+const { applyOffersToProducts } = require('../../pricing/offers');
 
 const {
   MIN_WHITE_CONTRAST,
@@ -227,7 +228,20 @@ const listProducts = async (req, res) => {
 
     if (search) {
       params.push(`%${search}%`);
-      where.push(`(LOWER(p.product_name) LIKE $${params.length} OR LOWER(s.shop_name) LIKE $${params.length})`);
+      where.push(`(LOWER(p.product_name) LIKE $${params.length} OR LOWER(s.shop_name) LIKE $${params.length} OR COALESCE(p.barcode, '') LIKE $${params.length})`);
+    }
+
+    // pricing=missing: no price set (Rs 0); pricing=offer: a live offer covers it
+    if (req.query.pricing === 'missing') where.push('p.price <= 0');
+    if (req.query.pricing === 'offer') {
+      where.push(`EXISTS (
+        SELECT 1 FROM product_offers o
+        WHERE o.shop_id = p.shop_id
+          AND o.is_active AND NOT o.paused_by_admin
+          AND o.starts_at <= NOW() AND (o.ends_at IS NULL OR o.ends_at > NOW())
+          AND (o.scope = 'shop' OR (o.scope = 'product' AND o.product_id = p.id)
+               OR (o.scope = 'category' AND LOWER(TRIM(o.category)) = LOWER(TRIM(p.category))))
+      )`);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -251,17 +265,26 @@ const listProducts = async (req, res) => {
       listParams
     );
 
+    // What customers pay now (live offers), next to the shelf price
+    const priced = await applyOffersToProducts(result.rows);
+
     return res.json({
       success: true,
       ...pageMeta(paging, countResult.rows[0].total),
       categories: categoriesResult.rows.map((row) => row.category),
-      products: result.rows.map((row) => ({
+      products: result.rows.map((row, index) => ({
         id: row.id,
         shopId: row.shop_id,
         shopName: row.shop_name,
         productName: row.product_name,
         category: row.category,
         price: Number(row.price || 0),
+        customerPrice: Number(priced[index].price || 0),
+        offer: priced[index].offer
+          ? { id: priced[index].offer.id, label: priced[index].offer.label, endsAt: priced[index].offer.endsAt || null }
+          : null,
+        priceUpdatedAt: row.price_updated_at || null,
+        barcode: row.barcode || null,
         unit: row.unit || 'item',
         stockQuantity: Number(row.stock_quantity || 0),
         isAvailable: row.is_available !== false,

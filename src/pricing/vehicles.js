@@ -2,8 +2,8 @@ const { round2, customerTotals } = require('./fees');
 
 // =====================================================
 // DELIVERY FEE PER VEHICLE
-// Fee = the distance fee (fees.deliveryFee) x the vehicle's
-// multiplier from the pricing settings. The fee of every bookable
+// Each vehicle's fee comes from pricing/deliveryFare.js (its own
+// fare rules on the road route). The fee of every bookable
 // vehicle is saved on the order when it's placed
 // (orders.vehicle_fees), so the Find a shopper screen, booking,
 // the shopper's offer and the accept all use the same numbers.
@@ -20,21 +20,6 @@ const priceClass = (vehicleType) => {
   const type = String(vehicleType || '').trim().toLowerCase();
 
   return BOOKABLE_VEHICLES.includes(type) ? type : DEFAULT_VEHICLE;
-};
-
-// { motorbike, 'three-wheeler', car } for a distance fee
-const vehicleFeesFor = (settings, baseFee) => {
-  const fees = {};
-
-  for (const vehicle of BOOKABLE_VEHICLES) {
-    const multiplier = Number(settings?.vehicleMultipliers?.[vehicle]);
-
-    fees[vehicle] = Math.ceil(
-      Number(baseFee) * (Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1)
-    );
-  }
-
-  return fees;
 };
 
 // The order's fee for a vehicle; null when the order has no
@@ -153,7 +138,6 @@ module.exports = {
   BOOKABLE_VEHICLES,
   DEFAULT_VEHICLE,
   priceClass,
-  vehicleFeesFor,
   orderFeeFor,
   deliveryFeeForShopper,
   repriceOrder,

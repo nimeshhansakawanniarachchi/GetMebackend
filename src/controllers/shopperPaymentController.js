@@ -1,7 +1,10 @@
 
+const crypto = require('crypto');
+const fs = require('fs');
 const db = require('../config/db');
 
 const { broadcastOrderChange } = require('../realtime');
+const { signBillLinks } = require('../utils/billUrls');
 const { pendingRequestsBlock } = require('./orderItemRequestsController');
 const { hasStorePayment, lockStorePaymentForBill } = require('./storePaymentController');
 
@@ -37,8 +40,9 @@ const emitOrderSocketEvent = ({
 
     if (!io) return;
 
+    // Bill photo links signed (they aren't public)
     const eventPayload = {
-      ...payload,
+      ...signBillLinks(payload),
       orderId: Number(orderId),
       order_id: Number(orderId),
       customerId: Number(customerId),
@@ -556,8 +560,21 @@ const uploadBill = async (req, res) => {
       bill = insertBillResult.rows[0];
     }
 
+    // Fingerprints of the receipt photos (duplicate receipt check)
+    const billHashes = billFiles
+      .map((file) => {
+        try {
+          return crypto.createHash('sha256').update(fs.readFileSync(file.path)).digest('hex');
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+
+    await db.query('UPDATE order_shop_bills SET bill_hashes = $2::text[] WHERE id = $1', [bill.id, billHashes]);
+
     // The store payment is final now that its bill is in
-    await lockStorePaymentForBill(orderId, shopId, req.app.get('io'));
+    await lockStorePaymentForBill(orderId, shopId, req.app.get('io'), { hashes: billHashes });
 
     console.log('BILL SAVED SUCCESSFULLY:', {
       orderId,

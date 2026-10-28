@@ -119,6 +119,19 @@ io.use(function (socket, next) {
       return next(new Error('Invalid socket user'));
     }
 
+    // Shopper tokens from before a phone change / recovery are refused
+    // (phase 35, utils/shopperSession.js)
+    if (socket.userType === 'shopper') {
+      return require('../src/utils/shopperSession')
+        .isSessionCurrent(decoded)
+        .then((current) => {
+          if (!current) return next(new Error('Session ended. Sign in again.'));
+          console.log('🔐 SOCKET AUTH SUCCESS:', { type: socket.userType, customerId, shopperId });
+          return next();
+        })
+        .catch(() => next(new Error('Unable to check the session')));
+    }
+
     console.log('🔐 SOCKET AUTH SUCCESS:', {
       type: socket.userType,
       customerId,

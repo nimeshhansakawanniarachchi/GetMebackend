@@ -43,6 +43,7 @@ const toProduct = (row) => ({
   isAvailable: row.is_available !== false,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
+  priceUpdatedAt: row.price_updated_at || null,
 });
 
 const { statusLabel } = require('../../utils/orderStatus');

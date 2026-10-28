@@ -7,6 +7,8 @@ const {
 } = require('./shopperPay');
 const { deliveryFeeForShopper } = require('../pricing/vehicles');
 const { getPricingSettings } = require('../pricing/settings');
+const { paymentStatesFor } = require('../payments/orderPaymentState');
+const { moneyFlowsFor } = require('../payments/orderMoneyFlows');
 const { offerRoute } = require('../utils/offerRoute');
 const {
   STORE_MINUTES,
@@ -67,7 +69,9 @@ const getAvailableOrders = async (req, res) => {
         longitude,
         status,
         approval_status,
-        vehicle_type
+        vehicle_type,
+        vehicle_restriction,
+        licence_expiry
       FROM shoppers
       WHERE id = $1
       LIMIT 1
@@ -90,6 +94,13 @@ const getAvailableOrders = async (req, res) => {
         approvalStatus: shopper.approval_status,
         message: 'Your account is waiting for GetMe approval.',
       });
+    }
+
+    // Vehicle no longer eligible (phase 35)
+    const vehicleBlock = require('../onboarding/changeRequests').eligibilityBlock(shopper);
+
+    if (vehicleBlock) {
+      return res.status(403).json({ success: false, code: vehicleBlock.code, message: vehicleBlock.message });
     }
 
     const shopperLatitude = Number(shopper.latitude);
@@ -548,8 +559,21 @@ const getAvailableOrders = async (req, res) => {
 
     const orders = [];
 
+    // Each order's customer payment from the real records (card
+    // charges / refunds, cash) - never from the method alone
+    const paymentStates = await paymentStatesFor(
+      [...groupedOrders.values()].map((group) => group.baseOrder)
+    );
+
+    // Supermarket payment + grocery reimbursement (GetMe's rules)
+    const moneyFlows = await moneyFlowsFor(
+      [...groupedOrders.values()].map((group) => group.baseOrder),
+      shopperId
+    );
+
     for (const group of groupedOrders.values()) {
       const order = group.baseOrder;
+      const paymentState = paymentStates.get(Number(order.id)) || null;
 
       if (group.shops.length === 0) {
         continue;
@@ -645,9 +669,14 @@ const getAvailableOrders = async (req, res) => {
 
         payment: {
           method: order.payment_method || null,
-          // Cash orders: the customer pays the shopper at the door.
-          // The final amount can change after shopping.
-          cashToCollect: isCash ? Number(order.total_amount || 0) : null,
+          // Cash orders: what the customer owes now, paid to the
+          // shopper at the door. It can change after shopping.
+          cashToCollect: isCash
+            ? paymentState?.cashToCollect ?? Number(order.total_amount || 0)
+            : null,
+          // paid_online / payment_pending / cash_on_delivery / ...
+          status: paymentState?.status || null,
+          label: paymentState?.label || null,
         },
 
         delivery: {
@@ -761,6 +790,13 @@ const getAvailableOrders = async (req, res) => {
         // ORDER INFO
         deliveryOption: order.delivery_option,
         paymentMethod: order.payment_method,
+
+        // Customer payment for THIS order (payments/orderPaymentState.js)
+        paymentState,
+
+        // How the shopper pays the stores and is reimbursed
+        // (payments/orderMoneyFlows.js) - not earnings
+        moneyFlows: moneyFlows.get(Number(order.id)) || null,
 
         // Customer's preferred vehicle (null = any). Batches are only
         // offered to shoppers with this vehicle.

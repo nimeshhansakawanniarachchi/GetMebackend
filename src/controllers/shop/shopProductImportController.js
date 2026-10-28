@@ -6,6 +6,8 @@ const { recordChange } = require('../../inventory/stockService');
 const { actorOf, recordShopActivity } = require('../../middleware/shopAccess');
 
 const { barcodeKey } = require('../../utils/barcode');
+const { MAX_PERCENT } = require('../../pricing/offers');
+const { recordPriceChange, recordOfferChange } = require('../../pricing/history');
 const { readProductSheet, buildProductTemplate } = require('../../utils/productSheet');
 const {
   readProduct,
@@ -26,7 +28,131 @@ const PRODUCT_UPLOADS = path.join(__dirname, '../../../uploads/products');
 
 const lowerName = (name) => name.trim().toLowerCase();
 
+// ---------- Sale columns (Sale price / Sale starts / Sale ends) ----------
+
+// "2026-11-01", "2026-11-01 08:00", "2026-11-01T08:00:00", "01/11/2026 08:00"
+// (Sri Lanka time) -> { date, dateOnly } | { error } | null when blank
+const readSaleDate = (value) => {
+  const text = String(value ?? '').trim();
+
+  if (!text) return null;
+
+  let match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  let parts = match ? [match[1], match[2], match[3], match[4], match[5]] : null;
+
+  if (!parts) {
+    match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/);
+    parts = match ? [match[3], match[2], match[1], match[4], match[5]] : null;
+  }
+
+  if (!parts) return { error: `"${text}" is not a date. Use 2026-11-01 08:00` };
+
+  const [year, month, day, hour, minute] = parts.map((part) => (part == null ? null : Number(part)));
+  const date = new Date(year, month - 1, day, hour ?? 0, minute ?? 0, 0);
+
+  if (Number.isNaN(date.getTime()) || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    return { error: `"${text}" is not a real date` };
+  }
+
+  return { date, dateOnly: hour == null };
+};
+
+// Row fields -> { sale: null | { remove: true } | { price, startsAt, endsAt } } | { error }
+const readSale = (fields, regularPrice) => {
+  const priceText = String(fields?.salePrice ?? '').trim();
+  const starts = readSaleDate(fields?.saleStarts);
+  const ends = readSaleDate(fields?.saleEnds);
+
+  if (!priceText) {
+    return starts || ends ? { error: 'Sale dates need a Sale price' } : { sale: null };
+  }
+
+  if (/^(none|remove|end|-)$/i.test(priceText)) return { sale: { remove: true } };
+
+  const price = Number(priceText.replace(/,/g, '').replace(/^rs\.?\s*/i, ''));
+  const lowest = Math.round(regularPrice * (1 - MAX_PERCENT / 100) * 100) / 100;
+
+  if (!Number.isFinite(price) || price <= 0) return { error: 'Sale price must be a number above 0 (or "none")' };
+  if (price >= regularPrice) return { error: `Sale price must be below the normal price (Rs ${regularPrice.toFixed(2)})` };
+  if (price < lowest) return { error: `Sale price can be at most ${MAX_PERCENT}% off (at least Rs ${lowest.toFixed(2)})` };
+  if (starts?.error) return { error: `Sale starts: ${starts.error}` };
+  if (ends?.error) return { error: `Sale ends: ${ends.error}` };
+
+  const startsAt = starts?.date || new Date();
+  // A date alone = the sale runs to the end of that day
+  const endsAt = ends ? (ends.dateOnly ? new Date(ends.date.getTime() + 24 * 60 * 60 * 1000) : ends.date) : null;
+
+  if (endsAt && endsAt <= startsAt) return { error: 'Sale ends must be after Sale starts' };
+  if (endsAt && endsAt <= new Date()) return { error: 'Sale ends is in the past' };
+
+  return { sale: { price: Math.round(price * 100) / 100, startsAt, endsAt } };
+};
+
+// Creates / updates / ends the sale offer an import made for this product
+const applySale = async (client, shopId, productId, sale, actor) => {
+  if (!sale) return;
+
+  // The import sale on this product that is still running or scheduled
+  const current = (
+    await client.query(
+      `
+      SELECT * FROM product_offers
+      WHERE shop_id = $1 AND scope = 'product' AND product_id = $2 AND source = 'import'
+        AND (ends_at IS NULL OR ends_at > NOW())
+      ORDER BY id DESC LIMIT 1
+      FOR UPDATE
+      `,
+      [shopId, productId]
+    )
+  ).rows[0];
+
+  if (sale.remove) {
+    if (!current) return;
+
+    const ended = (
+      await client.query('UPDATE product_offers SET is_active = FALSE, updated_at = NOW() WHERE id = $1 RETURNING *', [current.id])
+    ).rows[0];
+
+    await recordOfferChange(client, { offerId: current.id, shopId, action: 'update', before: current, after: ended, actor });
+    return;
+  }
+
+  if (current) {
+    const updated = (
+      await client.query(
+        `
+        UPDATE product_offers
+        SET discount_type = 'sale_price', discount_value = $1, starts_at = $2, ends_at = $3,
+            is_active = TRUE, updated_at = NOW()
+        WHERE id = $4
+        RETURNING *
+        `,
+        [sale.price, sale.startsAt, sale.endsAt, current.id]
+      )
+    ).rows[0];
+
+    await recordOfferChange(client, { offerId: current.id, shopId, action: 'update', before: current, after: updated, actor });
+    return;
+  }
+
+  const created = (
+    await client.query(
+      `
+      INSERT INTO product_offers (shop_id, scope, product_id, discount_type, discount_value, starts_at, ends_at, is_active, source)
+      VALUES ($1, 'product', $2, 'sale_price', $3, $4, $5, TRUE, 'import')
+      RETURNING *
+      `,
+      [shopId, productId, sale.price, sale.startsAt, sale.endsAt]
+    )
+  ).rows[0];
+
+  await recordOfferChange(client, { offerId: created.id, shopId, action: 'create', after: created, actor });
+};
+
 const summaryOf = (value, image) => ({
+  salePrice: value.sale?.price ?? null,
+  saleEndsAt: value.sale?.endsAt ?? null,
+  endsSale: Boolean(value.sale?.remove),
   productName: value.productName,
   category: value.category,
   price: value.price,
@@ -85,6 +211,12 @@ const planImport = async (shopId, sheetRows, updateExisting) => {
 
     if (error) return failed(error);
 
+    const sale = readSale(fields, value.price);
+
+    if (sale.error) return failed(sale.error);
+
+    value.sale = sale.sale;
+
     let match = null;
 
     if (value.barcode) {
@@ -119,6 +251,7 @@ const planImport = async (shopId, sheetRows, updateExisting) => {
   });
 };
 
+// -> the new product id
 const createProduct = async (client, shopId, value, imageUrl, actor) => {
   const catalog = await linkCatalog(client, shopId, value, imageUrl);
 
@@ -150,6 +283,12 @@ const createProduct = async (client, shopId, value, imageUrl, actor) => {
   await recordChange(client, {
     shopId, productId: created.rows[0].id, before: 0, after: value.stockQuantity, reason: 'import', actor,
   });
+
+  await recordPriceChange(client, {
+    shopId, productId: created.rows[0].id, newPrice: value.price, source: 'import', actor, note: 'Added by import',
+  });
+
+  return created.rows[0].id;
 };
 
 // Blank optional cells keep what the product already has. A photo in
@@ -157,7 +296,7 @@ const createProduct = async (client, shopId, value, imageUrl, actor) => {
 // only fills a missing image.
 const updateProduct = async (client, shopId, productId, value, imageUrl, actor) => {
   const before = (
-    await client.query('SELECT stock_quantity FROM products WHERE id = $1 AND shop_id = $2 FOR UPDATE', [productId, shopId])
+    await client.query('SELECT stock_quantity, price FROM products WHERE id = $1 AND shop_id = $2 FOR UPDATE', [productId, shopId])
   ).rows[0];
   const catalog = await linkCatalog(client, shopId, value, imageUrl);
 
@@ -203,6 +342,10 @@ const updateProduct = async (client, shopId, productId, value, imageUrl, actor) 
     await recordChange(client, {
       shopId, productId, before: before.stock_quantity, after: value.stockQuantity, reason: 'import', actor,
     });
+
+    await recordPriceChange(client, {
+      shopId, productId, oldPrice: before.price, newPrice: value.price, source: 'import', actor,
+    });
   }
 };
 
@@ -222,8 +365,12 @@ const applyImport = async (shopId, plan, actor) => {
       try {
         if (item.image) imageUrl = await savePhoto(item.image);
 
-        if (item.status === 'create') await createProduct(client, shopId, item.value, imageUrl, actor);
+        let productId = item.productId;
+
+        if (item.status === 'create') productId = await createProduct(client, shopId, item.value, imageUrl, actor);
         else await updateProduct(client, shopId, item.productId, item.value, imageUrl, actor);
+
+        await applySale(client, shopId, productId, item.value.sale, actor);
 
         await client.query('RELEASE SAVEPOINT import_row');
         item.status = item.status === 'create' ? 'created' : 'updated';

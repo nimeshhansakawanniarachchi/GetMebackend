@@ -16,6 +16,8 @@ const {
   addProduct,
   updateProduct,
   patchProduct,
+  patchProductPrice,
+  getProductPriceHistory,
   deleteProduct,
   lookupBarcode,
 } = require('../controllers/shop/shopProductController');
@@ -180,6 +182,8 @@ router.get('/products/export', shopAuthMiddleware, MANAGER, insights.exportProdu
 router.get('/stock/movements', shopAuthMiddleware, insights.getStockMovements);
 router.get('/products/:id', shopAuthMiddleware, getProduct);
 router.get('/products/:id/stock-history', shopAuthMiddleware, insights.getProductStockHistory);
+router.get('/products/:id/price-history', shopAuthMiddleware, getProductPriceHistory);
+router.patch('/products/:id/price', shopAuthMiddleware, MANAGER, patchProductPrice);
 router.post('/products/:id/stock', shopAuthMiddleware, STAFF, insights.adjustProductStock);
 router.post('/products', shopAuthMiddleware, MANAGER, uploadProduct.single('image'), addProduct);
 router.put('/products/:id', shopAuthMiddleware, MANAGER, uploadProduct.single('image'), updateProduct);

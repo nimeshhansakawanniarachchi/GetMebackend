@@ -1005,7 +1005,11 @@ const getShopper = async (req, res) => {
     const shopper = (
       await pool.query(
         `
-        SELECT id, full_name, mobile, email, status, approval_status, vehicle_type, vehicle_number,
+        SELECT id, shopper_code, registration_channel, activated_at,
+               (SELECT full_name FROM admins WHERE id = shoppers.registered_by_admin) AS registered_by_name,
+               full_name, mobile, email, status, approval_status, vehicle_type, vehicle_number,
+               vehicle_make, vehicle_model, licence_expiry::text AS licence_expiry,
+               vehicle_restriction, vehicle_restricted_at,
                latitude::float AS latitude, longitude::float AS longitude, location_updated_at,
                profile_image_url, created_at, updated_at
         FROM shoppers WHERE id = $1
@@ -1117,6 +1121,18 @@ const getShopper = async (req, res) => {
         approvalStatus: shopper.approval_status,
         vehicleType: shopper.vehicle_type,
         vehicleNumber: shopper.vehicle_number,
+        // Phase 37: Shopper ID + how the account was created
+        shopperCode: shopper.shopper_code,
+        registrationChannel: shopper.registration_channel,
+        registeredBy: shopper.registered_by_name || null,
+        activated: Boolean(shopper.activated_at),
+        activatedAt: shopper.activated_at,
+        // Phase 35: vehicle details + eligibility
+        vehicleMake: shopper.vehicle_make,
+        vehicleModel: shopper.vehicle_model,
+        licenceExpiry: shopper.licence_expiry,
+        vehicleRestriction: shopper.vehicle_restriction,
+        vehicleRestrictedAt: shopper.vehicle_restricted_at,
         photoUrl: shopper.profile_image_url,
         position: Number.isFinite(shopper.latitude) && Number.isFinite(shopper.longitude)
           ? { latitude: shopper.latitude, longitude: shopper.longitude }

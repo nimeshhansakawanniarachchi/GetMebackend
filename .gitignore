@@ -9,3 +9,6 @@ node_modules/
 !/src/uploads/**/
 !/uploads/**/.gitkeep
 !/src/uploads/**/.gitkeep
+
+# Applicant identity documents (phase 34): never in git, never public
+/private-uploads/

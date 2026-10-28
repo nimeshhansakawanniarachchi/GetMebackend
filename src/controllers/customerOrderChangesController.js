@@ -295,9 +295,15 @@ const orderItemsAsQuoteInput = (rows) =>
     };
   });
 
-// Price the order with these items and this slot
+// Price the order with these items and this slot. The delivery
+// fee stays what the order was charged (its saved vehicle fees):
+// same shops, same route, and old orders aren't re-priced with
+// new delivery rates.
 const quoteOrder = async (order, items, slot) =>
   buildQuote({
+    savedDelivery: order.vehicle_fees
+      ? { vehicleFees: order.vehicle_fees, pricing: order.delivery_pricing }
+      : null,
     customerId: order.customer_id,
     deliveryLatitude: Number(order.delivery_latitude),
     deliveryLongitude: Number(order.delivery_longitude),

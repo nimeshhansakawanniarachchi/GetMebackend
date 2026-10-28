@@ -66,6 +66,7 @@ const loadProfile = async (shopperId) => {
     `
     SELECT
       s.id,
+      s.shopper_code,
       s.full_name,
       s.mobile,
       s.email,
@@ -96,6 +97,8 @@ const loadProfile = async (shopperId) => {
 
   return {
     id: row.id,
+    // Permanent public Shopper ID (phase 37)
+    shopperCode: row.shopper_code,
     fullName: row.full_name,
     mobile: row.mobile,
     email: row.email,
@@ -176,18 +179,26 @@ const updateProfile = async (req, res) => {
       });
     }
 
-    await db.query(
-      `
-      UPDATE shoppers
-      SET
-        full_name = $1,
-        vehicle_type = $2,
-        vehicle_number = $3,
-        updated_at = NOW()
-      WHERE id = $4
-      `,
-      [fullName, vehicleType, vehicleNumber, shopperId]
-    );
+    // Phase 35: name and vehicle are verified details. They change only
+    // through the application (before approval) or a change request
+    // reviewed by GetMe (after) - never here. Sending the same values
+    // (older apps) is fine; anything different is refused.
+    const current = await loadProfile(shopperId);
+    const differs =
+      fullName !== String(current?.fullName || '').trim() ||
+      (vehicleType || null) !== (current?.vehicleType || null) ||
+      (vehicleNumber || null) !== (current?.vehicleNumber ? String(current.vehicleNumber).toUpperCase() : null);
+
+    if (differs) {
+      return res.status(403).json({
+        success: false,
+        code: 'PROTECTED_FIELD',
+        message:
+          current?.approvalStatus === 'approved'
+            ? 'Your name and vehicle are verified details. Send a change request from your profile.'
+            : 'Update your name and vehicle in your shopper application.',
+      });
+    }
 
     const profile = await loadProfile(shopperId);
 

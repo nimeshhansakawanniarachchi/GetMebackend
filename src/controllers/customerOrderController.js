@@ -760,7 +760,14 @@ const getCustomerOrders = async (
           sh.longitude AS shopper_longitude,
           sh.vehicle_type AS shopper_vehicle_type,
           sh.vehicle_number AS shopper_vehicle_number,
-          sh.profile_image_url AS shopper_image
+          sh.profile_image_url AS shopper_image,
+          -- Card money back so far (order lists: Refunded filter;
+          -- order summary)
+          (
+            SELECT COALESCE(SUM(cp.refunded_amount), 0)
+            FROM card_payments cp
+            WHERE cp.order_id = o.id AND cp.owner_type = 'customer'
+          ) AS card_refunded_amount
 
         FROM orders o
 
@@ -1755,7 +1762,14 @@ const getCustomerOrderById =
             sh.longitude AS shopper_longitude,
             sh.vehicle_type AS shopper_vehicle_type,
             sh.vehicle_number AS shopper_vehicle_number,
-          sh.profile_image_url AS shopper_image
+          sh.profile_image_url AS shopper_image,
+          -- Card money back so far (order lists: Refunded filter;
+          -- order summary)
+          (
+            SELECT COALESCE(SUM(cp.refunded_amount), 0)
+            FROM card_payments cp
+            WHERE cp.order_id = o.id AND cp.owner_type = 'customer'
+          ) AS card_refunded_amount
 
           FROM orders o
 
@@ -2139,6 +2153,18 @@ const getCustomerOrderById =
             oi.amount,
             oi.unit,
             oi.price,
+            -- Prices saved when the order was placed (order summary;
+            -- never re-priced from today's products)
+            oi.unit_price,
+            oi.pack_amount,
+            oi.original_unit_price,
+            oi.regular_unit_price,
+            oi.line_total,
+            oi.offer_id,
+            oi.offer_label,
+            oi.offer_discount,
+            oi.shelf_unit_price,
+            oi.added_by,
             oi.custom,
             oi.details,
             oi.image,
@@ -3859,6 +3885,7 @@ const getNearbyVehiclesForOrder = async (req, res) => {
         -- the parts repriceOrder rebuilds the total (and GetMe fee) from
         o.items_total, o.fast_delivery_fee, o.service_fee, o.window_discount,
         o.tip_amount, o.getme_fee, o.getme_fee_percent,
+        o.delivery_pricing,
         s.latitude AS shop_latitude,
         s.longitude AS shop_longitude
       FROM orders o
@@ -3914,6 +3941,9 @@ const getNearbyVehiclesForOrder = async (req, res) => {
         perVehiclePrice: orderFeeFor(order, type) !== null,
         etaSeconds: etas[type]?.seconds ?? null,
         etaEstimated: Boolean(etas[type]?.estimated),
+        // How this vehicle's fee was worked out (pricing/deliveryFare.js;
+        // null for orders placed before phase 30)
+        fare: order.delivery_pricing?.fares?.[type] || null,
       };
     });
 
@@ -3921,6 +3951,14 @@ const getNearbyVehiclesForOrder = async (req, res) => {
       success: true,
       vehicles,
       options,
+      // Road route the fees were priced on
+      route: order.delivery_pricing?.route
+        ? {
+            distanceKm: order.delivery_pricing.route.distanceKm,
+            timeBasis: order.delivery_pricing.route.timeBasis,
+            source: order.delivery_pricing.route.source,
+          }
+        : null,
     });
   } catch (error) {
     console.error('❌ GET NEARBY VEHICLES ERROR:', error);

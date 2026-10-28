@@ -125,6 +125,22 @@ const emitPayment = (io, row, extra = {}) => {
 
     if (row.order_id) {
       io.to(`order:${row.order_id}`).emit('payment-updated', payload);
+
+      // The order's shopper too (payment badge on their screens);
+      // shoppers aren't in the order room
+      pool
+        .query('SELECT shopper_id FROM orders WHERE id = $1', [row.order_id])
+        .then((result) => {
+          const shopperId = result.rows[0]?.shopper_id;
+
+          if (shopperId && !(row.owner_type === 'shopper' && Number(row.owner_id) === Number(shopperId))) {
+            // Only which order changed (not the customer's card); the
+            // app reloads the order's paymentState
+            io.to(`shopper:${shopperId}`).emit('payment-updated', { orderId: payload.orderId });
+          }
+        })
+        .catch(() => {});
+
       broadcastOrderChange(io, row.order_id, {
         event: 'payment-updated',
         paymentStatus: row.status,
@@ -1298,6 +1314,7 @@ module.exports = {
   attachPaymentToOrder,
   refundWholePayment,
   owedForOrder,
+  heldForOrder,
   extraChargeFor,
   bookingChargeFor,
   chargeApprovalNeeded,

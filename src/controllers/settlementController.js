@@ -6,6 +6,25 @@ const { splitShopperPay } = require('./shopperPay');
 const { serviceUnitsSql } = require('../pricing/fees');
 const { createShopperNotification } = require('./shopperNotificationController');
 const { syncOrderReimbursement } = require('./storePaymentController');
+const { changeEarningsSafely, walletFor, cashOrders, listCashSettlements, recordCashSettlement } = require('../wallet/shopperWallet');
+const { owedForOrder, heldForOrder } = require('../payments/paymentService');
+
+// Did the customer's money for a finished order reach GetMe? (backend
+// records only, never the app's success screen)
+//   card: the charges held (paid - refunded) cover what the customer
+//         owes for the order (owedForOrder)
+//   cash: delivered = the shopper collected it at the door (cash_due)
+// -> 'confirmed' | 'unconfirmed'
+const customerPaymentCheck = async (client, order) => {
+  if (order.payment_method === 'card') {
+    const owed = await owedForOrder(client, order);
+    const { held, payments } = await heldForOrder(client, order.id);
+
+    return payments > 0 && held >= owed - 0.01 ? 'confirmed' : 'unconfirmed';
+  }
+
+  return order.status === 'delivered' ? 'confirmed' : 'unconfirmed';
+};
 
 // =====================================================
 // SHOPPER SETTLEMENT (sql/platform_phase21_settlement.sql)
@@ -240,7 +259,10 @@ const refreshOrderSettlement = async (orderId, io) => {
     shopperId = Number(order.shopper_id) || null;
 
     if (order.status === 'cancelled') {
-      const kept = await getmeFeeKept(client, order);
+      // A cancelled cash order was never paid (nothing collected at the
+      // door), so GetMe kept no fee on it; only a card order keeps the
+      // fee on what the customer is still charged
+      const kept = order.payment_method === 'cash' ? 0 : await getmeFeeKept(client, order);
 
       if (Number(order.getme_fee_kept) !== kept || order.getme_fee_kept == null) {
         await client.query('UPDATE orders SET getme_fee_kept = $2 WHERE id = $1', [id, kept]);
@@ -290,15 +312,34 @@ const refreshOrderSettlement = async (orderId, io) => {
 
     const settled = ['delivered', 'cancelled'].includes(order.status);
 
+    // Reimbursements are released only once the backend has confirmed
+    // the customer's payment (owner's rule 2026-10-28: confirmed, not
+    // settled into GetMe's bank); an admin can release one anyway
+    // (store payment 'release' review action)
+    const paymentCheck = settled && payments.length > 0 ? await customerPaymentCheck(client, order) : 'pending';
+
     for (const payment of payments) {
       if (payment.reimbursement_status === 'reimbursed') continue;
 
-      const target = !settled ? 'pending' : verified(payment) ? 'owed' : 'held';
+      // Once confirmed (or released by an admin) it stays so: a later
+      // goodwill refund to the customer doesn't take the shopper's
+      // grocery money back
+      const check = ['confirmed', 'overridden'].includes(payment.customer_payment_check)
+        ? payment.customer_payment_check
+        : paymentCheck;
+      const paid = ['confirmed', 'overridden'].includes(check);
+      const target = !settled ? 'pending' : verified(payment) && paid ? 'owed' : 'held';
 
-      if (target !== payment.reimbursement_status) {
+      if (target !== payment.reimbursement_status || check !== payment.customer_payment_check) {
         await client.query(
-          'UPDATE store_payments SET reimbursement_status = $2, updated_at = NOW() WHERE id = $1',
-          [payment.id, target]
+          `UPDATE store_payments
+           SET reimbursement_status = $2::varchar, customer_payment_check = $3::varchar,
+               customer_payment_note = CASE WHEN $3::varchar = 'unconfirmed'
+                 THEN 'The customer payment for this order is not confirmed'
+                 ELSE customer_payment_note END,
+               updated_at = NOW()
+           WHERE id = $1`,
+          [payment.id, target, check]
         );
         changed = true;
       }
@@ -346,24 +387,31 @@ const BALANCES_SQL = `
     sh.full_name,
     sh.mobile,
     COALESCE(e.awaiting, 0)::float AS earnings_awaiting,
-    COALESCE(e.payable, 0)::float AS earnings_payable,
+    (COALESCE(e.released, 0) - COALESCE(po.paid, 0))::float AS earnings_payable,
     COALESCE(e.payable_count, 0)::int AS earnings_payable_count,
     COALESCE(e.held, 0)::float AS earnings_held,
     COALESCE(e.held_count, 0)::int AS earnings_held_count,
-    COALESCE(e.paid, 0)::float AS earnings_paid,
+    COALESCE(po.paid, 0)::float AS earnings_paid,
+    COALESCE(wd.open, 0)::float AS withdrawals_open,
+    COALESCE(wd.open_count, 0)::int AS withdrawals_open_count,
     COALESCE(g.kept, 0)::float AS commission_total,
     COALESCE(e.cash_due, 0)::float AS cash_due,
-    COALESCE(r.owed, 0)::float AS reimbursement_owed,
+    -- Released (owed + reimbursed bills) less what was paid out:
+    -- withdrawals can cover part of a bill
+    (COALESCE(r.released, 0) - COALESCE(rp.paid, 0))::float AS reimbursement_owed,
     COALESCE(r.owed_count, 0)::int AS reimbursement_owed_count,
     COALESCE(r.held, 0)::float AS reimbursement_held,
     COALESCE(r.pending, 0)::float AS reimbursement_pending,
-    COALESCE(r.reimbursed, 0)::float AS reimbursement_paid
+    COALESCE(rp.paid, 0)::float AS reimbursement_paid,
+    COALESCE(wd.open_reimbursement, 0)::float AS reimbursement_withdrawals_open
   FROM shoppers sh
   LEFT JOIN (
     SELECT
       shopper_id,
       SUM(net_amount) FILTER (WHERE status = 'awaiting_bills') AS awaiting,
-      SUM(net_amount) FILTER (WHERE status = 'payable') AS payable,
+      -- Released (bills approved), whether or not paid yet; the
+      -- payouts are subtracted below (withdrawals can be partial)
+      SUM(net_amount) FILTER (WHERE status IN ('payable', 'paid')) AS released,
       COUNT(*) FILTER (WHERE status = 'payable') AS payable_count,
       SUM(net_amount) FILTER (WHERE status = 'held') AS held,
       COUNT(*) FILTER (WHERE status = 'held') AS held_count,
@@ -372,6 +420,22 @@ const BALANCES_SQL = `
     FROM shopper_earnings
     GROUP BY shopper_id
   ) e ON e.shopper_id = sh.id
+  -- Earnings paid out (withdrawals, cash settled from earnings, older
+  -- admin payouts)
+  LEFT JOIN (
+    SELECT shopper_id, SUM(amount) AS paid
+    FROM shopper_payouts
+    WHERE kind = 'earnings'
+    GROUP BY shopper_id
+  ) po ON po.shopper_id = sh.id
+  -- Withdrawals requested and not finished yet
+  LEFT JOIN (
+    SELECT shopper_id, SUM(earnings_amount) AS open, COUNT(*) AS open_count,
+           SUM(reimbursement_amount) AS open_reimbursement
+    FROM shopper_withdrawals
+    WHERE status IN ('pending', 'approved', 'processing')
+    GROUP BY shopper_id
+  ) wd ON wd.shopper_id = sh.id
   -- GetMe fee kept on the shopper's finished orders
   LEFT JOIN (
     SELECT shopper_id, SUM(getme_fee_kept) AS kept
@@ -386,10 +450,19 @@ const BALANCES_SQL = `
       COUNT(*) FILTER (WHERE reimbursement_status = 'owed') AS owed_count,
       SUM(amount_paid) FILTER (WHERE reimbursement_status = 'held') AS held,
       SUM(amount_paid) FILTER (WHERE reimbursement_status = 'pending') AS pending,
-      SUM(amount_paid) FILTER (WHERE reimbursement_status = 'reimbursed') AS reimbursed
+      SUM(amount_paid) FILTER (WHERE reimbursement_status = 'reimbursed') AS reimbursed,
+      SUM(amount_paid) FILTER (WHERE reimbursement_status IN ('owed', 'reimbursed')) AS released
     FROM store_payments
     GROUP BY shopper_id
   ) r ON r.shopper_id = sh.id
+  -- Grocery reimbursements paid out (withdrawals, cash settled from
+  -- them, older admin transfers)
+  LEFT JOIN (
+    SELECT shopper_id, SUM(amount) AS paid
+    FROM shopper_payouts
+    WHERE kind = 'reimbursement'
+    GROUP BY shopper_id
+  ) rp ON rp.shopper_id = sh.id
 `;
 
 const toBalance = (row) => ({
@@ -402,6 +475,8 @@ const toBalance = (row) => ({
   earningsHeld: row.earnings_held,
   earningsHeldCount: row.earnings_held_count,
   earningsPaid: row.earnings_paid,
+  withdrawalsOpen: row.withdrawals_open,
+  withdrawalsOpenCount: row.withdrawals_open_count,
   commissionTotal: row.commission_total,
   cashDue: row.cash_due,
   reimbursementOwed: row.reimbursement_owed,
@@ -409,6 +484,7 @@ const toBalance = (row) => ({
   reimbursementHeld: row.reimbursement_held,
   reimbursementPending: row.reimbursement_pending,
   reimbursementPaid: row.reimbursement_paid,
+  reimbursementWithdrawalsOpen: row.reimbursement_withdrawals_open,
 });
 
 // GET /api/admin/settlements
@@ -425,9 +501,25 @@ const listSettlements = async (req, res) => {
       )
     ).rows.map(toBalance);
 
+    // Cash orders: what the shopper hands over after their released
+    // earnings and approved groceries are set against the cash
+    // (phase 33, the same numbers the shopper sees)
+    for (const row of rows) {
+      if (row.cashDue > 0) {
+        const wallet = await walletFor(row.shopperId);
+        row.cashToHandOver = wallet.cashShortfall;
+        row.cashOffsetEarnings = wallet.cashFromEarnings;
+        row.cashOffsetReimbursement = wallet.cashFromReimbursement;
+      } else {
+        row.cashToHandOver = 0;
+        row.cashOffsetEarnings = 0;
+        row.cashOffsetReimbursement = 0;
+      }
+    }
+
     const sum = (key) => round2(rows.reduce((total, row) => total + Number(row[key] || 0), 0));
 
-    const [payouts, earnings] = await Promise.all([
+    const [payouts, earnings, cashOrderRows, cashSettlementRows] = await Promise.all([
       pool.query(
         `
         SELECT p.*, sh.full_name
@@ -439,15 +531,39 @@ const listSettlements = async (req, res) => {
       ),
       pool.query(
         `
-        SELECT se.*, sh.full_name, o.delivered_at
+        -- Withdrawals pay the oldest released earnings first (shopperWallet
+        -- changeWithdrawal); a payable row can be partly paid already
+        WITH extra AS (
+          SELECT p.shopper_id,
+                 SUM(p.amount) - COALESCE((
+                   SELECT SUM(e.net_amount) FROM shopper_earnings e
+                   WHERE e.shopper_id = p.shopper_id AND e.status = 'paid'
+                 ), 0) AS paid_extra
+          FROM shopper_payouts p
+          WHERE p.kind = 'earnings'
+          GROUP BY p.shopper_id
+        ),
+        running AS (
+          SELECT id, SUM(net_amount) OVER (PARTITION BY shopper_id ORDER BY created_at, id) AS running_total
+          FROM shopper_earnings
+          WHERE status = 'payable'
+        )
+        SELECT se.*, sh.full_name, o.delivered_at,
+               CASE WHEN se.status = 'payable'
+                    THEN GREATEST(0, LEAST(se.net_amount, r.running_total - GREATEST(COALESCE(x.paid_extra, 0), 0)))
+                    ELSE se.net_amount END AS still_to_pay
         FROM shopper_earnings se
         LEFT JOIN shoppers sh ON sh.id = se.shopper_id
         LEFT JOIN orders o ON o.id = se.order_id
+        LEFT JOIN running r ON r.id = se.id
+        LEFT JOIN extra x ON x.shopper_id = se.shopper_id
         WHERE se.status IN ('awaiting_bills', 'payable', 'held')
         ORDER BY (se.status = 'held') DESC, se.created_at DESC
         LIMIT 100
         `
       ),
+      cashOrders(null, { limit: 100 }),
+      listCashSettlements(null, { limit: 20 }),
     ]);
 
     return res.json({
@@ -458,9 +574,14 @@ const listSettlements = async (req, res) => {
         earningsHeld: sum('earningsHeld'),
         reimbursementOwed: sum('reimbursementOwed'),
         cashDue: sum('cashDue'),
+        cashToHandOver: sum('cashToHandOver'),
         commissionTotal: sum('commissionTotal'),
       },
       shoppers: rows,
+      // One row per cash order (cash collected, GetMe fee, earnings,
+      // groceries, status) and the recent hand-overs
+      cashOrders: cashOrderRows,
+      cashSettlements: cashSettlementRows,
       openEarnings: earnings.rows.map((row) => ({
         orderId: Number(row.order_id),
         shopperId: Number(row.shopper_id),
@@ -475,6 +596,8 @@ const listSettlements = async (req, res) => {
         adjustment: Number(row.adjustment),
         adjustmentNote: row.adjustment_note,
         netAmount: Number(row.net_amount),
+        // Not yet withdrawn (less than netAmount once a withdrawal covered part of it)
+        stillToPay: round2(row.still_to_pay),
         status: row.status,
         disputeNote: row.dispute_note,
         cashCollected: Number(row.cash_collected),
@@ -545,6 +668,20 @@ const recordPayout = async (req, res) => {
   const shopperId = toId(req.params.shopperId);
   const kind = req.body?.kind;
   const spec = PAYOUT_KINDS[kind];
+
+  // Earnings and grocery reimbursements go out only through the
+  // shopper's withdrawal requests (Withdrawals page), so the same money
+  // can't be paid twice (owner's rule 2026-10-28)
+  if (kind === 'earnings' || kind === 'reimbursement') {
+    return res.status(409).json({
+      success: false,
+      code: 'USE_WITHDRAWALS',
+      message:
+        kind === 'earnings'
+          ? 'Earnings are paid through shopper withdrawal requests (Withdrawals page)'
+          : 'Grocery reimbursements are paid through shopper withdrawal requests (Withdrawals page)',
+    });
+  }
   const amount = round2(req.body?.amount);
   const reference = String(req.body?.reference || '').trim().slice(0, 60);
   const note = String(req.body?.note || '').trim().slice(0, 300) || null;
@@ -653,6 +790,9 @@ const recordPayout = async (req, res) => {
 // PATCH /api/admin/settlements/earnings/:orderId/resolve { action: release|void, note }
 // =====================================================
 
+const earningOwner = async (orderId) =>
+  Number((await pool.query('SELECT shopper_id FROM shopper_earnings WHERE order_id = $1', [orderId])).rows[0]?.shopper_id) || null;
+
 const disputeEarning = async (req, res) => {
   const orderId = toId(req.params.orderId);
   const note = String(req.body?.note || '').trim().slice(0, 300);
@@ -662,8 +802,9 @@ const disputeEarning = async (req, res) => {
   }
 
   try {
-    const row = (
-      await pool.query(
+    const owner = await earningOwner(orderId);
+    const row = owner && (await changeEarningsSafely(owner, async (client) => (
+      await client.query(
         `
         UPDATE shopper_earnings
         SET status = 'held', dispute_note = $2, updated_at = NOW()
@@ -672,7 +813,7 @@ const disputeEarning = async (req, res) => {
         `,
         [orderId, note]
       )
-    ).rows[0];
+    ).rows[0]));
 
     if (!row) {
       return res.status(409).json({ success: false, message: 'Only unpaid earnings can be put on hold' });
@@ -693,6 +834,9 @@ const disputeEarning = async (req, res) => {
 
     return res.json({ success: true, message: 'Earnings put on hold' });
   } catch (error) {
+    if (error.code === 'ALREADY_WITHDRAWN') {
+      return res.status(409).json({ success: false, code: error.code, message: error.message });
+    }
     console.error('❌ DISPUTE EARNING ERROR:', error.message);
     return res.status(500).json({ success: false, message: 'Unable to update the earnings' });
   }
@@ -780,8 +924,9 @@ const adjustEarning = async (req, res) => {
   }
 
   try {
-    const row = (
-      await pool.query(
+    const owner = await earningOwner(orderId);
+    const row = owner && (await changeEarningsSafely(owner, async (client) => (
+      await client.query(
         `
         UPDATE shopper_earnings
         SET net_amount = net_amount - adjustment + $2::numeric,
@@ -795,7 +940,7 @@ const adjustEarning = async (req, res) => {
         `,
         [orderId, amount, note]
       )
-    ).rows[0];
+    ).rows[0]));
 
     if (!row) {
       return res.status(409).json({
@@ -819,6 +964,9 @@ const adjustEarning = async (req, res) => {
 
     return res.json({ success: true, message: 'Adjustment saved', netAmount: Number(row.net_amount) });
   } catch (error) {
+    if (error.code === 'ALREADY_WITHDRAWN') {
+      return res.status(409).json({ success: false, code: error.code, message: error.message });
+    }
     console.error('❌ ADJUST EARNING ERROR:', error.message);
     return res.status(500).json({ success: false, message: 'Unable to update the earnings' });
   }
@@ -926,7 +1074,64 @@ const shopperBalances = async (shopperId) => {
   return row ? toBalance(row) : null;
 };
 
+// =====================================================
+// COD CASH HAND-OVER (phase 33)
+// POST /api/admin/settlements/shoppers/:shopperId/cash-settlements
+//   { amount, reference, note, requestId }
+// amount = the cash the shopper handed over now: what they owe after
+// their released earnings and approved groceries (409 AMOUNT_CHANGED
+// if that moved since the admin's screen loaded).
+// =====================================================
+
+const recordCashHandover = async (req, res) => {
+  const shopperId = toId(req.params.shopperId);
+
+  if (!shopperId) {
+    return res.status(400).json({ success: false, message: 'Invalid shopper' });
+  }
+
+  try {
+    const result = await recordCashSettlement(shopperId, req.body, req.admin.adminId);
+
+    if (!result.duplicate) {
+      const io = req.app.get('io');
+      const { settlement } = result;
+
+      announce(io, shopperId, { cashSettlementId: settlement.id });
+
+      createShopperNotification({
+        io,
+        shopperId,
+        type: 'cash_deposit',
+        title: settlement.handedOver > 0
+          ? `Cash hand-over of Rs ${settlement.handedOver.toFixed(2)} recorded`
+          : 'Cash collected settled from your balance',
+        body: `Cash collected Rs ${settlement.cashDue.toFixed(2)}: Rs ${settlement.offsetEarnings.toFixed(2)} from your earnings, Rs ${settlement.offsetReimbursement.toFixed(2)} from your grocery reimbursement${settlement.handedOver > 0 ? `, Rs ${settlement.handedOver.toFixed(2)} handed over` : ''}.`,
+      }).catch(() => {});
+    }
+
+    return res.status(result.duplicate ? 200 : 201).json({
+      success: true,
+      duplicate: Boolean(result.duplicate),
+      message: result.duplicate ? 'Already recorded' : 'Cash hand-over recorded',
+      settlement: result.settlement,
+      wallet: result.wallet,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+
+    if (status >= 500) console.error('❌ CASH HAND-OVER ERROR:', error.message);
+
+    return res.status(status).json({
+      success: false,
+      code: error.code,
+      message: status >= 500 ? 'Unable to record the cash hand-over' : error.message,
+    });
+  }
+};
+
 module.exports = {
+  recordCashHandover,
   recordDeliveredEarnings,
   refreshOrderSettlement,
   listSettlements,
