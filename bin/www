@@ -4,6 +4,9 @@
  */
 
 var app = require('../app');
+
+// Production refuses to start with development fallbacks (src/config/startupChecks.js)
+require('../src/config/startupChecks').run();
 var debug = require('debug')('customer-backend:server');
 var http = require('http');
 var { Server } = require('socket.io');
@@ -57,6 +60,33 @@ var io = new Server(server, {
 app.set('io', io);
 
 /**
+ * Private media links (door photos, voice notes, item photos, bills)
+ * in socket payloads are signed like in API responses (security
+ * review B-03, src/utils/billUrls.js). Patched once on the shared
+ * prototypes: room / namespace broadcasts and direct socket emits.
+ */
+
+(function signMediaInSocketPayloads() {
+  var media = require('../src/utils/billUrls');
+  var wrap = function (proto) {
+    if (!proto || proto.__getmeSigned) return;
+    var original = proto.emit;
+    proto.emit = function (event) {
+      var args = Array.prototype.slice.call(arguments, 1).map(function (arg) {
+        return typeof arg === 'function' ? arg : media.signBillLinks(arg);
+      });
+      return original.apply(this, [event].concat(args));
+    };
+    proto.__getmeSigned = true;
+  };
+  wrap(Object.getPrototypeOf(io.to('__getme__')));
+  wrap(Object.getPrototypeOf(io.of('/')));
+  io.on('connection', function (socket) {
+    wrap(Object.getPrototypeOf(socket));
+  });
+})();
+
+/**
  * Shopper dispatch: every second, forward waiting orders to the next
  * closest shopper when due (5 s steps, 10 s per shopper).
  */
@@ -75,10 +105,24 @@ require('../src/utils/shopHoursClock').startShopHoursClock(io);
 // Admin notifications: push committed events, time-based checks (phase 41)
 require('../src/admin/notifications').startListener(io);
 require('../src/admin/notifications').startClock();
+// Card payments left pending, unanswered refunds, expired card setups (phase 55)
+require('../src/admin/notifications').addClockCheck('card payments', () =>
+  require('../src/payments/paymentService').sweepCardPayments(io)
+);
+// Customer notifications: live + push for trigger-written rows, push
+// retries on the same clock (phase 57)
+require('../src/notifications/customerNotifications').startListener(io);
+require('../src/admin/notifications').addClockCheck('customer pushes', () =>
+  require('../src/notifications/customerNotifications').retryPushes()
+);
 // Support cases: first-response deadline alerts on the same clock (phase 43)
 require('../src/support/supportCases').startOverdueCheck(io);
 // Shopper document expiry alerts / auto-offline on the same clock (phase 46)
 require('../src/compliance/documents').startComplianceCheck(io);
+// Customer online periods, expired sign-ins, stale routes; daily retention (phase 51)
+var customerPresence = require('../src/customerActivity/presence');
+customerPresence.start(io);
+require('../src/customerActivity/retention').start();
 
 /**
  * Socket.IO authentication.
@@ -116,6 +160,25 @@ io.use(function (socket, next) {
     } else if (decoded?.shopId != null) {
       socket.shop = decoded;
       socket.userType = 'shop';
+
+      // Security review B-14: the shop must be active, a staff account
+      // still active, and the token from the current password
+      return require('../src/config/db')
+        .query(
+          decoded.staffId
+            ? 'SELECT s.status, st.is_active, st.auth_version FROM shops s JOIN shop_staff st ON st.shop_id = s.id WHERE s.id = $1 AND st.id = $2'
+            : 'SELECT status, TRUE AS is_active, auth_version FROM shops WHERE id = $1',
+          decoded.staffId ? [Number(decoded.shopId), Number(decoded.staffId)] : [Number(decoded.shopId)]
+        )
+        .then(function (result) {
+          var row = result.rows[0];
+          if (!row || row.status === 'rejected' || row.status === 'suspended' || !row.is_active ||
+              Number(decoded.av || 0) !== Number(row.auth_version || 0)) {
+            return next(new Error('Session ended. Sign in again.'));
+          }
+          return next();
+        })
+        .catch(function () { return next(new Error('Unable to check the account')); });
     } else if (customerId !== null && customerId !== undefined) {
       socket.customer = decoded;
       socket.userType = 'customer';
@@ -143,9 +206,17 @@ io.use(function (socket, next) {
     // Phase 44: a blocked customer account can't connect (same style
     // as the shopper session check; one primary-key lookup)
     if (socket.userType === 'customer') {
+      // Security review B-11: an ended sign-in session can't connect either
+      var sessionId = Number.isSafeInteger(Number(decoded.sid)) ? Number(decoded.sid) : null;
       return require('../src/config/db')
-        .query('SELECT account_status FROM customers WHERE id = $1', [Number(customerId)])
+        .query(
+          'SELECT c.account_status, s.ended_at AS session_ended_at FROM customers c LEFT JOIN customer_sessions s ON s.id = $2 AND s.customer_id = c.id WHERE c.id = $1',
+          [Number(customerId), sessionId]
+        )
         .then((result) => {
+          if (sessionId && result.rows[0]?.session_ended_at) {
+            return next(new Error('Session ended. Sign in again.'));
+          }
           if (result.rows[0]?.account_status === 'blocked') {
             const error = new Error('ACCOUNT_BLOCKED');
             error.data = { code: 'ACCOUNT_BLOCKED', message: 'Your GetMe account is blocked. Please contact GetMe support for help.' };
@@ -189,6 +260,13 @@ io.on('connection', function (socket) {
 
   console.log('🔌 Socket connected:', socket.id);
 
+  // Read by realtime.pruneOrderRoom (fetchSockets exposes socket.data)
+  socket.data.userType = socket.userType;
+  socket.data.shopperId = shopperId;
+  // Logout disconnects the sockets of that sign-in only (auth.js)
+  socket.data.sid = socket.customer?.sid != null ? Number(socket.customer.sid) : null;
+  socket.data.staffId = socket.shop?.staffId != null ? Number(socket.shop.staffId) : null;
+
   console.log('👤 Socket user:', {
     type: socket.userType,
     customerId,
@@ -205,6 +283,15 @@ io.on('connection', function (socket) {
     // Shop catalog changes (realtime.broadcastCatalogChange)
     socket.join('customers');
     console.log('🏠 Joined customer room:', room);
+
+    // Phase 51: online / offline history (src/customerActivity/presence.js)
+    customerPresence.onConnect(socket, customerId);
+    socket.on('presence:state', function (payload) {
+      customerPresence.onState(socket, payload);
+    });
+    socket.on('presence:ping', function () {
+      customerPresence.onPing(socket);
+    });
   }
 
   /**
@@ -251,6 +338,10 @@ io.on('connection', function (socket) {
         if (socket.adminPermissions.has('liveops.view')) {
           socket.join('admins:live');
         }
+        // Phase 51: customer online / offline changes
+        if (socket.adminPermissions.has('customers.activity')) {
+          socket.join(customerPresence.ADMIN_ROOM);
+        }
       })
       .catch((error) => console.error('❌ admin socket rooms error:', error.message));
   }
@@ -263,8 +354,10 @@ io.on('connection', function (socket) {
 
   /**
    * Join order room.
-   * Only the order's customer, its shopper (or any shopper while the
-   * order is still looking for one) and admins may listen to it.
+   * Only the order's customer, its assigned shopper and admins may
+   * listen to it. (A shopper who only holds an offer gets offer events
+   * in their own shopper room; the order room carries the assigned
+   * shopper's GPS, the door photo and payment details.)
    */
 
   socket.on('join-order', async function (orderId) {
@@ -297,9 +390,8 @@ io.on('connection', function (socket) {
           ((socket.userType === 'customer' &&
             Number(order.customer_id) === Number(customerId)) ||
             (socket.userType === 'shopper' &&
-              (Number(order.shopper_id) === Number(shopperId) ||
-                (order.shopper_id == null &&
-                  order.status === 'waiting_for_shopper'))));
+              order.shopper_id != null &&
+              Number(order.shopper_id) === Number(shopperId)));
 
         if (!allowed) {
           console.warn('⚠️ SOCKET: join-order denied', {
@@ -360,6 +452,8 @@ io.on('connection', function (socket) {
    */
 
   socket.on('disconnect', function (reason) {
+    if (socket.userType === 'customer') customerPresence.onDisconnect(socket);
+
     console.log('🔌 Socket disconnected:', {
       socketId: socket.id,
       reason,

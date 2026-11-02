@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { sendExpoPush } = require('../notifications/expoPush');
 
 // =====================================================
 // CHAT UNREAD COUNTS + NOTIFICATIONS
@@ -77,39 +78,11 @@ const emitUnread = async (io, reader, orderId) => {
 // EXPO PUSH (only devices that registered a token)
 // =====================================================
 
+// Shared Expo sender (src/notifications/expoPush.js); chat keeps its
+// own Android channel. Errors are logged, never thrown.
 const sendPush = async (owner, { title, body, data }) => {
-  try {
-    const tokens = (
-      await db.query('SELECT token FROM push_tokens WHERE owner_type = $1 AND owner_id = $2', [
-        owner.type,
-        owner.id,
-      ])
-    ).rows.map((row) => row.token);
-
-    if (tokens.length === 0) return;
-
-    const response = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify(
-        tokens.map((to) => ({ to, title, body, data, sound: 'default', channelId: 'chat', priority: 'high' }))
-      ),
-      signal: AbortSignal.timeout(10000),
-    });
-
-    const result = await response.json().catch(() => ({}));
-
-    // Forget tokens of uninstalled apps
-    const dead = (result?.data || [])
-      .map((ticket, index) => (ticket?.details?.error === 'DeviceNotRegistered' ? tokens[index] : null))
-      .filter(Boolean);
-
-    if (dead.length > 0) {
-      await db.query('DELETE FROM push_tokens WHERE token = ANY($1)', [dead]);
-    }
-  } catch (error) {
-    console.error('❌ CHAT PUSH ERROR:', error.message);
-  }
+  const result = await sendExpoPush(owner, { title, body, data, channelId: 'chat' });
+  if (result.status === 'failed') console.error('❌ CHAT PUSH ERROR:', result.error);
 };
 
 // After a message is saved (chatController.sendMessage): the other

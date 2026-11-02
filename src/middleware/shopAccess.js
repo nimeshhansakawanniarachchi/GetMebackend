@@ -143,6 +143,8 @@ const auditShopChanges = (req, res, next) => {
 
   res.on('finish', () => {
     if (res.statusCode >= 400 || !req.route || !req.shop?.shopId) return;
+    // Phase 59 handlers record their own activity entries
+    if (res.locals?.skipShopAudit) return;
     const key = `${req.method} ${req.route.path}`;
     const [action, entityType, describe] = AUDITED[key] || [`${req.method.toLowerCase()} ${req.route.path}`, null, null];
     // Import previews change nothing

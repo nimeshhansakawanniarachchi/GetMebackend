@@ -124,6 +124,8 @@ const updateStaff = async (req, res) => {
         SET role = COALESCE($3, role),
             is_active = COALESCE($4, is_active),
             password_hash = COALESCE($5, password_hash),
+            -- A new password or a deactivation ends their sessions (B-11)
+            auth_version = auth_version + CASE WHEN $5::text IS NOT NULL OR $4 = FALSE THEN 1 ELSE 0 END,
             updated_at = NOW()
         WHERE id = $1 AND shop_id = $2
         RETURNING *
@@ -163,10 +165,27 @@ const changePassword = async (req, res) => {
 
     const hash = await bcrypt.hash(next, 10);
 
-    if (staffId) await pool.query('UPDATE shop_staff SET password_hash = $1, updated_at = NOW() WHERE id = $2', [hash, staffId]);
-    else await pool.query('UPDATE shops SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [hash, req.shop.shopId]);
+    // Security review B-11: other sessions end; this one gets a new token
+    const { signShopToken, signStaffToken } = require('./shopAccountController');
+    const updated = staffId
+      ? (await pool.query('UPDATE shop_staff SET password_hash = $1, auth_version = auth_version + 1, updated_at = NOW() WHERE id = $2 RETURNING *', [hash, staffId])).rows[0]
+      : (await pool.query('UPDATE shops SET password_hash = $1, auth_version = auth_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *', [hash, req.shop.shopId])).rows[0];
 
-    return res.json({ success: true, message: 'Password changed' });
+    const io = req.app.get('io');
+    if (io) {
+      io.in(`shop:${req.shop.shopId}`).fetchSockets()
+        .then((sockets) => sockets.forEach((s) => {
+          const same = staffId ? Number(s.data?.staffId) === Number(staffId) : !s.data?.staffId;
+          if (same) s.disconnect(true);
+        }))
+        .catch(() => {});
+    }
+
+    return res.json({
+      success: true,
+      message: 'Password changed',
+      token: staffId ? signStaffToken(updated) : signShopToken(updated),
+    });
   } catch (error) {
     console.error('❌ shop changePassword error:', error.message);
     return res.status(500).json({ success: false, message: 'Unable to change the password' });

@@ -21,9 +21,11 @@ const {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// av = the account's session version: a password change bumps it and
+// older tokens stop working (security review B-11)
 const signShopToken = (shop) =>
   jwt.sign(
-    { shopId: shop.id, email: shop.email },
+    { shopId: shop.id, email: shop.email, av: Number(shop.auth_version || 0) },
     process.env.JWT_SECRET,
     { expiresIn: '7d' }
   );
@@ -31,7 +33,7 @@ const signShopToken = (shop) =>
 // Staff log in on the same page; their token carries staffId
 const signStaffToken = (staff) =>
   jwt.sign(
-    { shopId: staff.shop_id, staffId: staff.id },
+    { shopId: staff.shop_id, staffId: staff.id, av: Number(staff.auth_version || 0) },
     process.env.JWT_SECRET,
     { expiresIn: '7d' }
   );
@@ -59,6 +61,62 @@ const parseCoordinate = (value, max) => {
 
 const clean = (value) =>
   typeof value === 'string' && value.trim() ? value.trim() : null;
+
+// Phase 59 registration fields (src/marketplace/common.js lists)
+const readRegistrationProfile = (body = {}) => {
+  const { BUSINESS_TYPES, validProvince } = require('../../marketplace/common');
+  const { normalizeHours } = require('../../utils/shopHours');
+  const businessType = body.businessType == null || body.businessType === '' ? 'grocery' : String(body.businessType).toLowerCase();
+
+  if (!BUSINESS_TYPES.includes(businessType)) {
+    return { error: 'Choose grocery shop, clothing shop or restaurant' };
+  }
+
+  const place = validProvince(clean(body.province), clean(body.district));
+  if (place.error) return { error: place.error };
+
+  let contactPhone = null;
+  if (clean(body.contactPhone)) {
+    contactPhone = normalizeSriLankanPhone(body.contactPhone);
+    if (!contactPhone) return { error: 'Enter a valid contact phone number' };
+  }
+
+  let openingHours = null;
+  if (body.openingHours) {
+    const hours = normalizeHours(body.openingHours);
+    if (hours.error) return { error: hours.error };
+    openingHours = hours.hours;
+  }
+
+  const flag = (value, fallback) => (value === undefined || value === null || value === '' ? fallback : value === true || value === 'true');
+  const offersDelivery = flag(body.offersDelivery, true);
+  const offersPickup = flag(body.offersPickup, false);
+
+  if (!offersDelivery && !offersPickup) {
+    return { error: 'Offer delivery, pickup or both' };
+  }
+
+  const ownerName = clean(body.ownerName);
+  if (businessType !== 'grocery' && (!ownerName || ownerName.length < 3)) {
+    return { error: "Enter the owner's full name" };
+  }
+
+  return {
+    value: {
+      businessType,
+      ownerName: ownerName ? ownerName.slice(0, 120) : null,
+      province: place.province,
+      district: place.district,
+      city: clean(body.city) ? clean(body.city).slice(0, 80) : null,
+      businessRegNo: clean(body.businessRegNo) ? clean(body.businessRegNo).slice(0, 40) : null,
+      contactPhone,
+      offersDelivery,
+      offersPickup,
+      description: clean(body.description) ? clean(body.description).slice(0, 600) : null,
+      openingHours,
+    },
+  };
+};
 
 
 // =====================================================
@@ -101,6 +159,14 @@ const registerShop = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid shop location' });
     }
 
+    // Phase 59: business category + profile (all optional; a request
+    // without them registers a grocery shop exactly as before)
+    const profile = readRegistrationProfile(req.body);
+
+    if (profile.error) {
+      return res.status(400).json({ success: false, message: profile.error });
+    }
+
     const existing = await pool.query(
       'SELECT id FROM shops WHERE email = $1',
       [email]
@@ -115,14 +181,21 @@ const registerShop = async (req, res) => {
 
     const passwordHash = await bcrypt.hash(password, 10);
 
+    const p = profile.value;
     const result = await pool.query(
       `
       INSERT INTO shops
-        (shop_name, email, mobile, address, latitude, longitude, password_hash, status)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+        (shop_name, email, mobile, address, latitude, longitude, password_hash, status,
+         business_type, owner_name, province, district, city, area, business_reg_no, contact_phone,
+         offers_delivery, offers_pickup, description, opening_hours, auto_open)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9, $10, $11, $12, $12, $13, $14, $15, $16, $17, $18, $19)
       RETURNING *
       `,
-      [shopName, email, mobile, address, latitude, longitude, passwordHash]
+      [
+        shopName, email, mobile, address, latitude, longitude, passwordHash,
+        p.businessType, p.ownerName, p.province, p.district, p.city, p.businessRegNo, p.contactPhone,
+        p.offersDelivery, p.offersPickup, p.description, p.openingHours, p.openingHours != null,
+      ]
     );
 
     const shop = result.rows[0];
@@ -426,6 +499,8 @@ const setShopOpen = async (req, res) => {
 };
 
 module.exports = {
+  signShopToken,
+  signStaffToken,
   registerShop,
   loginShop,
   getShopProfile,

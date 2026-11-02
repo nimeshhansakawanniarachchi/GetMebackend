@@ -31,10 +31,19 @@ const pool = require('../config/db');
 // =====================================================
 
 const store = () => require('../controllers/storePaymentController');
+// Phase 49: LANKAQR scan-to-pay from GetMe's account (provider state)
+const qrProviders = require('./providers');
+// Phase 50: the company bank account GetMe pays LankaQR from
+const companyFunding = require('../companyAccounts/integration');
 const settlement = () => require('../controllers/settlementController');
 
 const ACTIVE_ORDER = (status) => !['cancelled', 'delivered', 'pending', 'pending_shopper_search'].includes(status);
-const LIVE = ['pending', 'succeeded', 'disputed'];
+// Phase 49: 'unknown' (the bank did not answer) is live too: no second
+// payment for the shop until the provider says succeeded / failed
+const LIVE = ['pending', 'succeeded', 'disputed', 'unknown'];
+// Payment sent to a provider (LANKAQR): only the provider (or an admin
+// with the bank statement) can close it
+const SENT_TO_PROVIDER = (attempt) => Boolean(attempt?.provider && attempt?.initiated_at);
 const APPROVED_REVIEWS = ['ok', 'approved'];
 
 const round2 = (value) => Math.round(Number(value) * 100) / 100;
@@ -160,7 +169,9 @@ const syncReservation = async (client, order, shopId, settings) => {
 
   // The order ended while a payment was still being chosen: nothing was
   // reported as paid, so the attempt is cancelled (card funds freed)
-  if (finished && attempt?.status === 'pending') {
+  // (Phase 49: not a payment already sent to the bank - money may have
+  // moved; the provider status check closes it)
+  if (finished && attempt?.status === 'pending' && !SENT_TO_PROVIDER(attempt)) {
     await client.query("UPDATE grocery_payment_attempts SET status = 'cancelled', updated_at = NOW() WHERE id = $1", [attempt.id]);
     await addEntry(client, {
       type: 'attempt_cancelled',
@@ -213,7 +224,7 @@ const syncReservation = async (client, order, shopId, settings) => {
 
   // The basket changed (extra items, refunds): the computed limit
   // follows it while nothing is pending and no admin set the limit
-  if (!finished && reservation.status === 'active' && attempt?.status !== 'pending') {
+  if (!finished && reservation.status === 'active' && !['pending', 'unknown'].includes(attempt?.status)) {
     const estimate = estimateFor(await store().shopItems(client, orderId, shopId));
     const limit = reservation.limit_override != null ? round2(reservation.limit_override) : limitFor(estimate, settings);
 
@@ -280,7 +291,12 @@ const syncAttemptChecks = async (client, orderId) => {
   ).rows;
 
   for (const attempt of attempts) {
-    const verification = attempt.verification === 'statement' ? 'statement' : attempt.locked_at ? 'receipt' : 'none';
+    // Phase 49: a provider / simulator confirmation is kept as it is
+    const verification = ['statement', 'provider', 'simulator'].includes(attempt.verification)
+      ? attempt.verification
+      : attempt.locked_at
+      ? 'receipt'
+      : 'none';
     let reconciliation = attempt.reconciliation_status;
     const flagged = ['needs_review', 'queried'].includes(attempt.review_status);
     const adminDecided = attempt.reconciled_by != null;
@@ -312,9 +328,10 @@ const syncOrder = async (orderId) => {
 
   try {
     await client.query('BEGIN');
-    const order = (await client.query('SELECT id, status, shopper_id FROM orders WHERE id = $1 FOR UPDATE', [id])).rows[0];
+    const order = (await client.query('SELECT id, status, shopper_id, business_type FROM orders WHERE id = $1 FOR UPDATE', [id])).rows[0];
 
-    if (order) {
+    // Phase 59: clothing / restaurant orders: nothing is bought at a till
+    if (order && order.business_type === 'grocery') {
       const settings = await loadSettings(client);
       for (const shopId of await orderShopIds(client, id)) await syncReservation(client, order, shopId, settings);
       await syncAttemptChecks(client, id);
@@ -360,6 +377,8 @@ const publicMethod = (row, extra = {}) => ({
 const NOT_INTEGRATED = {
   getme_wallet_card: 'Not available yet: no Sri Lankan provider offers GetMe virtual cards for phone wallets',
   getme_lankaqr: 'Not available yet: GetMe cannot pay LANKAQR from its business account',
+  // Phase 56
+  lankaqr_bank: 'Not available yet: no bank lets GetMe start LankaQR payments from your own account',
   store_direct: 'Not available yet: supermarkets have no direct payment arrangement with GetMe',
 };
 
@@ -378,6 +397,55 @@ const methodCatalogue = async (client, { shopperId, shopId, reservation, platfor
 
     if (row.integration === 'not_available') {
       entry('unavailable', NOT_INTEGRATED[row.key] || 'Not available yet');
+      continue;
+    }
+
+    // Phase 49: LANKAQR scan-to-pay from GetMe's company account. Needs
+    // a usable provider (none in production today: DFCC has no API) +
+    // the Super Admin switching it on; paid only through the scan flow
+    if (row.key === 'getme_lankaqr') {
+      const qr = qrProviders.current();
+      if (!qr.usable) {
+        entry('unavailable', NOT_INTEGRATED.getme_lankaqr);
+        continue;
+      }
+      if (!on) {
+        entry('unavailable', row.shop_enabled === false ? 'Not accepted at this store' : 'Not offered by GetMe right now');
+        continue;
+      }
+      // Phase 50: needs an eligible company funding account
+      const funding = await companyFunding.fundingFor('getme_lankaqr', client);
+      if (!funding.eligible) {
+        entry('unavailable', "Not available: GetMe's company account for LankaQR isn't ready");
+        continue;
+      }
+      entry('available', null, {
+        flow: 'lankaqr_scan',
+        paymentSource: funding.label,
+        simulator: qr.simulator,
+        ...(qr.simulator ? { testNotice: 'TEST SIMULATOR — no money moves' } : {}),
+      });
+      continue;
+    }
+
+    // Phase 56: scan-to-pay from the shopper's own bank account through a
+    // certified provider (none in production today; TEST SIMULATOR only)
+    if (row.key === 'lankaqr_bank') {
+      const qr = qrProviders.current();
+      if (!qr.usable || !qr.provider.describe().capabilities?.payerFunded) {
+        entry('unavailable', NOT_INTEGRATED.lankaqr_bank);
+        continue;
+      }
+      if (!on) {
+        entry('unavailable', row.shop_enabled === false ? 'Not accepted at this store' : 'Not offered by GetMe right now');
+        continue;
+      }
+      entry('available', null, {
+        flow: 'lankaqr_bank_scan',
+        paymentSource: 'Your own bank account',
+        simulator: qr.simulator,
+        ...(qr.simulator ? { testNotice: 'TEST SIMULATOR — no money moves' } : {}),
+      });
       continue;
     }
 
@@ -466,6 +534,25 @@ const ATTEMPT_LABELS = {
   cancelled: 'Cancelled',
   reversed: 'Reversed',
   disputed: 'Disputed',
+  unknown: 'Checking with the bank',
+  rejected: 'Rejected by the bank',
+};
+
+// Phase 49: LANKAQR (GetMe pays) labels - only the provider confirms
+const lankaqrLabel = (row) => {
+  const sim = row.provider === 'simulator' ? 'TEST SIMULATOR · ' : '';
+  const payer = row.method === 'lankaqr_bank';
+  if (row.status === 'pending' && row.provider_status === 'action_required') return `${sim}Approve the payment at your bank`;
+  if (row.status === 'pending') return `${sim}${row.initiated_at ? 'Sent to the bank · waiting' : 'Starting'}`;
+  if (row.status === 'unknown') return `${sim}Checking with the bank…`;
+  if (row.status === 'succeeded') {
+    return row.provider === 'simulator'
+      ? 'TEST SIMULATOR · paid · no money moved'
+      : row.verification === 'statement'
+      ? `Paid ${payer ? 'from your bank account' : 'by GetMe'} · verified with the bank`
+      : `Paid ${payer ? 'from your bank account' : 'by GetMe'} · bank confirmed`;
+  }
+  return `${sim}${ATTEMPT_LABELS[row.status] || row.status}`;
 };
 
 const publicAttempt = (row) =>
@@ -482,7 +569,7 @@ const publicAttempt = (row) =>
         cardLast4: row.card_last4 || null,
         status: row.status,
         // Reported paid is not 'paid': the receipt + checks come first
-        statusLabel:
+        statusLabel: ['getme_lankaqr', 'lankaqr_bank'].includes(row.method) ? lankaqrLabel(row) :
           row.status === 'succeeded' && row.verification === 'none'
             ? 'Payment reported · receipt needed'
             : row.status === 'succeeded' && row.reconciliation_status !== 'matched' && row.reconciliation_status !== 'resolved'
@@ -505,9 +592,39 @@ const publicAttempt = (row) =>
         reconciliationNote: row.reconciliation_note,
         statementReference: row.statement_reference,
         reconciledAt: row.reconciled_at,
+        // Phase 54: the scanned till QR + the app the shopper paid with
+        payerApp: row.payer_app || null,
+        qrCheck: row.qr_check || null,
         paidAt: row.paid_at,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
+        // Phase 49: provider (LANKAQR scan-to-pay). 'simulator' = TEST
+        // SIMULATOR, no money moved, never bank-verified
+        provider: row.provider || null,
+        providerRef: row.provider_ref || null,
+        providerStatus: row.provider_status || null,
+        providerMessage: row.provider_message || null,
+        simulator: row.provider === 'simulator',
+        requestedAmount: row.requested_amount != null ? round2(row.requested_amount) : null,
+        merchantId: row.merchant_id != null ? Number(row.merchant_id) : null,
+        merchantName: row.lankaqr_merchant_name ?? null,
+        merchantCity: row.lankaqr_merchant_city ?? null,
+        qrKind: row.qr_kind || null,
+        qrReference: row.qr_reference || null,
+        // Phase 56: bill total typed before scanning; the bank's approval
+        // page while the payer still has to approve
+        billTotal: row.bill_total != null ? round2(row.bill_total) : null,
+        payerAuth:
+          row.status === 'pending' && row.provider_status === 'action_required' && row.payer_auth_url
+            ? { url: row.payer_auth_url, expiresAt: row.payer_auth_expires_at || null }
+            : null,
+        // Phase 50: company account it paid from (snapshot; null before phase 50)
+        fundingAccountId: row.funding_account_id != null ? Number(row.funding_account_id) : null,
+        fundingAccountLabel: row.funding_account_label || null,
+        sentToBank: Boolean(row.initiated_at),
+        initiatedAt: row.initiated_at || null,
+        lastCheckedAt: row.last_checked_at || null,
+        statusChecks: row.status_checks != null ? Number(row.status_checks) : 0,
         // admin joins
         shopName: row.shop_name ?? undefined,
         shopperName: row.shopper_name ?? undefined,
@@ -583,7 +700,7 @@ const shopStatesFor = async (client, orderId) => {
       ? mine.length > 0
         ? 'failed'
         : 'not_started'
-      : live.status === 'pending'
+      : live.status === 'pending' || live.status === 'unknown'
       ? 'awaiting_payment'
       : !payment?.locked_at
       ? 'awaiting_receipt'
@@ -605,10 +722,12 @@ const paymentScreen = async ({ shopperId, orderId, shopId, platform }) => {
   const methods = await availableMethods(pool, { shopperId, shopId, reservation, platform });
   const attempts = (
     await pool.query(
-      `SELECT a.*, m.label AS method_label, c.last4 AS card_last4
+      `SELECT a.*, m.label AS method_label, c.last4 AS card_last4,
+              lm.merchant_name AS lankaqr_merchant_name, lm.merchant_city AS lankaqr_merchant_city
        FROM grocery_payment_attempts a
        JOIN grocery_payment_methods m ON m.key = a.method
        LEFT JOIN getme_cards c ON c.id = a.card_id
+       LEFT JOIN shop_lankaqr_merchants lm ON lm.id = a.merchant_id
        WHERE a.order_id = $1 AND a.shop_id = $2 ORDER BY a.id DESC`,
       [Number(orderId), Number(shopId)]
     )
@@ -630,6 +749,8 @@ const paymentScreen = async ({ shopperId, orderId, shopId, platform }) => {
   const paid = current?.amount != null ? round2(current.amount) : null;
   // Another shop of this order still being paid (one shop at a time)
   const blockingShop = shops.find((shop) => shop.shopId !== Number(shopId) && ['awaiting_payment', 'awaiting_receipt'].includes(shop.state)) || null;
+  // Phase 50: label of the company account GetMe pays LankaQR from
+  const lankaqrSource = (await companyFunding.fundingFor('getme_lankaqr')).label;
 
   return {
     currency: 'LKR',
@@ -665,6 +786,17 @@ const paymentScreen = async ({ shopperId, orderId, shopId, platform }) => {
     unavailableMethods: methods.unavailable,
     current,
     attempts,
+    // Phase 49: LANKAQR scan-to-pay (GetMe pays) - no secrets
+    lankaqr: (() => {
+      const qr = qrProviders.current();
+      const method = methods.catalogue.find((m) => m.key === 'getme_lankaqr');
+      return {
+        available: method?.availability === 'available',
+        simulator: qr.usable && qr.simulator,
+        notice: qr.usable && qr.simulator ? 'TEST SIMULATOR — no money moves' : null,
+        paymentSource: lankaqrSource,
+      };
+    })(),
     storePayment: store().toPublic(payment),
     reconciliation: payment
       ? {
@@ -725,14 +857,53 @@ const attemptView = async (client, id) =>
   publicAttempt(
     (
       await client.query(
-        `SELECT a.*, m.label AS method_label, c.last4 AS card_last4 FROM grocery_payment_attempts a
-         JOIN grocery_payment_methods m ON m.key = a.method LEFT JOIN getme_cards c ON c.id = a.card_id WHERE a.id = $1`,
+        `SELECT a.*, m.label AS method_label, c.last4 AS card_last4,
+                lm.merchant_name AS lankaqr_merchant_name, lm.merchant_city AS lankaqr_merchant_city
+         FROM grocery_payment_attempts a
+         JOIN grocery_payment_methods m ON m.key = a.method LEFT JOIN getme_cards c ON c.id = a.card_id
+         LEFT JOIN shop_lankaqr_merchants lm ON lm.id = a.merchant_id WHERE a.id = $1`,
         [id]
       )
     ).rows[0]
   );
 
 // Inside a transaction with the order row locked
+// Phase 55: company card spending controls GetMe sets per card (the
+// bank's own card limits still apply on top). Amounts held by pending
+// payments count, so two orders can't pass the same limit.
+const COLOMBO_DAY = "date_trunc('day', NOW() AT TIME ZONE 'Asia/Colombo') AT TIME ZONE 'Asia/Colombo'";
+const COLOMBO_MONTH = "date_trunc('month', NOW() AT TIME ZONE 'Asia/Colombo') AT TIME ZONE 'Asia/Colombo'";
+
+const checkCardControls = async (client, card, holdAmount) => {
+  if (card.expires_on && new Date(card.expires_on).getTime() < Date.now() - 24 * 60 * 60 * 1000) {
+    throw error(409, 'Your GetMe card has expired. Ask GetMe for a new one.', 'CARD_EXPIRED');
+  }
+  const categories = Array.isArray(card.allowed_categories) ? card.allowed_categories : ['grocery'];
+  if (!categories.includes('grocery')) {
+    throw error(409, "Your GetMe card isn't allowed for supermarket payments", 'CARD_CATEGORY');
+  }
+  if (card.per_payment_limit != null && holdAmount > Number(card.per_payment_limit) + 0.005) {
+    throw error(409, `This payment (up to Rs ${holdAmount.toFixed(2)}) is above your GetMe card's limit of Rs ${Number(card.per_payment_limit).toFixed(2)} per payment. Ask GetMe support.`, 'CARD_PAYMENT_LIMIT');
+  }
+  const spent = async (since) =>
+    round2(
+      (
+        await client.query(
+          `SELECT COALESCE(SUM(CASE WHEN status IN ('succeeded', 'disputed', 'unknown') THEN COALESCE(amount, limit_amount)
+                                    WHEN status = 'pending' THEN limit_amount ELSE 0 END), 0) AS total
+           FROM grocery_payment_attempts WHERE card_id = $1 AND created_at >= ${since}`,
+          [card.id]
+        )
+      ).rows[0].total
+    );
+  if (card.daily_limit != null && (await spent(COLOMBO_DAY)) + holdAmount > Number(card.daily_limit) + 0.005) {
+    throw error(409, `This payment would pass your GetMe card's daily limit of Rs ${Number(card.daily_limit).toFixed(2)}. Ask GetMe support.`, 'CARD_DAILY_LIMIT');
+  }
+  if (card.monthly_limit != null && (await spent(COLOMBO_MONTH)) + holdAmount > Number(card.monthly_limit) + 0.005) {
+    throw error(409, `This payment would pass your GetMe card's monthly limit of Rs ${Number(card.monthly_limit).toFixed(2)}. Ask GetMe support.`, 'CARD_MONTHLY_LIMIT');
+  }
+};
+
 const createAttempt = async (client, { order, shopId, shopperId, method, requestId, platform, actor = 'shopper' }) => {
   const settings = await loadSettings(client);
   const reservation = await syncReservation(client, order, shopId, settings);
@@ -740,12 +911,14 @@ const createAttempt = async (client, { order, shopId, shopperId, method, request
 
   const live = await liveAttempt(client, order.id, shopId, { lock: true });
   if (live) {
+    // (phase 49: 'unknown' = a LankaQR payment the bank hasn't settled yet)
+    const open = ['pending', 'unknown'].includes(live.status);
     throw error(
       409,
-      live.status === 'pending'
-        ? 'A payment is already in progress for this shop. Report its result or cancel it first.'
+      open
+        ? 'A payment is already in progress for this shop. Finish it first (report its result, cancel it, or wait for the bank).'
         : 'This shop is already paid for this order',
-      live.status === 'pending' ? 'PAYMENT_IN_PROGRESS' : 'ALREADY_PAID',
+      open ? 'PAYMENT_IN_PROGRESS' : 'ALREADY_PAID',
       { attemptId: Number(live.id) }
     );
   }
@@ -786,6 +959,7 @@ const createAttempt = async (client, { order, shopId, shopperId, method, request
     if (balance.available + 0.005 < round2(reservation.limit_amount)) {
       throw error(409, 'Not enough GetMe funds on your card for this order. Use another method or ask GetMe to add funds.', 'CARD_FUNDS_LOW');
     }
+    await checkCardControls(client, card, round2(reservation.limit_amount));
     cardId = Number(card.id);
   }
 
@@ -819,7 +993,41 @@ const createAttempt = async (client, { order, shopId, shopperId, method, request
 };
 
 // POST /api/shopper/orders/:orderId/grocery-payment/attempts { shopId, method, requestId, platform }
-const startAttempt = async ({ shopperId, orderId, shopId, method, requestId, platform }) => {
+// =====================================================
+// PHASE 54: "Pay by QR" with the shopper's own app (record-and-verify)
+// The shopper scans the till's LankaQR in GetMe before paying with their
+// own wallet / bank app (e.g. HelaPay in Helakuru). GetMe reads the QR,
+// checks it belongs to this store and compares its amount with the
+// expected bill. A QR approved for another store, or one that doesn't
+// match the approved details, is refused; a store QR GetMe hasn't
+// approved yet is allowed but flagged for review. Nothing here marks
+// anything paid: the shopper reports the payment, the receipt and
+// GetMe's reconciliation decide.
+// =====================================================
+
+const PAYER_APPS = ['helapay', 'bank_app', 'card', 'other'];
+
+const tillQrCheck = async (client, shopId, qrPayload) => {
+  const qr = require('./lankaqr');
+  const lankaqrPayments = require('./lankaqrPayments');
+  let parsed;
+  try {
+    parsed = qr.parse(String(qrPayload));
+  } catch (caught) {
+    throw error(400, "This isn't a valid LankaQR code. Scan the QR at the till again.", 'QR_INVALID', { reason: caught.code || null });
+  }
+  // Phase 56: CBSL's per-transaction LankaQR limit
+  if (parsed.amount != null && parsed.amount > qr.MAX_AMOUNT) {
+    throw error(400, `One LankaQR payment can be at most Rs ${qr.MAX_AMOUNT.toLocaleString('en-LK')} (CBSL limit)`, 'AMOUNT_OVER_CBSL_LIMIT');
+  }
+  const check = await lankaqrPayments.merchantCheck(client, shopId, parsed);
+  if (!['APPROVED', 'MERCHANT_UNKNOWN', 'MERCHANT_PENDING'].includes(check.code)) {
+    lankaqrPayments.refuseMerchant(check, parsed);
+  }
+  return { parsed, check };
+};
+
+const startAttempt = async ({ shopperId, orderId, shopId, method, requestId, platform, qrPayload, payerApp, billTotal }) => {
   const key = clean(requestId, 80) || null;
   const client = await pool.connect();
 
@@ -835,9 +1043,71 @@ const startAttempt = async ({ shopperId, orderId, shopId, method, requestId, pla
       }
     }
 
+    // Phase 49: GetMe's LANKAQR is paid only through scan -> preview -> pay
+    if (['getme_lankaqr', 'lankaqr_bank'].includes(String(method || ''))) {
+      throw error(409, "Scan the store's LankaQR code in the app to pay with GetMe's account.", 'USE_LANKAQR_SCAN');
+    }
+
     const order = await orderForShopper(client, orderId, shopperId, shopId, { lock: true });
     await checkReadyToPay(client, order, Number(shopId));
+
+    if (payerApp != null && payerApp !== '' && !PAYER_APPS.includes(String(payerApp))) {
+      throw error(400, 'Unknown payment app', 'BAD_PAYER_APP');
+    }
+    // Phase 56: bill total typed before scanning (optional)
+    let bill = null;
+    if (billTotal != null && billTotal !== '') {
+      const text = String(billTotal).replace(/,/g, '').trim();
+      if (!/^\d{1,9}(\.\d{1,2})?$/.test(text) || !(Number(text) > 0)) throw error(400, 'Enter the bill total in rupees (e.g. 4520.50)', 'INVALID_AMOUNT', { field: 'billTotal' });
+      bill = round2(Number(text));
+    }
+    let till = null;
+    if (qrPayload != null && qrPayload !== '') {
+      if (String(method || '') !== 'lankaqr') throw error(400, 'A scanned QR goes with the LankaQR method', 'QR_NOT_FOR_METHOD');
+      till = await tillQrCheck(client, Number(shopId), qrPayload);
+    }
+
     const attempt = await createAttempt(client, { order, shopId: Number(shopId), shopperId, method: String(method || ''), requestId: key, platform });
+
+    if (till || payerApp || bill) {
+      // Phase 56: the QR amount is checked against the bill total when the
+      // shopper typed it, else against the expected amount
+      const expected = bill ?? round2(attempt.expected_amount);
+      const qrAmount = till?.parsed.amount != null ? round2(till.parsed.amount) : null;
+      const qrCheck = till
+        ? {
+            merchant: till.check.code,
+            merchantName: till.parsed.merchantName,
+            merchantCity: till.parsed.merchantCity,
+            kind: till.parsed.kind,
+            qrAmount,
+            expectedAmount: expected,
+            amountMatches: qrAmount == null ? null : Math.abs(qrAmount - expected) <= 0.01,
+            billTotal: bill,
+            // LankaQR v1.3: the reference label (62-05) is mandatory
+            referenceLabelMissing: !till.parsed.referenceLabel,
+            scannedAt: new Date().toISOString(),
+          }
+        : null;
+      await client.query(
+        `UPDATE grocery_payment_attempts
+            SET qr_check = COALESCE($2, qr_check), payer_app = COALESCE($3, payer_app),
+                qr_kind = COALESCE($4, qr_kind), qr_reference = COALESCE($5, qr_reference),
+                requested_amount = COALESCE($6, requested_amount),
+                merchant_id = COALESCE($7, merchant_id), bill_total = COALESCE($8, bill_total), updated_at = NOW()
+          WHERE id = $1`,
+        [
+          attempt.id,
+          qrCheck ? JSON.stringify(qrCheck) : null,
+          payerApp || null,
+          till?.parsed.kind || null,
+          till ? clean(till.parsed.billNumber || till.parsed.referenceLabel || '', 60) || null : null,
+          qrAmount,
+          till?.check.code === 'APPROVED' ? till.check.merchant.id : null,
+          bill,
+        ]
+      );
+    }
     await client.query('COMMIT');
     return { attempt: await attemptView(pool, attempt.id), duplicate: false };
   } catch (caught) {
@@ -847,6 +1117,44 @@ const startAttempt = async ({ shopperId, orderId, shopId, method, requestId, pla
   } finally {
     client.release();
   }
+};
+
+// Phase 55: why a shopper-reported payment needs a person to check it
+const SELF_REPORT_REVIEW_ABOVE = () => Number(process.env.GROCERY_SELF_REPORT_REVIEW_ABOVE) || 25000;
+const NEW_SHOPPER_ORDERS = () => {
+  const value = Number(process.env.GROCERY_REVIEW_NEW_SHOPPER_ORDERS);
+  return Number.isFinite(value) && value >= 0 ? value : 3;
+};
+
+const selfReportRisks = async (client, attempt, amount) => {
+  const reasons = [];
+
+  if (attempt.method === 'lankaqr') {
+    const check = attempt.qr_check || null;
+    if (!check) reasons.push('LankaQR payment without a scanned till QR');
+    else {
+      if (check.merchant !== 'APPROVED') reasons.push(`Till QR is not an approved QR of this shop (${check.merchant})`);
+      if (check.amountMatches === false) reasons.push('The amount in the till QR differs from the expected bill');
+    }
+  }
+  // Phase 56: paid amount vs the bill total typed before scanning
+  const bill = attempt.bill_total != null ? round2(attempt.bill_total) : attempt.qr_check?.billTotal ?? null;
+  if (bill != null && Math.abs(bill - amount) > 0.01) reasons.push(`Paid Rs ${amount.toFixed(2)} but the bill total typed before paying was Rs ${bill.toFixed(2)}`);
+
+  if (amount >= SELF_REPORT_REVIEW_ABOVE()) {
+    reasons.push(`Rs ${amount.toFixed(2)} is above the self-reported limit of Rs ${SELF_REPORT_REVIEW_ABOVE().toFixed(2)}`);
+  }
+
+  const delivered = Number(
+    (
+      await client.query("SELECT COUNT(*)::int AS n FROM orders WHERE shopper_id = $1 AND status = 'delivered'", [
+        attempt.shopper_id,
+      ])
+    ).rows[0]?.n || 0
+  );
+  if (delivered < NEW_SHOPPER_ORDERS()) reasons.push(`New shopper (${delivered} delivered orders): first payments are checked by GetMe`);
+
+  return reasons;
 };
 
 // The till charged the shopper / card: write the store payment record
@@ -887,9 +1195,16 @@ const recordPaid = async (client, { order, attempt, amountPaid, reference, note,
   const limit = round2(reservation?.limit_amount ?? attempt.limit_amount);
   const overLimit = amount > limit + 0.005;
   const variance = round2(amount - expected);
-  const needsReview = overLimit || Math.abs(variance) > store().reviewTolerance(expected);
-  const reviewNote = overLimit ? `Rs ${amount.toFixed(2)} is over the spending limit of Rs ${limit.toFixed(2)}` : null;
   const funding = attempt.funding;
+  // Phase 55 (payment audit P-07 / P-08): a payment the shopper reports
+  // is auto-accepted (bill photo, amount within tolerance) only when
+  // nothing about it is unusual; otherwise GetMe checks it before the
+  // reimbursement can be withdrawn
+  const reasons = [];
+  if (overLimit) reasons.push(`Rs ${amount.toFixed(2)} is over the spending limit of Rs ${limit.toFixed(2)}`);
+  if (funding === 'shopper') reasons.push(...(await selfReportRisks(client, attempt, amount)));
+  const needsReview = reasons.length > 0 || Math.abs(variance) > store().reviewTolerance(expected);
+  const reviewNote = reasons.length > 0 ? reasons.join('; ').slice(0, 300) : null;
 
   const row = (
     await client.query(
@@ -1007,7 +1322,7 @@ const paidMessage = (funding, needsReview, overLimit) =>
 //   { outcome: 'paid', amountPaid, reference?, note? }
 //   { outcome: 'failed', reason }
 //   { outcome: 'reversed', reason }  (the till voided / refunded it before the bill was final)
-const reportResult = async ({ shopperId, attemptId, outcome, amountPaid, reference, note, reason, io }) => {
+const reportResult = async ({ shopperId, attemptId, outcome, amountPaid, reference, note, reason, io, payerApp }) => {
   const client = await pool.connect();
   let result = {};
 
@@ -1019,6 +1334,17 @@ const reportResult = async ({ shopperId, attemptId, outcome, amountPaid, referen
     await client.query('BEGIN');
     const order = await orderForShopper(client, peek.order_id, shopperId, peek.shop_id, { lock: true });
     const attempt = await lockAttempt(client, attemptId, shopperId);
+
+    // Phase 49: a LANKAQR payment from GetMe's account is confirmed only
+    // by the provider (or an admin with the bank statement)
+    if (attempt.provider) {
+      throw error(409, 'Only the bank confirms this payment. Its status updates by itself.', 'PROVIDER_CONFIRMS', { attemptId: Number(attempt.id) });
+    }
+
+    if (outcome === 'paid' && payerApp != null && payerApp !== '') {
+      if (!PAYER_APPS.includes(String(payerApp))) throw error(400, 'Unknown payment app', 'BAD_PAYER_APP');
+      await client.query('UPDATE grocery_payment_attempts SET payer_app = $2 WHERE id = $1', [attempt.id, String(payerApp)]);
+    }
 
     if (outcome === 'paid') {
       if (!['pending', 'succeeded'].includes(attempt.status)) {
@@ -1105,6 +1431,11 @@ const cancelAttempt = async ({ shopperId, attemptId }) => {
     await client.query('BEGIN');
     const attempt = await lockAttempt(client, attemptId, shopperId);
 
+    // Phase 49: sent to the bank -> can't be cancelled from the app
+    if (SENT_TO_PROVIDER(attempt) && ['pending', 'unknown'].includes(attempt.status)) {
+      throw error(409, "This payment was sent to the bank and can't be cancelled. Wait for its result.", 'PROVIDER_PAYMENT_OPEN');
+    }
+
     if (attempt.status === 'cancelled') {
       await client.query('COMMIT');
       return { attempt: await attemptView(pool, attempt.id), message: 'Already cancelled' };
@@ -1172,8 +1503,50 @@ const legacyRecord = async ({ shopperId, orderId, shopId, method, amountPaid, re
   return { payment: paid.row, created: paid.created, message: paidMessage('shopper', paid.needsReview, paid.overLimit) };
 };
 
+// GET /api/shopper/grocery-payments/history?page= (phase 54)
+// The shopper's own supermarket payment attempts, newest first
+const historyForShopper = async ({ shopperId, query }) => {
+  const { readPage, pageMeta } = require('../utils/pagination');
+  const paging = readPage(query);
+  const total = (await pool.query('SELECT COUNT(*)::int AS n FROM grocery_payment_attempts WHERE shopper_id = $1', [shopperId])).rows[0].n;
+  const rows = (
+    await pool.query(
+      `SELECT a.*, m.label AS method_label, c.last4 AS card_last4,
+              lm.merchant_name AS lankaqr_merchant_name, lm.merchant_city AS lankaqr_merchant_city,
+              s.shop_name
+         FROM grocery_payment_attempts a
+         JOIN grocery_payment_methods m ON m.key = a.method
+         LEFT JOIN getme_cards c ON c.id = a.card_id
+         LEFT JOIN shop_lankaqr_merchants lm ON lm.id = a.merchant_id
+         LEFT JOIN shops s ON s.id = a.shop_id
+        WHERE a.shopper_id = $1
+        ORDER BY a.created_at DESC, a.id DESC
+        LIMIT $2 OFFSET $3`,
+      [shopperId, paging.pageSize, paging.offset]
+    )
+  ).rows;
+  return {
+    ...pageMeta(paging, total),
+    attempts: rows.map((row) => ({ ...publicAttempt(row), shopName: row.shop_name || null, orderCode: `GETME-${row.order_id}` })),
+  };
+};
+
 module.exports = {
+  // phase 55 (tests + reuse)
+  selfReportRisks,
+  checkCardControls,
+  // phase 54
+  tillQrCheck,
+  historyForShopper,
   LIVE,
+  SENT_TO_PROVIDER,
+  ATTEMPT_LABELS,
+  // Phase 49 (lankaqrPayments.js)
+  orderForShopper,
+  checkReadyToPay,
+  syncReservation,
+  liveAttempt,
+  shopStatesFor,
   round2,
   error,
   clean,

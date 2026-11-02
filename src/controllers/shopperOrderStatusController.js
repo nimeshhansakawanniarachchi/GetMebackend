@@ -1,4 +1,5 @@
 
+const crypto = require('crypto');
 const db = require('../config/db');
 
 const { shopperPayForOrder } = require('./shopperPay');
@@ -188,6 +189,28 @@ const acceptOrder = async (req, res) => {
         success: false,
         message: 'Order has already been assigned',
       });
+    }
+
+    // Phase 61: restaurant deliveries are Bike only
+    const vehicleRule =
+      order.fulfilment_method === 'delivery'
+        ? require('../marketplace/common').allowedVehiclesFor(order.business_type)
+        : null;
+
+    if (vehicleRule) {
+      const ownVehicle = (
+        await client.query('SELECT vehicle_type FROM shoppers WHERE id = $1', [shopperId])
+      ).rows[0]?.vehicle_type;
+
+      if (!vehicleRule.includes(ownVehicle)) {
+        await client.query('ROLLBACK');
+
+        return res.status(403).json({
+          success: false,
+          code: 'BIKE_ONLY',
+          message: 'Restaurant orders are delivered by Bike only.',
+        });
+      }
     }
 
     // Phase 45: no cash order while holding too much cash for GetMe
@@ -449,6 +472,17 @@ const startShopping = async (req, res) => {
     }
 
     const order = orderResult.rows[0];
+
+    // Phase 59: clothing / restaurant orders are prepared by the store;
+    // the shopper only collects them (merchant-pickup)
+    if (order.business_type && order.business_type !== 'grocery') {
+      return res.status(409).json({
+        success: false,
+        code: 'MERCHANT_ORDER',
+        message: 'The store prepares this order. Collect it when it is ready.',
+        status: order.status,
+      });
+    }
 
     if (
       !['shopper_accepted', 'shopping'].includes(order.status)
@@ -785,9 +819,8 @@ const confirmArrival = async (req, res) => {
       });
     }
 
-    const pin = String(
-      Math.floor(100000 + Math.random() * 900000)
-    );
+    // Phase 52: cryptographic random 6-digit PIN (was Math.random)
+    const pin = String(crypto.randomInt(100000, 1000000));
 
     const updateResult = await db.query(
       `
@@ -795,6 +828,8 @@ const confirmArrival = async (req, res) => {
       SET
         status = 'arrived',
         delivery_pin = $1,
+        delivery_pin_failed_attempts = 0,
+        delivery_pin_locked_until = NULL,
         updated_at = NOW()
       WHERE id = $2 AND shopper_id = $3
       RETURNING *
@@ -835,6 +870,8 @@ const confirmArrival = async (req, res) => {
 // =====================================================
 // VERIFY DELIVERY PIN
 // =====================================================
+
+const PIN_MAX_ATTEMPTS = 5;
 
 const verifyDeliveryPin = async (req, res) => {
   const shopperId = getShopperId(req);
@@ -906,10 +943,49 @@ const verifyDeliveryPin = async (req, res) => {
       });
     }
 
-    if (String(order.delivery_pin || '') !== submittedPin) {
+    // Phase 52: 5 wrong PINs lock the check for 30 minutes
+    if (order.delivery_pin_locked_until && new Date(order.delivery_pin_locked_until) > new Date()) {
+      const minutes = Math.max(1, Math.ceil((new Date(order.delivery_pin_locked_until) - Date.now()) / 60000));
+      return res.status(429).json({
+        success: false,
+        code: 'PIN_LOCKED',
+        message: `Too many wrong PINs. Try again in ${minutes} min, or call GetMe support.`,
+        lockedUntil: order.delivery_pin_locked_until,
+      });
+    }
+
+    const expectedPin = Buffer.from(String(order.delivery_pin || ''));
+    const givenPin = Buffer.from(submittedPin);
+    const pinMatches = expectedPin.length === givenPin.length && crypto.timingSafeEqual(expectedPin, givenPin);
+
+    if (!pinMatches) {
+      const failed = (
+        await db.query(
+          `UPDATE orders
+              SET delivery_pin_failed_attempts = CASE WHEN delivery_pin_failed_attempts + 1 >= $2 THEN 0 ELSE delivery_pin_failed_attempts + 1 END,
+                  delivery_pin_locked_until = CASE WHEN delivery_pin_failed_attempts + 1 >= $2 THEN NOW() + INTERVAL '30 minutes' ELSE delivery_pin_locked_until END
+            WHERE id = $1
+            RETURNING delivery_pin_failed_attempts, delivery_pin_locked_until`,
+          [orderId, PIN_MAX_ATTEMPTS]
+        )
+      ).rows[0];
+
+      if (failed?.delivery_pin_locked_until && new Date(failed.delivery_pin_locked_until) > new Date()) {
+        console.warn('⚠️ Delivery PIN locked after repeated wrong PINs', { orderId, shopperId });
+        return res.status(429).json({
+          success: false,
+          code: 'PIN_LOCKED',
+          message: 'Too many wrong PINs. Try again in 30 min, or call GetMe support.',
+          lockedUntil: failed.delivery_pin_locked_until,
+        });
+      }
+
+      const left = PIN_MAX_ATTEMPTS - Number(failed?.delivery_pin_failed_attempts || 0);
       return res.status(400).json({
         success: false,
-        message: 'Incorrect delivery PIN',
+        code: 'PIN_INCORRECT',
+        message: `Incorrect delivery PIN. ${left} ${left === 1 ? 'try' : 'tries'} left.`,
+        attemptsLeft: left,
       });
     }
 
@@ -950,6 +1026,7 @@ const verifyDeliveryPin = async (req, res) => {
       SET
         status = 'delivered',
         delivery_pin = NULL,
+        delivery_pin_failed_attempts = 0,
         delivered_at = NOW(),
         updated_at = NOW()
       WHERE

@@ -81,6 +81,8 @@ const requireAdmin = async (req, res, next) => {
       role: admin.role || 'owner',
       permissions: new Set(effectivePermissions(admin)),
       mustChangePassword: Boolean(admin.must_change_password),
+      // Unix s of the last password / two-step check (high-risk routes, B-13)
+      recentAuthAt: Number.isFinite(Number(decoded.ra)) ? Number(decoded.ra) : null,
     };
 
     if (req.admin.mustChangePassword) {

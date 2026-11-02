@@ -12,3 +12,17 @@ node_modules/
 
 # Applicant identity documents (phase 34): never in git, never public
 /private-uploads/
+
+# Security review 2026-10-30 (M-05): never commit secrets, keys, dumps or logs
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+*.dump
+*.backup
+*.sql.gz
+*.log
+logs/

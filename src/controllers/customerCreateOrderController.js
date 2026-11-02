@@ -189,100 +189,44 @@ const getDeliverySlots = async (req, res) => {
 
 
 // =====================================================
-// CREATE ORDER
-// POST /api/customer/orders
-// Body: deliveryAddress, deliveryLatitude, deliveryLongitude,
-//   deliveryOption ('fast'|'standard'|'scheduled'), scheduledDate,
-//   scheduledStartTime, scheduledEndTime,
-//   deliveryDropoff ('leave_at_door'|'meet_at_door'), deliveryInstructions,
-//   contactPhone (shopper calls it; empty = account mobile),
-//   paymentMethod, cardId (saved card; required for 'card'),
-//   expectedTotal, tipAmount, promoCode, items[{ productId, shopId, quantity,
-//   amount, selectedUnit } | { custom:true, shopId, itemName, quantity,
-//   unit, details, image, voiceUrl }]
-// Every amount is computed here — client prices and fees are ignored.
-// Card: the saved card is only checked and remembered here; it is
-// charged when the customer books a vehicle (start-search).
+// PHASE 65: PLACE A GROCERY ORDER INSIDE A TRANSACTION
+// The whole of "Place order" for groceries, run in the caller's open
+// transaction (client): createOrder below, and the one-checkout parent
+// order (src/orderGroups) which places a grocery child next to the
+// restaurant / clothing ones in the same transaction.
+// -> { refusal: [status, body] } (caller rolls back and answers) or
+//    { order, quote, primaryShop, creditSpent }
 // =====================================================
 
-const createOrder = async (req, res) => {
-  const customerId = req.customer.customerId;
+const placeGroceryOrderTx = async (client, {
+  customerId,
+  body,
+  paymentMethod,
+  deliveryAddress,
+  deliveryDropoff,
+  deliveryInstructions,
+  contactPhone,
+  requestId,
+  orderGroupId = null,
+}) => {
+  const refused = (status, refusalBody) => ({ refusal: [status, refusalBody] });
 
-  const deliveryAddress = String(req.body?.deliveryAddress || '').trim();
-  const paymentMethod = String(req.body?.paymentMethod || 'cash').trim().toLowerCase();
-
-  if (!deliveryAddress || deliveryAddress.length > MAX_ADDRESS_LENGTH) {
-    return res.status(400).json({ success: false, message: 'Delivery address is required' });
-  }
-
-  if (!PAYMENT_METHODS.includes(paymentMethod)) {
-    return res.status(400).json({ success: false, message: 'Choose a valid payment method' });
-  }
-
-  const deliveryDropoff = DROPOFF_OPTIONS.includes(req.body?.deliveryDropoff)
-    ? req.body.deliveryDropoff
-    : 'leave_at_door';
-
-  const deliveryInstructions =
-    String(req.body?.deliveryInstructions || '').trim().slice(0, MAX_INSTRUCTIONS_LENGTH) || null;
-
-  const rawContactPhone = String(req.body?.contactPhone || '').trim();
-  const contactPhone = rawContactPhone ? normalizeSriLankanMobile(rawContactPhone) : null;
-
-  if (rawContactPhone && !contactPhone) {
-    return res.status(400).json({ success: false, message: 'Enter a valid Sri Lankan mobile number' });
-  }
-
-  // Same request id twice (double tap, retry after a timeout) = the
-  // order the first request placed, never a second order
-  const requestId = readRequestId(req.body?.requestId);
-
-  if (req.body?.requestId != null && !requestId) {
-    return res.status(400).json({ success: false, message: 'Invalid request id' });
-  }
-
-  if (requestId) {
-    const existing = await findOrderByRequest(customerId, requestId);
-
-    if (existing) {
-      return res.status(200).json({ success: true, duplicate: true, message: 'Order already placed', order: existing });
-    }
-  }
-
-  // The delivery route (Google / OSRM, can take seconds) is looked
-  // up here, before the transaction: the priced-again quote inside
-  // it then gets the same route from the cache (pricing/deliveryRoute.js)
-  // without holding product locks while a routing API answers
-  await buildQuote(readQuoteInput(req.body, customerId)).catch(() => null);
-
-  const io = req.app.get('io');
-  const client = await pool.connect();
-  let committed = false;
-
-  // Ends the transaction and answers (early refusals below)
-  const refuse = async (status, body) => {
-    await client.query('ROLLBACK').catch(() => {});
-    return res.status(status).json({ success: false, ...body });
-  };
-
-  try {
-    await client.query('BEGIN');
-
+  {
     // Priced inside the transaction with the products share-locked:
     // a shop's price edit waits until this order is saved, so the
     // order keeps exactly the prices it was checked against
     let quote;
 
     try {
-      quote = await buildQuote({ ...readQuoteInput(req.body, customerId), client, lockProducts: true });
+      quote = await buildQuote({ ...readQuoteInput(body, customerId), client, lockProducts: true });
     } catch (error) {
       console.error('❌ createOrder quote error:', error.message);
 
-      return refuse(500, { message: 'Unable to price your order' });
+      return refused(500, { message: 'Unable to price your order' });
     }
 
     if (quote.issues.length > 0) {
-      return refuse(400, {
+      return refused(400, {
         code: 'ORDER_ISSUES',
         message: quote.issues[0].message,
         issues: quote.issues,
@@ -292,7 +236,7 @@ const createOrder = async (req, res) => {
 
     // A code the customer entered must still apply; never drop it silently
     if (quote.promo && !quote.promo.applied) {
-      return refuse(400, { code: 'PROMO_INVALID', message: quote.promo.message, quote });
+      return refused(400, { code: 'PROMO_INVALID', message: quote.promo.message, quote });
     }
 
     // An item's price moved since the customer saw it (cart / last
@@ -301,7 +245,7 @@ const createOrder = async (req, res) => {
       const [first] = quote.priceChanges;
       const more = quote.priceChanges.length - 1;
 
-      return refuse(409, {
+      return refused(409, {
         code: 'PRICE_CHANGED',
         message: more > 0
           ? `Prices changed for ${quote.priceChanges.length} items. Please review and confirm.`
@@ -312,13 +256,13 @@ const createOrder = async (req, res) => {
     }
 
     // The customer agreed to a total; if it moved, ask again
-    const expectedTotal = Number(req.body?.expectedTotal);
+    const expectedTotal = Number(body?.expectedTotal);
 
     if (
       Number.isFinite(expectedTotal) &&
       Math.abs(expectedTotal - quote.totalAmount) > 0.009
     ) {
-      return refuse(409, {
+      return refused(409, {
         code: 'PRICE_CHANGED',
         message: `Your total changed to Rs ${quote.totalAmount.toFixed(2)}. Please review and confirm.`,
         changes: [],
@@ -333,7 +277,7 @@ const createOrder = async (req, res) => {
     // the other, so the balance can never go below zero.
     // ================================================
 
-    const useCredit = readUseCredit(req.body);
+    const useCredit = readUseCredit(body);
     await client.query('SELECT id FROM customers WHERE id = $1 FOR UPDATE', [customerId]);
     const locked = await checkoutExtras(customerId, quote, useCredit, client);
 
@@ -342,13 +286,13 @@ const createOrder = async (req, res) => {
     quote.amountToPay = locked.amountToPay;
 
     if (locked.controls?.status === 'blocked') {
-      return refuse(403, accountControls.blockedBody());
+      return refused(403, accountControls.blockedBody());
     }
 
     if (paymentMethod === 'cash' && !locked.paymentOptions.cash.allowed) {
       const cash = locked.paymentOptions.cash;
 
-      return refuse(accountControls.cashRefusalStatus(cash.code), {
+      return refused(accountControls.cashRefusalStatus(cash.code), {
         code: cash.code,
         message: cash.reason,
         limit: cash.limit,
@@ -358,15 +302,15 @@ const createOrder = async (req, res) => {
 
     // The credit the customer saw at checkout changed (spent on another
     // order meanwhile): ask again before charging more
-    const expectedCredit = Number(req.body?.expectedCredit);
+    const expectedCredit = Number(body?.expectedCredit);
 
     if (
       useCredit &&
-      req.body?.expectedCredit != null && req.body.expectedCredit !== '' &&
+      body?.expectedCredit != null && body.expectedCredit !== '' &&
       Number.isFinite(expectedCredit) &&
       Math.abs(expectedCredit - locked.credit.applied) > 0.009
     ) {
-      return refuse(409, {
+      return refused(409, {
         code: 'CREDIT_CHANGED',
         message: `Your GetMe credit available for this order is now Rs ${locked.credit.applied.toFixed(2)}. Please review and confirm.`,
         credit: locked.credit,
@@ -374,7 +318,7 @@ const createOrder = async (req, res) => {
       });
     }
 
-    const requestedPrimary = Number(req.body?.shopId);
+    const requestedPrimary = Number(body?.shopId);
     const primaryShop =
       quote.shops.find((shop) => shop.id === requestedPrimary) || quote.shops[0];
 
@@ -389,15 +333,15 @@ const createOrder = async (req, res) => {
     if (paymentMethod === 'card' && quote.totalAmount > 0) {
       const card = await getOwnerCard(
         { type: 'customer', id: Number(customerId) },
-        Number(req.body?.cardId) || 0
+        Number(body?.cardId) || 0
       );
 
       if (!card) {
-        return refuse(400, { code: 'CARD_REQUIRED', message: 'Add or choose a card to pay with' });
+        return refused(400, { code: 'CARD_REQUIRED', message: 'Add or choose a card to pay with' });
       }
 
       if (toPublicCard(card).expired) {
-        return refuse(400, {
+        return refused(400, {
           code: 'CARD_EXPIRED',
           message: `${toPublicCard(card).label} has expired. Choose another card.`,
         });
@@ -422,7 +366,7 @@ const createOrder = async (req, res) => {
       });
 
       if (!promo?.applied || promo.discount !== quote.discount) {
-        return refuse(409, {
+        return refused(409, {
           code: 'PROMO_INVALID',
           message: promo?.message || 'This promo code can no longer be used',
           quote,
@@ -456,8 +400,8 @@ const createOrder = async (req, res) => {
         customerId,
         primaryShop.id,
         deliveryAddress,
-        Number(req.body.deliveryLatitude),
-        Number(req.body.deliveryLongitude),
+        Number(body.deliveryLatitude),
+        Number(body.deliveryLongitude),
         quote.deliveryOption,
         paymentMethod,
         quote.itemsTotal,
@@ -589,6 +533,116 @@ const createOrder = async (req, res) => {
       );
     }
 
+
+    // Phase 65: a child of a one-checkout parent order
+    if (orderGroupId) {
+      order = (
+        await client.query('UPDATE orders SET order_group_id = $2 WHERE id = $1 RETURNING *', [order.id, orderGroupId])
+      ).rows[0];
+    }
+
+    return { order, quote, primaryShop, creditSpent };
+  }
+};
+
+// =====================================================
+// CREATE ORDER
+// POST /api/customer/orders
+// Body: deliveryAddress, deliveryLatitude, deliveryLongitude,
+//   deliveryOption ('fast'|'standard'|'scheduled'), scheduledDate,
+//   scheduledStartTime, scheduledEndTime,
+//   deliveryDropoff ('leave_at_door'|'meet_at_door'), deliveryInstructions,
+//   contactPhone (shopper calls it; empty = account mobile),
+//   paymentMethod, cardId (saved card; required for 'card'),
+//   expectedTotal, tipAmount, promoCode, items[{ productId, shopId, quantity,
+//   amount, selectedUnit } | { custom:true, shopId, itemName, quantity,
+//   unit, details, image, voiceUrl }]
+// Every amount is computed here — client prices and fees are ignored.
+// Card: the saved card is only checked and remembered here; it is
+// charged when the customer books a vehicle (start-search).
+// =====================================================
+
+const createOrder = async (req, res) => {
+  const customerId = req.customer.customerId;
+
+  const deliveryAddress = String(req.body?.deliveryAddress || '').trim();
+  const paymentMethod = String(req.body?.paymentMethod || 'cash').trim().toLowerCase();
+
+  if (!deliveryAddress || deliveryAddress.length > MAX_ADDRESS_LENGTH) {
+    return res.status(400).json({ success: false, message: 'Delivery address is required' });
+  }
+
+  if (!PAYMENT_METHODS.includes(paymentMethod)) {
+    return res.status(400).json({ success: false, message: 'Choose a valid payment method' });
+  }
+
+  const deliveryDropoff = DROPOFF_OPTIONS.includes(req.body?.deliveryDropoff)
+    ? req.body.deliveryDropoff
+    : 'leave_at_door';
+
+  const deliveryInstructions =
+    String(req.body?.deliveryInstructions || '').trim().slice(0, MAX_INSTRUCTIONS_LENGTH) || null;
+
+  const rawContactPhone = String(req.body?.contactPhone || '').trim();
+  const contactPhone = rawContactPhone ? normalizeSriLankanMobile(rawContactPhone) : null;
+
+  if (rawContactPhone && !contactPhone) {
+    return res.status(400).json({ success: false, message: 'Enter a valid Sri Lankan mobile number' });
+  }
+
+  // Same request id twice (double tap, retry after a timeout) = the
+  // order the first request placed, never a second order
+  const requestId = readRequestId(req.body?.requestId);
+
+  if (req.body?.requestId != null && !requestId) {
+    return res.status(400).json({ success: false, message: 'Invalid request id' });
+  }
+
+  if (requestId) {
+    const existing = await findOrderByRequest(customerId, requestId);
+
+    if (existing) {
+      return res.status(200).json({ success: true, duplicate: true, message: 'Order already placed', order: existing });
+    }
+  }
+
+  // The delivery route (Google / OSRM, can take seconds) is looked
+  // up here, before the transaction: the priced-again quote inside
+  // it then gets the same route from the cache (pricing/deliveryRoute.js)
+  // without holding product locks while a routing API answers
+  await buildQuote(readQuoteInput(req.body, customerId)).catch(() => null);
+
+  const io = req.app.get('io');
+  const client = await pool.connect();
+  let committed = false;
+
+  // Ends the transaction and answers (early refusals below)
+  const refuse = async (status, body) => {
+    await client.query('ROLLBACK').catch(() => {});
+    return res.status(status).json({ success: false, ...body });
+  };
+
+  try {
+    await client.query('BEGIN');
+
+    const placed = await placeGroceryOrderTx(client, {
+      customerId,
+      body: req.body,
+      paymentMethod,
+      deliveryAddress,
+      deliveryDropoff,
+      deliveryInstructions,
+      contactPhone,
+      requestId,
+    });
+
+    if (placed.refusal) {
+      return refuse(placed.refusal[0], placed.refusal[1]);
+    }
+
+    const { quote, primaryShop, creditSpent } = placed;
+    let { order } = placed;
+
     await client.query('COMMIT');
     committed = true;
 
@@ -691,4 +745,8 @@ module.exports = {
   getQuote,
   getDeliverySlots,
   createOrder,
+  // Phase 65
+  placeGroceryOrderTx,
+  findOrderByRequest,
+  readQuoteInput,
 };

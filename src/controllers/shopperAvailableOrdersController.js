@@ -31,6 +31,56 @@ const {
 // GET SHOPPER ID
 // =====================================================
 
+// =====================================================
+// OFFERS SHOW NO CUSTOMER CONTACT DETAILS (security review B-07)
+// A shopper who has only been offered an order sees the area, the
+// distance and the pay - not the customer's phone, full name, street
+// address, exact position or instructions. They get those once they
+// accept (my orders / order details). Pay and distance are computed
+// above from the exact data, so nothing else changes.
+// =====================================================
+
+const roundPoint = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(n * 1000) / 1000 : value;
+};
+
+const firstName = (name) => {
+  const text = String(name || '').trim();
+  if (!text || /^Customer #/.test(text)) return 'Customer';
+  return text.split(/s+/)[0];
+};
+
+const DROP_KEYS = new Set(['customerPhone', 'phone', 'contactPhone', 'contact_phone', 'customer_phone']);
+const POINT_KEYS = new Set(['customerLatitude', 'customerLongitude', 'deliveryLatitude', 'deliveryLongitude', 'delivery_latitude', 'delivery_longitude']);
+
+const forOffer = (value, area, inDelivery = false, depth = 0) => {
+  if (!value || typeof value !== 'object' || depth > 8) return value;
+  if (Array.isArray(value)) return value.map((item) => forOffer(item, area, inDelivery, depth + 1));
+
+  const out = {};
+  const ownArea = value.delivery?.area || area;
+  for (const [key, item] of Object.entries(value)) {
+    if (DROP_KEYS.has(key)) {
+      out[key] = null;
+    } else if (key === 'customerName' || key === 'customer_name') {
+      out[key] = firstName(item);
+    } else if (key === 'deliveryAddress' || key === 'delivery_address' || (key === 'customer' && typeof item === 'string')) {
+      out[key] = ownArea || null;
+    } else if (inDelivery && key === 'address') {
+      out[key] = ownArea || null;
+    } else if (key === 'instructions' || key === 'deliveryInstructions' || key === 'delivery_instructions') {
+      out[key] = null;
+      out.hasInstructions = Boolean(item);
+    } else if (POINT_KEYS.has(key) || ((inDelivery || depth <= 1) && (key === 'latitude' || key === 'longitude'))) {
+      out[key] = roundPoint(item);
+    } else {
+      out[key] = forOffer(item, ownArea, key === 'delivery', depth + 1);
+    }
+  }
+  return out;
+};
+
 const getShopperId = (req) => {
   return (
     req.shopper?.shopperId ||
@@ -145,6 +195,14 @@ const getAvailableOrders = async (req, res) => {
 
         o.delivery_option,
         o.payment_method,
+
+        -- Phase 59: clothing / restaurant orders (store prepares it)
+        o.business_type,
+        o.merchant_status,
+        o.fulfilment_method,
+        o.merchant_ready_by,
+        -- Phase 61: age check at hand-over (liquor)
+        o.min_customer_age,
 
         -- Preferred vehicle, unless the search has fallen back to any
         CASE
@@ -641,6 +699,7 @@ const getAvailableOrders = async (req, res) => {
       const isPriority =
         order.delivery_option === 'fast' || Number(order.fast_delivery_fee || 0) > 0;
       const isCash = order.payment_method === 'cash';
+      const isMerchant = !!order.business_type && order.business_type !== 'grocery';
 
       const placedAt = new Date(order.created_at).getTime();
       const deliveryMinutes = Number(order.estimated_delivery_minutes);
@@ -664,8 +723,18 @@ const getAvailableOrders = async (req, res) => {
         ),
 
         // Paid at the store's till by the shopper and reimbursed by
-        // GetMe (store_payments) - not earnings
-        groceryEstimate: Number(order.items_total || 0),
+        // GetMe (store_payments) - not earnings. Phase 59: merchant
+        // orders are already paid for at the store - nothing to buy.
+        groceryEstimate: isMerchant ? 0 : Number(order.items_total || 0),
+        businessType: order.business_type || 'grocery',
+        pickupOnly: isMerchant,
+        // Phase 61: restaurant deliveries go by Bike only; ID check for liquor
+        bikeOnly: order.business_type === 'restaurant' && order.fulfilment_method !== 'pickup',
+        ageCheckMinAge: order.min_customer_age != null ? Number(order.min_customer_age) : null,
+        storePayment: !isMerchant,
+        merchant: isMerchant
+          ? { status: order.merchant_status, readyBy: order.merchant_ready_by || null }
+          : null,
 
         payment: {
           method: order.payment_method || null,
@@ -725,6 +794,14 @@ const getAvailableOrders = async (req, res) => {
       const finalOrder = {
         id: order.id,
         orderId: order.id,
+
+        // Phase 59
+        businessType: order.business_type || 'grocery',
+        merchantStatus: order.merchant_status || null,
+        bikeOnly: order.business_type === 'restaurant' && order.fulfilment_method !== 'pickup',
+        ageCheckMinAge: order.min_customer_age != null ? Number(order.min_customer_age) : null,
+        fulfilment: order.business_type && order.business_type !== 'grocery' ? 'merchant_delivery' : 'shop_and_deliver',
+        readyBy: order.merchant_ready_by || null,
 
         batchId: order.id,
         orderGroupId: order.id,
@@ -892,7 +969,8 @@ const getAvailableOrders = async (req, res) => {
                   latitude: shop.pickupLatitude,
                   longitude: shop.pickupLongitude,
                 })),
-                { latitude: customer.latitude, longitude: customer.longitude },
+                // Rounded (~110 m): the route on an offer ends near, not at, the door (B-07)
+                { latitude: roundPoint(customer.latitude), longitude: roundPoint(customer.longitude) },
               ],
               vehicleType: shopper.vehicle_type,
             }).catch((error) => {
@@ -1011,8 +1089,8 @@ const getAvailableOrders = async (req, res) => {
       },
 
       count: orders.length,
-      orders,
-      batches,
+      orders: forOffer(orders),
+      batches: forOffer(batches),
     });
   } catch (error) {
     console.error('❌ getAvailableOrders error:', error);

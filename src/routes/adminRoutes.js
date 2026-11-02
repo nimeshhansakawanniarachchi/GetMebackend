@@ -2,7 +2,8 @@ const express = require('express');
 
 const requireAdmin = require('../middleware/requireAdmin');
 const loginRateLimit = require('../middleware/loginRateLimit');
-const { requirePermission, auditAdminChanges } = require('../middleware/adminAccess');
+const mfaRateLimit = require('../middleware/mfaRateLimit');
+const { requirePermission, auditAdminChanges, requireRecentAuth } = require('../middleware/adminAccess');
 const approvals = require('../admin/approvals');
 const notifications = require('../admin/notifications');
 
@@ -40,6 +41,10 @@ const router = express.Router();
 // =====================================================
 
 router.post('/auth/login', loginRateLimit, account.login);
+// Two-step sign-in (security review B-13): the challenge token from login
+router.post('/auth/mfa/verify', mfaRateLimit, account.mfaVerify);
+router.post('/auth/mfa/setup', mfaRateLimit, account.mfaSetupStart);
+router.post('/auth/mfa/setup/confirm', mfaRateLimit, account.mfaSetupConfirm);
 
 // =====================================================
 // EVERYTHING BELOW REQUIRES AN ADMIN TOKEN (phase 40)
@@ -54,10 +59,16 @@ router.use(requireAdmin);
 router.use(auditAdminChanges);
 
 const can = requirePermission;
+// High-risk routes: a password / two-step check in the last 15 minutes
+const recent = requireRecentAuth;
 
 // Own account
 router.get('/auth/me', account.me);
 router.put('/auth/password', account.changePassword);
+router.post('/auth/reauth', mfaRateLimit, account.reauth);
+router.post('/account/mfa/setup', account.accountMfaSetup);
+router.post('/account/mfa/confirm', mfaRateLimit, account.accountMfaConfirm);
+router.post('/account/mfa/disable', mfaRateLimit, account.accountMfaDisable);
 
 // Notifications (phase 41): every signed-in admin, filtered to what
 // their permissions and the role's notification categories allow
@@ -68,25 +79,27 @@ router.post('/notifications/read-all', notifications.markAllRead);
 router.get('/notifications/preferences', notifications.getPreferences);
 router.put('/notifications/preferences', notifications.updatePreferences);
 router.get('/notifications/settings', can('security.settings'), notifications.getPolicy);
-router.put('/notifications/settings', can('security.settings'), notifications.updatePolicy);
+router.put('/notifications/settings', can('security.settings'), recent, notifications.updatePolicy);
 router.post('/notifications/:id/read', notifications.markRead);
 router.post('/notifications/:id/unread', notifications.markUnread);
 router.post('/notifications/:id/dismiss', notifications.dismiss);
 
 // Staff, permissions, security (Super Admin)
 router.get('/admins', can('admins.manage'), account.listAdmins);
-router.post('/admins', can('admins.manage'), account.createAdmin);
-router.patch('/admins/:id', can('admins.manage'), account.updateAdmin);
-router.post('/admins/:id/reset-password', can('admins.manage'), account.resetPassword);
+router.post('/admins', can('admins.manage'), recent, account.createAdmin);
+router.patch('/admins/:id', can('admins.manage'), recent, account.updateAdmin);
+router.post('/admins/:id/reset-password', can('admins.manage'), recent, account.resetPassword);
+router.post('/admins/:id/mfa/reset', can('admins.manage'), recent, account.resetAdminMfa);
 router.get('/permissions', can('admins.manage'), account.permissionCatalogue);
 router.get('/security-settings', can('security.settings', 'finance.refund', 'finance.adjust'), account.getSecuritySettings);
-router.put('/security-settings', can('security.settings'), account.updateSecuritySettings);
+router.put('/security-settings', can('security.settings'), recent, account.updateSecuritySettings);
 router.get('/audit-log', can('audit.view'), ops.getAuditLog);
 
 // Approvals of high-risk money actions
-router.get('/approvals', can('approvals.decide', 'finance.refund', 'finance.adjust', 'support.credit'), approvals.listApprovals);
-router.patch('/approvals/:id', can('approvals.decide'), approvals.decide);
-router.post('/approvals/:id/cancel', can('finance.refund', 'finance.adjust', 'support.credit'), approvals.cancel);
+// Phase 50: Finance also asks for company bank account changes
+router.get('/approvals', can('approvals.decide', 'finance.refund', 'finance.adjust', 'support.credit', 'company_accounts.manage'), approvals.listApprovals);
+router.patch('/approvals/:id', can('approvals.decide'), recent, approvals.decide);
+router.post('/approvals/:id/cancel', can('finance.refund', 'finance.adjust', 'support.credit', 'company_accounts.manage'), approvals.cancel);
 
 // Technical (Developer)
 router.get('/system/health', can('system.health'), support.systemStatus);
@@ -137,7 +150,72 @@ const creditTarget = (target) => (req, res, next) => {
   next();
 };
 router.get('/customers/:id/credit', can('customers.view'), supportCases.getCustomerCredit);
-router.post('/customers/:id/credit', can('support.credit'), creditTarget('customer'), approvals.requireApproval('customer.credit'), supportCases.giveCustomerCredit);
+
+// Customer activity, sessions, location history (phase 51). Location
+// endpoints need customers.location and every view is audited.
+const customerActivity = require('../customerActivity/adminController');
+router.get('/customer-activity/summary', can('customers.activity'), customerActivity.getSummary);
+router.get('/customer-activity/customers', can('customers.activity'), customerActivity.listCustomers);
+router.get('/customer-activity/settings', can('customers.activity'), customerActivity.getActivitySettings);
+router.put('/customer-activity/settings', can('security.settings'), recent, customerActivity.updateActivitySettings);
+router.get('/customers/:id/activity/overview', can('customers.activity'), customerActivity.getOverview);
+router.get('/customers/:id/activity/events', can('customers.activity'), customerActivity.listEvents);
+router.get('/customers/:id/activity/sessions', can('customers.activity'), customerActivity.listSessions);
+router.get('/customers/:id/activity/visits', can('customers.activity'), customerActivity.listVisits);
+router.get('/customers/:id/activity/routes', can('customers.location'), customerActivity.listRoutes);
+router.get('/customers/:id/activity/routes/:routeId', can('customers.location'), customerActivity.getRoute);
+router.get('/customers/:id/activity/locations', can('customers.location'), customerActivity.listLocations);
+
+// Fuel station payments + payment providers (phase 54)
+const fuelPayments = require('../fuel/fuelPayments');
+const fuelSend = (handler) => async (req, res) => {
+  try {
+    return res.json({ success: true, ...(await handler(req)) });
+  } catch (caught) {
+    if (!caught.status) console.error('❌ admin fuel error:', caught.message);
+    return res.status(caught.status || 500).json({ success: false, code: caught.code, message: caught.status ? caught.message : 'Unable to complete the request', ...(caught.extra || {}) });
+  }
+};
+// Phase 55 (payment audit 2026-10-31): every payment in one list with
+// one status vocabulary; HelaPOS received payments (two-admin manual
+// verification); outcomes of card refunds PayHere didn't answer
+const adminTransactions = require('../payments/adminTransactions');
+const receivedQr = require('../payments/receivedQrPayments');
+const paySend = (handler, okStatus = 200) => async (req, res) => {
+  try {
+    const result = await handler(req);
+    if (result?.audit) {
+      res.locals.audit = result.audit;
+      delete result.audit;
+    }
+    if (result?.error) return res.status(result.error.status).json({ success: false, message: result.error.message });
+    return res.status(okStatus).json({ success: true, ...result });
+  } catch (caught) {
+    if (!caught.status) console.error('❌ admin payments error:', caught.message);
+    return res.status(caught.status || 500).json({ success: false, code: caught.code, field: caught.field, message: caught.status ? caught.message : 'Unable to complete the request' });
+  }
+};
+router.get('/payments/transactions', can('finance.view'), paySend((req) => adminTransactions.list(req.query)));
+router.get('/payments/transactions/:kind/:id', can('finance.view'), paySend((req) => adminTransactions.detail(req.params.kind, req.params.id)));
+router.patch('/payments/refund-requests/:id', can('finance.refund'), recent, paySend((req) =>
+  require('../payments/paymentService').resolveRefundRequest(req.params.id, req.body || {}, req.admin.adminId, req.app.get('io'))
+));
+router.get('/payments/received-qr', can('finance.view'), paySend((req) => receivedQr.adminList(req.query)));
+router.get('/payments/received-qr/:id', can('finance.view'), paySend((req) => receivedQr.adminGet(req.params.id)));
+router.post('/payments/received-qr', can('finance.received_qr'), recent, paySend((req) => receivedQr.adminRecord(req.body || {}, req.admin.adminId), 201));
+router.patch('/payments/received-qr/:id', can('finance.received_qr'), recent, paySend((req) => receivedQr.adminAction(req.params.id, req.body || {}, req.admin.adminId)));
+
+router.get('/payment-providers', can('fuel.view', 'grocery.view'), (req, res) => res.json({ success: true, providers: require('../payments/providerCatalogue').catalogue() }));
+router.get('/fuel/stations', can('fuel.view'), fuelSend(() => fuelPayments.adminListStations()));
+router.post('/fuel/stations', can('fuel.manage'), fuelSend((req) => fuelPayments.adminSaveStation({ body: req.body, adminId: req.admin.adminId })));
+router.patch('/fuel/stations/:id', can('fuel.manage'), fuelSend((req) => fuelPayments.adminSaveStation({ id: req.params.id, body: req.body, adminId: req.admin.adminId })));
+router.put('/fuel/stations/:id/qr', can('fuel.manage'), recent, fuelSend((req) => fuelPayments.adminSetStationQr({ id: req.params.id, body: req.body, adminId: req.admin.adminId })));
+router.get('/fuel/prices', can('fuel.view'), fuelSend(() => fuelPayments.adminListPrices()));
+router.post('/fuel/prices', can('fuel.manage'), fuelSend((req) => fuelPayments.adminAddPrice({ body: req.body, adminId: req.admin.adminId })));
+router.get('/fuel/payments', can('fuel.view'), fuelSend((req) => fuelPayments.adminListPayments({ query: req.query })));
+router.get('/fuel/payments/:id', can('fuel.view'), fuelSend((req) => fuelPayments.adminGetPayment({ id: req.params.id })));
+router.patch('/fuel/payments/:id', can('fuel.manage'), recent, fuelSend((req) => fuelPayments.adminReview({ id: req.params.id, body: req.body, adminId: req.admin.adminId })));
+router.post('/customers/:id/credit', can('support.credit'), recent, creditTarget('customer'), approvals.requireApproval('customer.credit'), supportCases.giveCustomerCredit);
 approvals.register('customer.credit', supportCases.creditHandler);
 
 // Support cases (phase 43): customers report a problem with a delivered
@@ -152,8 +230,8 @@ router.patch('/support/cases/:id/status', can('support.cases'), supportCases.set
 router.post('/support/cases/:id/reply', can('support.cases'), supportCases.reply);
 router.post('/support/cases/:id/notes', can('support.cases'), supportCases.addNote);
 router.post('/support/cases/:id/resolve', can('support.cases'), supportCases.resolveCase);
-router.post('/support/cases/:id/credit', can('support.credit'), creditTarget('case'), approvals.requireApproval('customer.credit'), supportCases.resolveWithCredit);
-router.post('/support/cases/:id/refund', can('finance.refund'), approvals.requireApproval('support.refund'), supportCases.resolveWithRefund);
+router.post('/support/cases/:id/credit', can('support.credit'), recent, creditTarget('case'), approvals.requireApproval('customer.credit'), supportCases.resolveWithCredit);
+router.post('/support/cases/:id/refund', can('finance.refund'), recent, approvals.requireApproval('support.refund'), supportCases.resolveWithRefund);
 approvals.register('support.refund', supportCases.resolveWithRefund);
 
 // Shoppers
@@ -184,36 +262,64 @@ router.get('/products/:id/price-history', can('pricing.view'), pricing.getProduc
 
 // Money + reports
 router.get('/payments', can('finance.view'), finance.listPayments);
-router.patch('/orders/:id/refund', can('finance.refund'), approvals.requireApproval('order.refund'), orders.refundOrder);
+router.patch('/orders/:id/refund', can('finance.refund'), recent, approvals.requireApproval('order.refund'), orders.refundOrder);
 approvals.register('order.refund', orders.refundOrder);
 
 // Shoppers' store bills: review differences, record reimbursements
 router.get('/store-payments', can('finance.view', 'finance.store_bills'), storePayments.listStorePayments);
-router.patch('/store-payments/:id/review', can('finance.store_bills'), storePayments.reviewStorePayment);
-router.patch('/store-payments/:id/reimburse', can('finance.store_bills'), storePayments.reimburseStorePayment);
+router.patch('/store-payments/:id/review', can('finance.store_bills'), recent, storePayments.reviewStorePayment);
+router.patch('/store-payments/:id/reimburse', can('finance.store_bills'), recent, storePayments.reimburseStorePayment);
 
 // Supermarket payments: attempts, reconciliation, limits, methods, GetMe cards (phase 38)
 router.get('/grocery-payments', can('grocery.view'), grocery.listPayments);
 router.get('/grocery-payments/orders/:orderId', can('grocery.view'), grocery.orderDetail);
-router.patch('/grocery-payments/:id', can('grocery.manage'), grocery.paymentAction);
+router.patch('/grocery-payments/:id', can('grocery.manage'), recent, grocery.paymentAction);
 router.patch('/grocery-reservations/:id/limit', can('grocery.manage'), grocery.changeLimit);
 router.get('/grocery-payment-methods', can('grocery.view'), grocery.methodsConfig);
 router.patch('/grocery-payment-methods/:key', can('grocery.manage'), grocery.updateMethod);
 router.put('/grocery-payment-methods/:key/shops/:shopId', can('grocery.manage'), grocery.setShopException);
 router.patch('/grocery-payment-settings', can('grocery.manage'), grocery.updateSettings);
 router.get('/getme-cards', can('grocery.cards'), grocery.listCards);
-router.post('/getme-cards', can('grocery.cards'), grocery.createCard);
-router.patch('/getme-cards/:id', can('grocery.cards'), grocery.updateCard);
-router.post('/getme-cards/:id/funds', can('grocery.cards'), grocery.recordFunds);
+router.post('/getme-cards', can('grocery.cards'), recent, grocery.createCard);
+router.patch('/getme-cards/:id', can('grocery.cards'), recent, grocery.updateCard);
+router.post('/getme-cards/:id/funds', can('grocery.cards'), recent, approvals.requireApproval('card.funds'), grocery.recordFunds);
+approvals.register('card.funds', grocery.recordFunds);
+// LankaQR (GetMe pays, phase 49): provider status card + store QRs
+// approved per shop (merchant substitution protection)
+const lankaqrAdmin = require('../controllers/lankaqrController').admin;
+router.get('/lankaqr/status', can('grocery.view'), lankaqrAdmin.status);
+router.get('/lankaqr/merchants', can('grocery.view'), lankaqrAdmin.listMerchants);
+router.post('/lankaqr/merchants', can('grocery.manage'), recent, lankaqrAdmin.createMerchant);
+router.patch('/lankaqr/merchants/:id', can('grocery.manage'), recent, lankaqrAdmin.reviewMerchant);
+
+// GetMe company bank accounts (phase 50, src/companyAccounts): records
+// only - nothing connects to a bank or moves money. Masked everywhere;
+// the full number only for the Super Admin (reveal, audited). Activate,
+// defaults, funding source, provider link and bank authorisation need
+// the Super Admin (Finance's requests go to Approvals).
+const companyAccounts = require('../companyAccounts/controller');
+router.get('/company-accounts', can('company_accounts.view'), companyAccounts.list);
+router.post('/company-accounts', can('company_accounts.manage'), companyAccounts.create);
+router.put('/company-accounts/defaults/:purpose', can('company_accounts.manage'), companyAccounts.setDefault);
+router.put('/company-accounts/funding/:methodKey', can('company_accounts.manage'), companyAccounts.setFunding);
+router.get('/company-accounts/:id', can('company_accounts.view'), companyAccounts.get);
+router.patch('/company-accounts/:id', can('company_accounts.manage'), companyAccounts.update);
+router.post('/company-accounts/:id/deactivate', can('company_accounts.manage'), companyAccounts.deactivate);
+router.post('/company-accounts/:id/archive', can('company_accounts.manage'), companyAccounts.archive);
+router.post('/company-accounts/:id/activate', can('company_accounts.manage'), companyAccounts.activate);
+router.patch('/company-accounts/:id/integration', can('company_accounts.manage'), companyAccounts.setIntegration);
+router.post('/company-accounts/:id/authorization', can('company_accounts.manage'), companyAccounts.recordAuthorization);
+router.post('/company-accounts/:id/integration-approval', can('approvals.decide'), companyAccounts.approveIntegration);
+router.post('/company-accounts/:id/reveal', can('company_accounts.reveal'), recent, companyAccounts.reveal);
 
 // Shopper settlement: balances, payouts / cash deposits, disputes
 router.get('/settlements', can('finance.view'), settlements.listSettlements);
-router.post('/settlements/shoppers/:shopperId/payouts', can('finance.settlements'), settlements.recordPayout);
+router.post('/settlements/shoppers/:shopperId/payouts', can('finance.settlements'), recent, settlements.recordPayout);
 // COD cash hand-over, net of the shopper's balances (phase 33)
-router.post('/settlements/shoppers/:shopperId/cash-settlements', can('finance.settlements'), settlements.recordCashHandover);
+router.post('/settlements/shoppers/:shopperId/cash-settlements', can('finance.settlements'), recent, settlements.recordCashHandover);
 router.patch('/settlements/earnings/:orderId/dispute', can('finance.settlements'), settlements.disputeEarning);
 router.patch('/settlements/earnings/:orderId/resolve', can('finance.settlements'), settlements.resolveEarning);
-router.patch('/settlements/earnings/:orderId/adjust', can('finance.adjust'), approvals.requireApproval('earnings.adjust'), settlements.adjustEarning);
+router.patch('/settlements/earnings/:orderId/adjust', can('finance.adjust'), recent, approvals.requireApproval('earnings.adjust'), settlements.adjustEarning);
 approvals.register('earnings.adjust', settlements.adjustEarning);
 
 // Shopper applications (phase 34): the list without identity data for
@@ -258,20 +364,20 @@ router.get('/ledger', can('finance.view'), settlements.getLedger);
 // Shopper withdrawals: requests, manual bank transfers, bank accounts
 router.get('/withdrawals', can('finance.view', 'finance.withdrawals'), withdrawals.listWithdrawals);
 router.get('/withdrawals/:id', can('finance.view', 'finance.withdrawals'), withdrawals.getWithdrawal);
-router.patch('/withdrawals/:id', can('finance.withdrawals'), withdrawals.changeWithdrawal);
+router.patch('/withdrawals/:id', can('finance.withdrawals'), recent, withdrawals.changeWithdrawal);
 router.get('/payout-accounts', can('finance.view', 'finance.withdrawals'), withdrawals.listPayoutAccounts);
-router.patch('/payout-accounts/:id', can('finance.withdrawals'), withdrawals.reviewPayoutAccount);
+router.patch('/payout-accounts/:id', can('finance.withdrawals'), recent, withdrawals.reviewPayoutAccount);
 router.get('/finance/overview', can('finance.view'), insights.getFinanceOverview);
 router.get('/finance/reconciliation', can('finance.view'), insights.getReconciliation);
 
 // Reports + exports (the export checks its own dataset's permission)
 router.get('/reports', can('reports.view'), finance.getReports);
 router.get('/analytics', can('reports.view'), insights.getAnalytics);
-router.get('/export/:dataset', can('exports.orders', 'exports.finance'), insights.exportDataset);
+router.get('/export/:dataset', can('exports.orders', 'exports.finance'), recent, insights.exportDataset);
 
 // Fees & pricing (Super Admin changes them; report roles can read)
 router.get('/settings/pricing', can('reports.view'), settings.getPricing);
-router.put('/settings/pricing', can('settings.pricing'), settings.updatePricing);
+router.put('/settings/pricing', can('settings.pricing'), recent, settings.updatePricing);
 router.post('/settings/pricing/preview', can('reports.view'), settings.previewPricing);
 router.get('/settings/pricing/history', can('reports.view'), settings.getPricingHistory);
 router.delete('/settings/pricing/versions/:id', can('settings.pricing'), settings.cancelScheduledPricing);

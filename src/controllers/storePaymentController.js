@@ -51,6 +51,8 @@ const METHOD_LABELS = {
   phone_wallet: 'Phone tap (Google Wallet)',
   lankaqr: 'LANKAQR',
   getme_card: 'GetMe company card',
+  // Phase 49: paid by GetMe from its company account (never owed to the shopper)
+  getme_lankaqr: 'LankaQR (GetMe paid)',
 };
 
 // Bought: found (and confirmed 'done') items and replacements

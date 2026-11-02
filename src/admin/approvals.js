@@ -76,6 +76,32 @@ const TYPES = {
     describe: (req) => `Refund Rs ${round2(req.body?.amount || 0).toFixed(2)} to the card for support case #${req.params.id}: ${String(req.body?.note || '').slice(0, 120)}`,
     fields: ['amount', 'note'],
   },
+  // Phase 55 (payment audit): money recorded on a GetMe company card
+  // above the refund approval limit needs the Super Admin too
+  'card.funds': {
+    label: 'GetMe company card funds',
+    entityType: 'getme_card',
+    permission: 'grocery.cards',
+    limitColumn: 'refund_approval_limit',
+    amountOf: (req) => Math.abs(Number(req.body?.amount) || 0),
+    entityOf: (req) => req.params.id,
+    describe: (req) => `${req.body?.kind === 'unload' ? 'Remove' : 'Add'} Rs ${round2(req.body?.amount || 0).toFixed(2)} on GetMe card #${req.params.id} (bank ref ${String(req.body?.reference || '').slice(0, 40)})`,
+    fields: ['kind', 'amount', 'reference', 'note'],
+  },
+  // Phase 50: company bank account changes that need the Super Admin
+  // (activate, default per purpose, funding source, provider link, bank
+  // authorisation record). No amount: the request is created by
+  // src/companyAccounts/controller.js (not requireApproval) after every
+  // check ran; approving runs the same handler for the requester.
+  'company_account.change': {
+    label: 'Company bank account change',
+    entityType: 'company_bank_account',
+    permission: 'company_accounts.manage',
+    amountOf: () => 0,
+    entityOf: (req) => req.params.id || req.params.purpose || req.params.methodKey,
+    describe: (req) => `Company bank account change: ${String(req.body?.op || '')}`,
+    fields: ['op', 'accountId', 'provider', 'bankReference', 'status', 'reference', 'date', 'reason'],
+  },
 };
 
 const handlers = {};

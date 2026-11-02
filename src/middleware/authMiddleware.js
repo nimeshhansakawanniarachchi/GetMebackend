@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 
 const pool = require('../config/db');
 const { blockedBody } = require('../customers/accountControls');
+const { touch } = require('../customerActivity/store');
 
 // ==================================================
 // JWT AUTH MIDDLEWARE
@@ -76,9 +77,26 @@ const authMiddleware = async (req, res, next) => {
   // ==================================================
 
   try {
+    // Security review B-11: a token whose sign-in session ended (logout,
+    // block) is refused. Tokens from before sessions existed have no sid.
+    const sid = Number.isSafeInteger(Number(decoded.sid)) ? Number(decoded.sid) : null;
     const account = (
-      await pool.query('SELECT account_status, cod_limit FROM customers WHERE id = $1', [Number(decoded.customerId)])
+      await pool.query(
+        `SELECT c.account_status, c.cod_limit, s.ended_at AS session_ended_at
+           FROM customers c
+           LEFT JOIN customer_sessions s ON s.id = $2 AND s.customer_id = c.id
+          WHERE c.id = $1`,
+        [Number(decoded.customerId), sid]
+      )
     ).rows[0];
+
+    if (account && sid && account.session_ended_at) {
+      return res.status(401).json({
+        success: false,
+        code: 'SESSION_ENDED',
+        message: 'You were signed out. Please sign in again.',
+      });
+    }
 
     if (account?.account_status === 'blocked') {
       return res.status(403).json(blockedBody());
@@ -101,6 +119,9 @@ const authMiddleware = async (req, res, next) => {
   // ==================================================
 
   req.customer = decoded;
+
+  // Phase 51: last activity (at most one write per customer per minute)
+  touch(decoded.customerId, decoded.sid);
 
   return next();
 };

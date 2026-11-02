@@ -13,6 +13,9 @@ const jwt = require('jsonwebtoken');
 const db = require('../config/db');
 const authMiddleware = require('../middleware/authMiddleware');
 const { blockedBody } = require('../customers/accountControls');
+// Phase 51: sign-in sessions + customer activity timeline
+const activity = require('../customerActivity/store');
+const presence = require('../customerActivity/presence');
 
 const router = express.Router();
 
@@ -111,6 +114,14 @@ router.post('/register', loginRateLimit, async (req, res) => {
 
     console.log('✅ CUSTOMER CREATED:', customer.id);
 
+    // Phase 51: the token names its sign-in session (sid)
+    const sessionId = await activity.createSession({
+      customerId: customer.id,
+      method: 'register',
+      ip: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
     // ==================================================
     // CREATE JWT TOKEN
     // ==================================================
@@ -119,6 +130,7 @@ router.post('/register', loginRateLimit, async (req, res) => {
       {
         customerId: customer.id,
         email: customer.email,
+        ...(sessionId ? { sid: sessionId } : {}),
       },
       process.env.JWT_SECRET,
       {
@@ -230,6 +242,8 @@ router.post('/login', loginRateLimit, async (req, res) => {
     if (!passwordMatch) {
       console.log('❌ Incorrect password');
 
+      activity.noteFailedLogin(customer.id);
+
       return res.status(401).json({
         success: false,
         message: 'Invalid email/mobile or password',
@@ -247,13 +261,21 @@ router.post('/login', loginRateLimit, async (req, res) => {
     }
 
     // ==================================================
-    // CREATE JWT TOKEN
+    // CREATE JWT TOKEN (phase 51: with its sign-in session)
     // ==================================================
+
+    const sessionId = await activity.createSession({
+      customerId: customer.id,
+      method: isEmail(rawLogin) ? 'email' : 'mobile',
+      ip: req.ip,
+      userAgent: req.get('user-agent'),
+    });
 
     const token = jwt.sign(
       {
         customerId: customer.id,
         email: customer.email,
+        ...(sessionId ? { sid: sessionId } : {}),
       },
       process.env.JWT_SECRET,
       {
@@ -288,6 +310,73 @@ router.post('/login', loginRateLimit, async (req, res) => {
       message: 'Server error',
       error: error.message,
     });
+  }
+});
+
+// ==================================================
+// CUSTOMER LOGOUT (phase 51)
+// Ends this sign-in session and the app's open online period. Works
+// with an expired or blocked account's token too (the token is still
+// verified). Body: { installId? } - the app install signing out.
+// Idempotent: a second call changes nothing.
+// ==================================================
+
+router.post('/logout', async (req, res) => {
+  const parts = String(req.headers.authorization || '').split(' ');
+  let decoded;
+
+  try {
+    if (parts.length !== 2 || parts[0] !== 'Bearer') throw new Error('missing');
+    decoded = jwt.verify(parts[1], process.env.JWT_SECRET, { ignoreExpiration: true });
+  } catch {
+    return res.status(401).json({ success: false, message: 'Invalid token' });
+  }
+
+  const customerId = Number(decoded?.customerId);
+  if (!Number.isSafeInteger(customerId) || customerId <= 0) {
+    return res.status(401).json({ success: false, message: 'Invalid customer token' });
+  }
+
+  const sessionId = Number.isSafeInteger(Number(decoded.sid)) ? Number(decoded.sid) : null;
+  const installId = typeof req.body?.installId === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(req.body.installId)
+    ? req.body.installId
+    : null;
+
+  try {
+    const ended = await activity.endSession({ customerId, sessionId, reason: 'logout' });
+
+    // Security review B-11: this sign-in's open sockets close now
+    const io = req.app.get('io');
+    if (io && sessionId) {
+      io.in(`customer:${customerId}`).fetchSockets()
+        .then((sockets) => sockets.forEach((s) => {
+          if (Number(s.data?.sid) === sessionId) s.disconnect(true);
+        }))
+        .catch(() => {});
+    }
+    await presence.endForSession({ customerId, sessionId, installId, reason: 'logout' });
+
+    // Tokens from before phase 51 have no session: the event is still useful
+    if (ended || !sessionId) {
+      await db.query(
+        `INSERT INTO customer_activity_state (customer_id, last_logout_at) VALUES ($1, NOW())
+         ON CONFLICT (customer_id) DO UPDATE SET last_logout_at = NOW(), updated_at = NOW()`,
+        [customerId]
+      );
+      await activity.logEvent({
+        customerId,
+        category: 'session',
+        type: 'session.logout',
+        summary: 'Signed out',
+        sessionId,
+        dedupeKey: sessionId ? `session.logout:${sessionId}` : null,
+      });
+    }
+
+    return res.json({ success: true, ended: Boolean(ended) });
+  } catch (error) {
+    console.error('❌ LOGOUT ERROR:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 

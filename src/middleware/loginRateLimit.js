@@ -13,8 +13,10 @@ const loginRateLimit = rateLimit({
   legacyHeaders: false,
   skipSuccessfulRequests: true,
   keyGenerator: (req) => {
+    // Customers sign in with loginValue (email or mobile); without it
+    // every customer behind one mobile-carrier IP shared one counter
     const account = String(
-      req.body?.email || req.body?.mobile || ''
+      req.body?.loginValue || req.body?.email || req.body?.mobile || ''
     )
       .trim()
       .toLowerCase();

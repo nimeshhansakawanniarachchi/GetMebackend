@@ -1,4 +1,5 @@
-const multer = require('multer');
+// Checks each stored file's real type (security review B-02)
+const multer = require('../../middleware/verifiedMulter');
 
 const registration = require('../../onboarding/adminRegistration');
 const { emitToAdmins } = require('../../realtime');

@@ -394,7 +394,7 @@ var path = require('path');
 var cookieParser = require('cookie-parser');
 var logger = require('morgan');
 var cors = require('cors');
-var { requireSignedBill, signBillLinksInJson } = require('./src/utils/billUrls');
+var { requireSignedBill, requireSignedMedia, signBillLinksInJson } = require('./src/utils/billUrls');
 var supportPhotos = require('./src/support/supportPhotos');
 
 require('dotenv').config();
@@ -410,6 +410,10 @@ var authRouter = require('./src/routes/auth');
 var shopRoutes = require('./src/routes/shopRoutes');
 var customerShopRoutes = require('./src/routes/customerShopRoutes');
 var customerOrderRoutes = require('./src/routes/customerOrderRoutes');
+// Phase 57: notification centre + order activity
+var customerNotificationRoutes = require('./src/routes/customerNotificationRoutes');
+// Phase 58: saved shopping lists
+var shoppingListRoutes = require('./src/routes/shoppingListRoutes');
 var customerOrderMediaRoutes = require('./src/routes/customerOrderMediaRoutes');
 var customerAddressRoutes = require('./src/routes/customerAddressRoutes');
 var adminRoutes = require('./src/routes/adminRoutes');
@@ -430,6 +434,14 @@ var db = require('./src/config/db');
 
 var app = express();
 
+// Behind a reverse proxy / load balancer set TRUST_PROXY (e.g. 1 = one
+// proxy hop) so req.ip is the customer's address, not the proxy's.
+// Off by default: without a proxy, X-Forwarded-For could be forged.
+if (process.env.TRUST_PROXY) {
+  var trustProxy = process.env.TRUST_PROXY;
+  app.set('trust proxy', /^[0-9]+$/.test(trustProxy) ? Number(trustProxy) : trustProxy === 'true' ? true : trustProxy);
+}
+
 // ==================================================
 // DATABASE TEST
 // ==================================================
@@ -449,12 +461,8 @@ db.query('SELECT NOW()')
 // APP SETTINGS
 // ==================================================
 
-app.set(
-  'views',
-  path.join(__dirname, 'views')
-);
-
-app.set('view engine', 'jade');
+// No template engine: the old jade views (unmaintained package with
+// known advisories) were replaced by plain responses (security review B-06)
 
 // ==================================================
 // MIDDLEWARE
@@ -487,7 +495,36 @@ app.use(
   })
 );
 
-app.use(express.json());
+// ==================================================
+// SECURITY HEADERS (security review 2026-10-30, B-23)
+// HSTS belongs on the TLS proxy in front of this server.
+// ==================================================
+
+app.disable('x-powered-by');
+
+app.use(function (req, res, next) {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Frame-Options', 'DENY');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
+// Uploaded files are data, never pages: a file that passed as an
+// "image" but holds HTML / SVG script can't run on this origin (B-02)
+app.use(['/uploads', '/items'], function (req, res, next) {
+  res.set('Content-Security-Policy', "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox");
+  res.set('Cross-Origin-Opener-Policy', 'same-origin');
+  next();
+});
+
+// Phase 55: signed bank callbacks are verified over the exact bytes sent
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      if (req.originalUrl.startsWith('/api/payments/lankaqr/callback')) req.rawBody = buf.toString('utf8');
+    },
+  })
+);
 
 app.use(
   express.urlencoded({
@@ -582,23 +619,28 @@ console.log('==========================================');
 // Original database URL format: /items/example.jpg
 app.use(
   '/items',
-  express.static(rootShopperItemsPath)
+  requireSignedMedia('items'),
+  express.static(rootShopperItemsPath, { cacheControl: false })
 );
 
 app.use(
   '/items',
-  express.static(srcShopperItemsPath)
+  requireSignedMedia('items'),
+  express.static(srcShopperItemsPath, { cacheControl: false })
 );
 
 // Existing URL format: /uploads/items/example.jpg
+// Private since the security review (B-03): signed links only
 app.use(
   '/uploads/items',
-  express.static(rootShopperItemsPath)
+  requireSignedMedia('items'),
+  express.static(rootShopperItemsPath, { cacheControl: false })
 );
 
 app.use(
   '/uploads/items',
-  express.static(srcShopperItemsPath)
+  requireSignedMedia('items'),
+  express.static(srcShopperItemsPath, { cacheControl: false })
 );
 
 // ==================================================
@@ -625,7 +667,8 @@ app.use(
 
 app.use(
   '/uploads/replacements',
-  express.static(srcReplacementsPath)
+  requireSignedMedia('replacements'),
+  express.static(srcReplacementsPath, { cacheControl: false })
 );
 
 // ==================================================
@@ -659,7 +702,8 @@ app.use(
 
 app.use(
   '/uploads/order-media',
-  express.static(orderMediaPath)
+  requireSignedMedia('order-media'),
+  express.static(orderMediaPath, { cacheControl: false })
 );
 
 // ==================================================
@@ -668,13 +712,22 @@ app.use(
 
 app.use(
   '/uploads/deliveries',
-  express.static(path.join(srcUploadsPath, 'deliveries'))
+  requireSignedMedia('deliveries'),
+  express.static(path.join(srcUploadsPath, 'deliveries'), { cacheControl: false })
 );
 
 // Shopper profile photos (customers see them on the map)
+// Fuel receipts (phase 54): private, signed links only
+app.use(
+  '/uploads/fuel-receipts',
+  requireSignedMedia('fuel-receipts'),
+  express.static(path.join(srcUploadsPath, 'fuel-receipts'), { cacheControl: false })
+);
+
 app.use(
   '/uploads/shoppers',
-  express.static(path.join(srcUploadsPath, 'shoppers'))
+  requireSignedMedia('shoppers'),
+  express.static(path.join(srcUploadsPath, 'shoppers'), { cacheControl: false })
 );
 
 // ==================================================
@@ -692,6 +745,9 @@ app.use(
 
 // Bill photo links in API answers are signed (see SHOPPER BILL PHOTOS)
 app.use('/api', signBillLinksInJson);
+
+// No password fields in any reply; no internal error text on 5xx (B-01 / B-18)
+app.use('/api', require('./src/middleware/safeJson'));
 
 app.use('/', indexRouter);
 
@@ -720,6 +776,8 @@ app.use('/api/customer', customerShopRoutes);
 // ==================================================
 
 app.use('/api/customer', customerOrderRoutes);
+app.use('/api/customer', customerNotificationRoutes);
+app.use('/api/customer', shoppingListRoutes);
 
 // ==================================================
 // CUSTOMER ORDER MEDIA API
@@ -738,6 +796,12 @@ app.use('/api/customer', customerAddressRoutes);
 // ==================================================
 
 app.use('/api/customer', require('./src/routes/customerSupportRoutes'));
+
+// ==================================================
+// CUSTOMER ACTIVITY + LOCATION SHARING (phase 51)
+// ==================================================
+
+app.use('/api/customer', require('./src/routes/customerActivityRoutes'));
 
 // ==================================================
 // ADMIN API
@@ -794,6 +858,9 @@ app.use('/api/shopper', require('./src/routes/shopperWalletRoutes'));
 // Training quiz + 'I need help' incidents (phase 46)
 app.use('/api/shopper', require('./src/routes/shopperSafetyRoutes'));
 
+// Fuel station payments (phase 54): the shopper's own expense, record + receipt
+app.use('/api/shopper', require('./src/routes/shopperFuelRoutes'));
+
 // ==================================================
 // CHAT API
 // ==================================================
@@ -805,6 +872,42 @@ app.use('/api/chat', chatRoutes);
 // ==================================================
 
 app.use('/api/payments', paymentRoutes);
+
+// ==================================================
+// PHASE 59: MULTI-CATEGORY MARKETPLACE (clothing shops,
+// restaurants). Mounted after the existing routers; it adds new
+// paths only (code-backups/reports/p59-marketplace-api-contract.md).
+// ==================================================
+
+{
+  const marketplace = require('./src/routes/marketplaceRoutes');
+  app.use('/api/customer', marketplace.customerRouter);
+  app.use('/api/shop', marketplace.shopRouter);
+  app.use('/api/admin', marketplace.adminRouter);
+}
+
+// ==================================================
+// PHASE 62: FASHION REELS (shoppable videos, clothing shops)
+// ==================================================
+
+{
+  const reels = require('./src/routes/reelRoutes');
+  app.use('/api/media', reels.mediaRouter);
+  app.use('/api/customer', reels.customerRouter);
+  app.use('/api/shop', reels.shopRouter);
+  app.use('/api/admin', reels.adminRouter);
+}
+
+// ==================================================
+// PHASE 65: ONE CHECKOUT FOR EVERY CATEGORY (parent orders:
+// one Place Order, one reference, child orders per store / grocery)
+// ==================================================
+
+{
+  const orderGroups = require('./src/routes/orderGroupRoutes');
+  app.use('/api/customer', orderGroups.customerRouter);
+  app.use('/api/admin', orderGroups.adminRouter);
+}
 
 // ==================================================
 // 404
@@ -852,23 +955,29 @@ app.use(function (err, req, res, next) {
       .status(err.status || 500)
       .json({
         success: false,
+        // 4xx messages are meant for the client; a 5xx message is internal (B-18)
         message:
-          err.message ||
-          'Internal server error',
+          (err.status || 500) < 500 && err.message
+            ? err.message
+            : 'Internal server error',
       });
   }
 
-  // NORMAL WEBSITE ERRORS
-  res.locals.message = err.message;
+  // NORMAL WEBSITE ERRORS: a short page; details (stack trace) only when
+  // NODE_ENV is explicitly 'development' (B-18)
+  var status = err.status || 500;
+  var escape = function (text) {
+    return String(text).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  };
+  var title = status === 404 ? 'Not found' : status < 500 ? escape(err.message || 'Request error') : 'Server error';
+  var details = process.env.NODE_ENV === 'development' && err.stack ? '<pre>' + escape(err.stack) + '</pre>' : '';
 
-  res.locals.error =
-    req.app.get('env') === 'development'
-      ? err
-      : {};
-
-  res.status(err.status || 500);
-
-  res.render('error');
+  res
+    .status(status)
+    .type('html')
+    .send('<!doctype html><meta charset="utf-8"><title>' + title + '</title><h1>' + title + '</h1>' + details);
 });
 
 // ==================================================

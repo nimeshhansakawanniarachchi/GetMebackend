@@ -22,6 +22,9 @@ const grocery = require('./groceryPayments');
 const { round2, error, clean, addEntry } = grocery;
 const store = () => require('../controllers/storePaymentController');
 const settlement = () => require('../controllers/settlementController');
+// Phase 49: LANKAQR scan-to-pay (provider state, merchant approvals)
+const lankaqr = () => require('./lankaqrPayments');
+const qrProviders = require('./providers');
 
 const toId = (value) => {
   const id = Number(value);
@@ -32,7 +35,8 @@ const ATTEMPT_SELECT = `
   SELECT a.*, m.label AS method_label, c.last4 AS card_last4,
          s.shop_name, sh.full_name AS shopper_name, sh.shopper_code, o.status AS order_status,
          (sp.locked_at IS NOT NULL) AS bill_locked, sp.review_status, sp.reimbursement_status,
-         COALESCE(jsonb_array_length(sp.duplicate_flags), 0) AS duplicate_count
+         COALESCE(jsonb_array_length(sp.duplicate_flags), 0) AS duplicate_count,
+         lm.merchant_name AS lankaqr_merchant_name, lm.merchant_city AS lankaqr_merchant_city
   FROM grocery_payment_attempts a
   JOIN grocery_payment_methods m ON m.key = a.method
   LEFT JOIN getme_cards c ON c.id = a.card_id
@@ -40,6 +44,7 @@ const ATTEMPT_SELECT = `
   LEFT JOIN shoppers sh ON sh.id = a.shopper_id
   LEFT JOIN orders o ON o.id = a.order_id
   LEFT JOIN store_payments sp ON sp.id = a.store_payment_id
+  LEFT JOIN shop_lankaqr_merchants lm ON lm.id = a.merchant_id
 `;
 
 // Needs an admin: unverified (no bill / GetMe card not matched to the
@@ -48,12 +53,15 @@ const ATTEMPT_SELECT = `
 const DUPLICATE = "EXISTS (SELECT 1 FROM store_payments d WHERE d.id = a.store_payment_id AND jsonb_array_length(d.duplicate_flags) > 0)";
 
 const FILTERS = {
+  // Phase 49: an unknown LankaQR outcome (checking with the bank) needs attention too
   attention:
-    `(a.status = 'disputed' OR (a.status = 'succeeded' AND (a.reconciliation_status = 'mismatch' OR (a.funding = 'getme' AND a.reconciliation_status = 'unreconciled') OR (a.over_limit AND a.reconciliation_status <> 'resolved') OR (${DUPLICATE} AND a.reconciliation_status <> 'resolved'))))`,
+    `(a.status IN ('disputed', 'unknown') OR (a.status = 'succeeded' AND (a.reconciliation_status = 'mismatch' OR (a.funding = 'getme' AND a.reconciliation_status = 'unreconciled') OR (a.over_limit AND a.reconciliation_status <> 'resolved') OR (${DUPLICATE} AND a.reconciliation_status <> 'resolved'))))`,
   duplicates: DUPLICATE,
   unverified: "(a.status = 'succeeded' AND a.reconciliation_status IN ('unreconciled', 'mismatch'))",
-  pending: "a.status = 'pending'",
-  failed: "a.status IN ('failed', 'cancelled')",
+  pending: "a.status IN ('pending', 'unknown')",
+  unknown: "a.status = 'unknown'",
+  simulator: "a.provider = 'simulator'",
+  failed: "a.status IN ('failed', 'cancelled', 'rejected')",
   reversed: "a.status = 'reversed'",
   disputed: "a.status = 'disputed'",
   matched: "a.reconciliation_status IN ('matched', 'resolved')",
@@ -88,12 +96,14 @@ const listPayments = async (query = {}) => {
         (SELECT COUNT(*) FROM grocery_reservations WHERE status IN ('active', 'captured'))::int AS open_reservations,
         (SELECT COALESCE(SUM(limit_amount - captured_amount), 0) FROM grocery_reservations WHERE status = 'active')::float AS reserved_unspent,
         (SELECT COUNT(*) FROM grocery_payment_attempts a WHERE ${FILTERS.attention})::int AS attention,
-        (SELECT COUNT(*) FROM grocery_payment_attempts WHERE status = 'pending')::int AS pending,
-        (SELECT COUNT(*) FROM grocery_payment_attempts WHERE status = 'failed' AND created_at > NOW() - INTERVAL '7 days')::int AS failed_7d,
+        (SELECT COUNT(*) FROM grocery_payment_attempts WHERE status IN ('pending', 'unknown'))::int AS pending,
+        (SELECT COUNT(*) FROM grocery_payment_attempts WHERE status = 'unknown')::int AS unknown,
+        (SELECT COUNT(*) FROM grocery_payment_attempts WHERE provider = 'simulator' AND created_at >= date_trunc('month', NOW()))::int AS simulated_month,
+        (SELECT COUNT(*) FROM grocery_payment_attempts WHERE status IN ('failed', 'rejected') AND created_at > NOW() - INTERVAL '7 days')::int AS failed_7d,
         (SELECT COUNT(*) FROM grocery_payment_attempts WHERE status = 'disputed')::int AS disputed,
         (SELECT COUNT(*) FROM grocery_payment_attempts a WHERE ${DUPLICATE})::int AS duplicates,
         (SELECT COALESCE(SUM(amount), 0) FROM grocery_payment_attempts WHERE status = 'succeeded' AND funding = 'shopper' AND paid_at >= date_trunc('month', NOW()))::float AS shopper_funded_month,
-        (SELECT COALESCE(SUM(amount), 0) FROM grocery_payment_attempts WHERE status = 'succeeded' AND funding = 'getme' AND paid_at >= date_trunc('month', NOW()))::float AS getme_funded_month,
+        (SELECT COALESCE(SUM(amount), 0) FROM grocery_payment_attempts WHERE status = 'succeeded' AND funding = 'getme' AND provider IS DISTINCT FROM 'simulator' AND paid_at >= date_trunc('month', NOW()))::float AS getme_funded_month,
         (SELECT COALESCE(SUM(amount - expected_amount), 0) FROM grocery_payment_attempts WHERE status = 'succeeded' AND paid_at >= date_trunc('month', NOW()))::float AS variance_month
     `),
   ]);
@@ -161,11 +171,21 @@ const adminAction = async (attemptId, input = {}, adminId) => {
   const peek = (await pool.query('SELECT order_id FROM grocery_payment_attempts WHERE id = $1', [id])).rows[0];
   if (!peek) throw error(404, 'Payment not found');
 
+  // Phase 49: LankaQR (GetMe pays) - ask the provider / close an open one
+  if (['check_provider', 'resolve_provider'].includes(action)) {
+    const attempt = (await pool.query('SELECT * FROM grocery_payment_attempts WHERE id = $1', [id])).rows[0];
+    const done = await lankaqr().adminProviderAction(attempt, input, adminId);
+    await settlement().refreshOrderSettlement(peek.order_id, null);
+    return { message: done.message, payment: await grocery.attemptView(pool, id) };
+  }
+
   const client = await pool.connect();
   let message;
 
   try {
     await client.query('BEGIN');
+    // Phase 55: who / why for the payment status trail
+    await client.query("SELECT set_config('getme.actor', $1, true), set_config('getme.reason', $2, true)", [`admin:${adminId}`, note || action]);
     const order = (await client.query('SELECT id, status FROM orders WHERE id = $1 FOR UPDATE', [peek.order_id])).rows[0];
     const attempt = (await client.query('SELECT * FROM grocery_payment_attempts WHERE id = $1 FOR UPDATE', [id])).rows[0];
     const entry = { orderId: attempt.order_id, shopId: attempt.shop_id, shopperId: attempt.shopper_id, reservationId: attempt.reservation_id, attemptId: attempt.id, cardId: attempt.card_id, actorType: 'admin', actorId: adminId };
@@ -175,7 +195,13 @@ const adminAction = async (attemptId, input = {}, adminId) => {
       const statementReference = clean(input.statementReference, 60) || null;
       if (!['matched', 'mismatch', 'resolved'].includes(result)) throw error(400, 'Choose matched, mismatch or resolved');
       if (!['succeeded', 'disputed'].includes(attempt.status)) throw error(409, 'Only a completed payment can be reconciled', 'WRONG_STATUS');
-      if (result !== 'matched' && note.length < 3) throw error(400, 'Say what you found', 'NOTE_REQUIRED');
+      // Phase 49: a TEST SIMULATOR payment moved no money - it is never
+      // matched to a bank statement (only mismatch / resolved)
+      if (attempt.provider === 'simulator' && (result === 'matched' || statementReference)) {
+        throw error(409, 'This is a TEST SIMULATOR payment: no money moved, so it can never be matched to a bank statement. Mark it resolved.', 'SIMULATOR_NOT_BANK');
+      }
+      // Phase 55: every manual verification records what was checked
+      if (note.length < 3) throw error(400, result === 'matched' ? 'Say what you checked (bill photo, statement line)' : 'Say what you found', 'NOTE_REQUIRED');
       if (result === 'matched') {
         const bill = attempt.store_payment_id
           ? (await client.query('SELECT locked_at FROM store_payments WHERE id = $1', [attempt.store_payment_id])).rows[0]
@@ -300,6 +326,7 @@ const changeLimit = async (reservationId, input = {}, adminId) => {
 // ---------------------------------------------------
 
 const methodsConfig = async () => {
+  const qr = qrProviders.current();
   const [methods, overrides, settings, cards, shops] = await Promise.all([
     pool.query('SELECT * FROM grocery_payment_methods ORDER BY sort_order, key'),
     pool.query('SELECT o.*, s.shop_name FROM grocery_shop_payment_methods o LEFT JOIN shops s ON s.id = o.shop_id ORDER BY s.shop_name'),
@@ -308,14 +335,45 @@ const methodsConfig = async () => {
     pool.query('SELECT id, shop_name FROM shops ORDER BY shop_name'),
   ]);
 
+  // Phase 50: the company bank account getme_lankaqr pays from
+  const lankaqrFunding = await require('../companyAccounts/integration').fundingFor('getme_lankaqr');
+  // Phase 56: a provider that takes payments from the payer's own account
+  const payerQr = Boolean(qr.usable && qr.provider.describe().capabilities?.payerFunded);
+
   return {
     methods: methods.rows.map((row) => ({
       key: row.key,
       label: row.label,
       funding: row.funding,
-      integration: row.integration,
+      // Phase 49: getme_lankaqr reports 'not_available' unless a LIVE
+      // provider is usable (no real bank integration exists; the test
+      // simulator is not one) - see lankaqr below
+      integration: row.key === 'getme_lankaqr' ? (qr.usable && !qr.simulator ? 'provider_api' : 'not_available')
+        // Phase 56: same rule for the shopper's-own-account scan-to-pay
+        : row.key === 'lankaqr_bank' ? (payerQr && !qr.simulator ? 'provider_api' : 'not_available') : row.integration,
       enabled: row.enabled,
-      operational: row.integration === 'manual' ? row.enabled : row.integration === 'card_program' ? row.enabled && cards.rows[0].assigned > 0 : false,
+      operational:
+        row.key === 'getme_lankaqr'
+          ? row.enabled && qr.usable && lankaqrFunding.eligible
+          : row.key === 'lankaqr_bank'
+          ? row.enabled && payerQr
+          : row.integration === 'manual' ? row.enabled : row.integration === 'card_program' ? row.enabled && cards.rows[0].assigned > 0 : false,
+      ...(row.key === 'getme_lankaqr'
+        ? {
+            canEnable: qr.usable,
+            superAdminOnly: true,
+            provider: lankaqr().publicProvider(qr),
+            fundingAccount: {
+              set: Boolean(lankaqrFunding.account),
+              id: lankaqrFunding.account ? Number(lankaqrFunding.account.id) : null,
+              label: lankaqrFunding.label,
+              eligible: lankaqrFunding.eligible,
+              reasons: lankaqrFunding.reasons,
+            },
+          }
+        : row.key === 'lankaqr_bank'
+        ? { canEnable: payerQr, superAdminOnly: true, provider: lankaqr().publicProvider(qr) }
+        : {}),
       icon: row.icon,
       instructions: row.instructions,
       requirement: row.requirement,
@@ -330,9 +388,29 @@ const methodsConfig = async () => {
   };
 };
 
-const updateMethod = async (key, input = {}, adminId) => {
+const updateMethod = async (key, input = {}, adminId, admin = null) => {
   const method = (await pool.query('SELECT * FROM grocery_payment_methods WHERE key = $1', [String(key)])).rows[0];
   if (!method) throw error(404, 'Payment method not found');
+
+  // Phase 49: GetMe's LankaQR pays from the company account - only the
+  // Super Admin switches it on, and only with a usable provider (the
+  // simulator never in production / live mode; a live provider needs
+  // GROCERY_QR_LIVE=true). Anyone with grocery.manage may switch it off.
+  if (method.key === 'getme_lankaqr' && input.enabled === true && !method.enabled) {
+    if (admin?.role !== 'owner') throw error(403, 'Only the Super Admin can switch on LankaQR payments from GetMe\'s account.', 'SUPER_ADMIN_ONLY');
+    const qr = qrProviders.current();
+    if (!qr.usable) throw error(409, `LankaQR (GetMe pays) can't be switched on: ${qr.reason}`, 'PROVIDER_NOT_CONFIGURED');
+  }
+
+  // Phase 56: scan-to-pay from the shopper's own account moves real money
+  // through a bank: Super Admin only, and only with a provider offering it
+  if (method.key === 'lankaqr_bank' && input.enabled === true && !method.enabled) {
+    if (admin?.role !== 'owner') throw error(403, 'Only the Super Admin can switch on LankaQR payments from shoppers\' bank accounts.', 'SUPER_ADMIN_ONLY');
+    const qr = qrProviders.current();
+    if (!qr.usable || !qr.provider.describe().capabilities?.payerFunded) {
+      throw error(409, `LankaQR from the shopper's bank account can't be switched on: ${qr.usable ? `${qr.label} doesn't offer it` : qr.reason}`, 'PROVIDER_NOT_CONFIGURED');
+    }
+  }
 
   if (input.enabled === true && method.integration === 'not_available') {
     throw error(409, `${method.label} can't be switched on: ${method.requirement}`, 'NOT_AVAILABLE');
@@ -406,6 +484,17 @@ const publicCard = async (row) => {
     shopperName: row.shopper_name || null,
     shopperCode: row.shopper_code || null,
     balance,
+    // Phase 55: spending controls
+    controls: {
+      perPaymentLimit: row.per_payment_limit != null ? round2(row.per_payment_limit) : null,
+      dailyLimit: row.daily_limit != null ? round2(row.daily_limit) : null,
+      monthlyLimit: row.monthly_limit != null ? round2(row.monthly_limit) : null,
+      allowedCategories: row.allowed_categories || ['grocery'],
+      // DATE column: pg gives a local-midnight Date; send YYYY-MM-DD
+      expiresOn: row.expires_on instanceof Date
+        ? `${row.expires_on.getFullYear()}-${String(row.expires_on.getMonth() + 1).padStart(2, '0')}-${String(row.expires_on.getDate()).padStart(2, '0')}`
+        : row.expires_on || null,
+    },
     recentFunds: loads.map((l) => ({ id: Number(l.id), kind: l.kind, amount: round2(l.amount), reference: l.reference, note: l.note, by: l.admin_name, at: l.created_at })),
     createdAt: row.created_at,
   };
@@ -435,6 +524,41 @@ const checkShopper = async (client, shopperId) => {
   return id;
 };
 
+// Phase 55: card spending controls from the admin form (null = no limit)
+const readControls = (input = {}, card = {}) => {
+  const limit = (key, column) => {
+    if (input[key] === undefined) return card[column] ?? null;
+    if (input[key] === null || input[key] === '') return null;
+    const value = round2(input[key]);
+    if (!(value > 0) || value > 5000000) throw error(400, 'Enter a limit from Rs 1 to Rs 5,000,000', 'INVALID', { field: key });
+    return value;
+  };
+  const controls = {
+    per_payment_limit: limit('perPaymentLimit', 'per_payment_limit'),
+    daily_limit: limit('dailyLimit', 'daily_limit'),
+    monthly_limit: limit('monthlyLimit', 'monthly_limit'),
+    allowed_categories: card.allowed_categories || ['grocery'],
+    expires_on: card.expires_on ?? null,
+  };
+  if (input.allowedCategories !== undefined) {
+    const list = [...new Set((Array.isArray(input.allowedCategories) ? input.allowedCategories : []).map(String))];
+    if (list.length === 0 || list.some((c) => !['grocery', 'fuel'].includes(c))) throw error(400, 'Choose grocery and / or fuel', 'INVALID', { field: 'allowedCategories' });
+    controls.allowed_categories = list;
+  }
+  if (input.expiresOn !== undefined) {
+    if (input.expiresOn === null || input.expiresOn === '') controls.expires_on = null;
+    else if (!/^\d{4}-\d{2}-\d{2}$/.test(String(input.expiresOn))) throw error(400, 'Enter the expiry as YYYY-MM-DD', 'INVALID', { field: 'expiresOn' });
+    else controls.expires_on = String(input.expiresOn);
+  }
+  if (controls.daily_limit != null && controls.per_payment_limit != null && controls.per_payment_limit > controls.daily_limit) {
+    throw error(400, 'The per-payment limit is above the daily limit', 'INVALID', { field: 'perPaymentLimit' });
+  }
+  if (controls.daily_limit != null && controls.monthly_limit != null && controls.daily_limit > controls.monthly_limit) {
+    throw error(400, 'The daily limit is above the monthly limit', 'INVALID', { field: 'dailyLimit' });
+  }
+  return controls;
+};
+
 const createCard = async (input = {}, adminId) => {
   const label = clean(input.label, 60);
   const issuer = clean(input.issuer, 80);
@@ -449,17 +573,28 @@ const createCard = async (input = {}, adminId) => {
   if (!/^\d{4}$/.test(last4)) throw error(400, 'Enter the last 4 digits of the card', 'INVALID', { field: 'last4' });
 
   const shopperId = await checkShopper(pool, input.shopperId);
+  const controls = readControls(input);
 
   try {
     const row = (
-      await pool.query('INSERT INTO getme_cards (label, issuer, last4, shopper_id, note, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id', [
-        label,
-        issuer,
-        last4,
-        shopperId,
-        clean(input.note, 300) || null,
-        adminId,
-      ])
+      await pool.query(
+        `INSERT INTO getme_cards (label, issuer, last4, shopper_id, note, created_by,
+           per_payment_limit, daily_limit, monthly_limit, allowed_categories, expires_on)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+        [
+          label,
+          issuer,
+          last4,
+          shopperId,
+          clean(input.note, 300) || null,
+          adminId,
+          controls.per_payment_limit,
+          controls.daily_limit,
+          controls.monthly_limit,
+          controls.allowed_categories,
+          controls.expires_on,
+        ]
+      )
     ).rows[0];
     return publicCard(await cardRow(row.id));
   } catch (caught) {
@@ -496,9 +631,23 @@ const updateCard = async (cardId, input = {}) => {
       if (balance.available > 0.005) throw error(409, `Take the Rs ${balance.available.toFixed(2)} still on the card back first (record an unload)`, 'FUNDS_LEFT');
     }
 
+    const controls = readControls(input, card);
     await client.query(
-      'UPDATE getme_cards SET shopper_id = $2, status = $3, label = $4, note = $5, updated_at = NOW() WHERE id = $1',
-      [id, status === 'retired' ? null : shopperId, status, clean(input.label ?? card.label, 60) || card.label, input.note !== undefined ? clean(input.note, 300) || null : card.note]
+      `UPDATE getme_cards SET shopper_id = $2, status = $3, label = $4, note = $5,
+         per_payment_limit = $6, daily_limit = $7, monthly_limit = $8, allowed_categories = $9, expires_on = $10,
+         updated_at = NOW() WHERE id = $1`,
+      [
+        id,
+        status === 'retired' ? null : shopperId,
+        status,
+        clean(input.label ?? card.label, 60) || card.label,
+        input.note !== undefined ? clean(input.note, 300) || null : card.note,
+        controls.per_payment_limit,
+        controls.daily_limit,
+        controls.monthly_limit,
+        controls.allowed_categories,
+        controls.expires_on,
+      ]
     );
     await client.query('COMMIT');
   } catch (caught) {

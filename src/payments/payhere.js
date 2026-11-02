@@ -152,9 +152,18 @@ const preapprovalForm = ({ ref, payer, baseUrl }) => {
   };
 };
 
-// notify_url body is genuine PayHere (md5sig matches)
+// notify_url body is genuine PayHere (md5sig matches). Phase 55: never
+// with missing credentials (md5 of an empty secret is public) and only
+// for LKR (audit P-04 / P-12)
 const verifyNotify = (body) => {
-  if (isTestMode() || !body) {
+  if (isTestMode() || !body || configProblem()) {
+    return false;
+  }
+
+  const merchantId = String(process.env.PAYHERE_MERCHANT_ID || '').trim();
+  const secret = String(process.env.PAYHERE_MERCHANT_SECRET || '').trim();
+
+  if (!merchantId || !secret || String(body.payhere_currency || '') !== CURRENCY) {
     return false;
   }
 
@@ -209,6 +218,10 @@ const getAccessToken = async () => {
   return cachedToken.value;
 };
 
+// -> { answered, httpStatus, data }. answered = PayHere replied with
+// JSON; anything else (5xx, an HTML error page, a proxy timeout) is NOT
+// an answer, so the caller must treat the outcome as unknown, never as
+// a decline (audit P-01). Network errors / timeouts throw.
 const merchantApi = async (path, body) => {
   const send = async () =>
     fetch(`${HOSTS[getMode()]}/merchant/v1${path}`, {
@@ -229,16 +242,24 @@ const merchantApi = async (path, body) => {
     response = await send();
   }
 
-  return response.json().catch(() => ({}));
+  const data = await response.json().catch(() => null);
+  const answered = Boolean(data && typeof data === 'object' && response.status < 500);
+
+  return { answered, httpStatus: response.status, data: data || {} };
 };
 
+// PayHere charge status_code -> our status. Anything not listed (e.g.
+// -3 or a new code) is 'pending' so the Retrieval API decides.
 const CHARGE_STATUS = { 2: 'paid', 0: 'pending', '-1': 'failed', '-2': 'failed' };
 
 // =====================================================
 // CHARGE A SAVED CARD
 // -> { status: 'paid' | 'pending' | 'failed', gatewayPaymentId, message }
-// Never throws for a decline; throws only when PayHere can't be
-// reached (the caller treats that as failed).
+// 'failed' only when PayHere clearly refused or declined. No answer /
+// an unreadable answer -> 'pending' (the caller asks the Retrieval API,
+// then leaves it pending + abandoned so a late success is refunded).
+// Throws only when PayHere can't be reached (the caller treats that as
+// pending too).
 // =====================================================
 
 const chargeToken = async ({ ref, amount, items, token, baseUrl, custom1, custom2 }) => {
@@ -258,7 +279,7 @@ const chargeToken = async ({ ref, amount, items, token, baseUrl, custom1, custom
     };
   }
 
-  const data = await merchantApi('/payment/charge', {
+  const reply = await merchantApi('/payment/charge', {
     type: 'PAYMENT',
     order_id: ref,
     items: String(items || 'GetMe payment').slice(0, 100),
@@ -270,16 +291,27 @@ const chargeToken = async ({ ref, amount, items, token, baseUrl, custom1, custom
     notify_url: `${baseUrl}/api/payments/payhere/notify`,
   });
 
+  const data = reply.data;
+
+  if (!reply.answered) {
+    return { status: 'pending', gatewayPaymentId: null, message: `No clear answer from PayHere (HTTP ${reply.httpStatus})` };
+  }
+
+  // A JSON refusal (bad token, card not allowed): nothing was charged
   if (data?.status !== 1 || !data?.data) {
     return {
-      status: 'failed',
+      status: data?.status === -1 || (reply.httpStatus >= 400 && reply.httpStatus < 500) ? 'failed' : 'pending',
       gatewayPaymentId: null,
       message: data?.msg || data?.error_description || 'Payment failed',
     };
   }
 
+  if (data.data.currency && String(data.data.currency) !== CURRENCY) {
+    return { status: 'pending', gatewayPaymentId: null, message: 'PayHere answered in another currency' };
+  }
+
   return {
-    status: CHARGE_STATUS[String(data.data.status_code)] || 'failed',
+    status: CHARGE_STATUS[String(data.data.status_code)] || 'pending',
     gatewayPaymentId: data.data.payment_id != null ? String(data.data.payment_id) : null,
     message: data.data.status_message || data.msg,
   };
@@ -315,6 +347,7 @@ const findCharge = async ({ ref, amount }) => {
       const received = data.data.find(
         (payment) =>
           payment?.status === 'RECEIVED' &&
+          (!payment.currency || String(payment.currency) === CURRENCY) &&
           Math.abs(Number(payment.amount) - Number(amount)) < 0.01
       );
 
@@ -334,8 +367,11 @@ const findCharge = async ({ ref, amount }) => {
 };
 
 // =====================================================
-// REFUND (full when amount is omitted)
-// -> { ok, refundId, message }
+// REFUND (full when amount is omitted; PayHere's Refund API takes an
+// optional amount for a partial refund)
+// -> { ok, refundId, message, unknown }
+// unknown = no clear answer: the refund may or may not have happened;
+// the caller must not try again until someone checks PayHere.
 // =====================================================
 
 const refundCharge = async ({ gatewayPaymentId, amount, reason }) => {
@@ -343,14 +379,27 @@ const refundCharge = async ({ gatewayPaymentId, amount, reason }) => {
     return { ok: true, refundId: `TESTR${Date.now()}`, message: 'Test refund processed' };
   }
 
-  const data = await merchantApi('/payment/refund', {
-    payment_id: String(gatewayPaymentId),
-    description: String(reason || 'GetMe refund').slice(0, 100),
-    ...(amount != null ? { amount: formatAmount(amount) } : {}),
-  });
+  let reply;
+
+  try {
+    reply = await merchantApi('/payment/refund', {
+      payment_id: String(gatewayPaymentId),
+      description: String(reason || 'GetMe refund').slice(0, 100),
+      ...(amount != null ? { amount: Number(formatAmount(amount)) } : {}),
+    });
+  } catch (error) {
+    return { ok: false, unknown: true, refundId: null, message: `No answer from PayHere (${error.message})` };
+  }
+
+  const data = reply.data;
+
+  if (!reply.answered) {
+    return { ok: false, unknown: true, refundId: null, message: `No clear answer from PayHere (HTTP ${reply.httpStatus})` };
+  }
 
   return {
     ok: data?.status === 1,
+    unknown: false,
     refundId: data?.data != null ? String(data.data) : null,
     message: data?.msg || 'Refund failed',
   };

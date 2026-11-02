@@ -64,6 +64,11 @@ const startAttempt = async (req, res) => {
       method: req.body?.method,
       requestId: req.body?.requestId,
       platform: platformOf(req.body?.platform),
+      // Phase 54: the till QR the shopper scanned + the app they pay with
+      qrPayload: req.body?.qrPayload,
+      payerApp: req.body?.payerApp,
+      // Phase 56: bill total typed before scanning
+      billTotal: req.body?.billTotal,
     });
     return res.status(result.duplicate ? 200 : 201).json({
       success: true,
@@ -86,6 +91,7 @@ const reportResult = async (req, res) => {
       note: req.body?.note,
       reason: req.body?.reason,
       io: req.app.get('io'),
+      payerApp: req.body?.payerApp,
     });
     return res.json({ success: true, ...result });
   } catch (error) {
@@ -118,7 +124,8 @@ const adminHandlers = {
   paymentAction: wrap('Unable to update the payment', async (req) => admin.adminAction(req.params.id, req.body || {}, adminIdOf(req))),
   changeLimit: wrap('Unable to change the limit', async (req) => ({ reservation: await admin.changeLimit(req.params.id, req.body || {}, adminIdOf(req)) })),
   methodsConfig: wrap('Unable to load payment methods', async () => admin.methodsConfig()),
-  updateMethod: wrap('Unable to update the payment method', async (req) => admin.updateMethod(req.params.key, req.body || {}, adminIdOf(req))),
+  // Phase 49: the admin's role (getme_lankaqr: Super Admin only to switch on)
+  updateMethod: wrap('Unable to update the payment method', async (req) => admin.updateMethod(req.params.key, req.body || {}, adminIdOf(req), req.admin)),
   setShopException: wrap('Unable to update the shop', async (req) => admin.setShopException(req.params.key, req.params.shopId, req.body || {}, adminIdOf(req))),
   updateSettings: wrap('Unable to update the settings', async (req) => admin.updateSettings(req.body || {}, adminIdOf(req))),
   listCards: wrap('Unable to load GetMe cards', async () => ({ cards: await admin.listCards() })),
@@ -127,4 +134,13 @@ const adminHandlers = {
   recordFunds: wrap('Unable to record the funds', async (req) => ({ card: await admin.recordFunds(req.params.id, req.body || {}, adminIdOf(req)) }), 201),
 };
 
-module.exports = { getPaymentScreen, startAttempt, reportResult, cancelAttempt, admin: adminHandlers };
+// Phase 54: GET /api/shopper/grocery-payments/history (own attempts)
+const history = async (req, res) => {
+  try {
+    return res.json({ success: true, ...(await grocery.historyForShopper({ shopperId: shopperIdOf(req), query: req.query })) });
+  } catch (error) {
+    return sendError(res, error, 'Unable to load your payment history');
+  }
+};
+
+module.exports = { getPaymentScreen, startAttempt, reportResult, cancelAttempt, history, admin: adminHandlers };

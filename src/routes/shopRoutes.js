@@ -1,5 +1,6 @@
 const express = require('express');
-const multer = require('multer');
+// Checks each stored file's real type (security review B-02)
+const multer = require('../middleware/verifiedMulter');
 const path = require('path');
 
 const {
@@ -126,8 +127,10 @@ const uploadProduct = uploader('products', 'product');
 const uploadShop = uploader('shops', 'shop');
 
 // Product spreadsheets (.xlsx / .csv, max 20MB with photos) stay in memory
-const uploadSheet = multer({
-  storage: multer.memoryStorage(),
+// and are never served, so plain multer (the content check is for images)
+const plainMulter = require('multer');
+const uploadSheet = plainMulter({
+  storage: plainMulter.memoryStorage(),
   fileFilter: (req, file, cb) => {
     if (/\.(xlsx|csv)$/i.test(file.originalname)) {
       cb(null, true);

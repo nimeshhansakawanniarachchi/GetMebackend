@@ -1,7 +1,8 @@
 
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const multer = require('multer');
+// Checks each stored file's real type (security review B-02)
+const multer = require('../middleware/verifiedMulter');
 const path = require('path');
 const fs = require('fs');
 
@@ -418,6 +419,18 @@ router.patch(
 );
 
 // =====================================================
+// PHASE 59: COLLECT A READY MERCHANT ORDER (clothing / restaurant)
+// POST /api/shopper/orders/:orderId/merchant-pickup
+// Then the existing confirm-arrival / delivery PIN flow delivers it.
+// =====================================================
+
+router.post(
+  '/orders/:orderId/merchant-pickup',
+  authMiddleware,
+  require('../marketplace/merchantOrders').shopperPickup
+);
+
+// =====================================================
 // CONFIRM CUSTOMER ARRIVAL
 // POST /api/shopper/orders/:orderId/confirm-arrival
 // =====================================================
@@ -503,10 +516,13 @@ router.post(
 // PATCH /api/shopper/orders/:orderId/payment
 // =====================================================
 
+// Retired (security review B-21): it pushed client-supplied payment
+// status / amounts to the customer's app and no app uses it. Payment
+// state comes from the server (card_payments, store payments).
 router.patch(
   '/orders/:orderId/payment',
   authMiddleware,
-  updateOrderPayment
+  (req, res) => res.status(410).json({ success: false, code: 'GONE', message: 'This endpoint was removed.' })
 );
 
 // =====================================================
@@ -570,6 +586,19 @@ router.get('/orders/:orderId/grocery-payment', authMiddleware, groceryPayments.g
 router.post('/orders/:orderId/grocery-payment/attempts', authMiddleware, groceryPayments.startAttempt);
 router.post('/grocery-payment-attempts/:id/result', authMiddleware, groceryPayments.reportResult);
 router.post('/grocery-payment-attempts/:id/cancel', authMiddleware, groceryPayments.cancelAttempt);
+// Phase 54: the shopper's supermarket payment history
+router.get('/grocery-payments/history', authMiddleware, groceryPayments.history);
+
+// LankaQR scan-to-pay from GetMe's company account (phase 49). No bank
+// integration exists: 503 PROVIDER_NOT_CONFIGURED unless a provider is
+// configured (tests: TEST SIMULATOR, no money moves). Own orders only.
+const lankaqrPay = require('../controllers/lankaqrController');
+router.post('/lankaqr/preview', authMiddleware, lankaqrPay.preview);
+router.post('/lankaqr/pay', authMiddleware, lankaqrPay.pay);
+router.get('/lankaqr/attempts/:id', authMiddleware, lankaqrPay.status);
+// Phase 56: stop a payment not yet approved at the bank
+router.post('/lankaqr/attempts/:id/cancel', authMiddleware, lankaqrPay.cancel);
+router.post('/lankaqr/merchant-submissions', authMiddleware, lankaqrPay.submitMerchant);
 
 // =====================================================
 // MULTER AND UPLOAD ERROR HANDLER

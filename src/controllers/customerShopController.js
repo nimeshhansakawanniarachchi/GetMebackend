@@ -7,6 +7,40 @@ const GOOGLE_MAPS_API_KEY =
 
 
 // ==================================================
+// TRAVEL TIME CACHE (phase 52)
+// GET /shops is public and called on every home-screen load: without a
+// cache it paid one Google Routes call per shop per request. Results are
+// kept 10 min per shop and customer position rounded to ~100 m (failures
+// 2 min); concurrent requests share one call.
+// ==================================================
+
+const TRAVEL_TTL_MS = 10 * 60_000;
+const TRAVEL_FAIL_TTL_MS = 2 * 60_000;
+const TRAVEL_CACHE_MAX = 5000;
+const travelCache = new Map();
+
+const cachedTravelTime = (shopId, shopLatitude, shopLongitude, customerLatitude, customerLongitude) => {
+  const key = `${shopId}|${Number(customerLatitude).toFixed(3)},${Number(customerLongitude).toFixed(3)}`;
+  const hit = travelCache.get(key);
+  if (hit && Date.now() < hit.expires) return hit.promise;
+
+  const promise = getTravelTime(shopLatitude, shopLongitude, customerLatitude, customerLongitude);
+  const entry = { promise, expires: Date.now() + TRAVEL_TTL_MS };
+  travelCache.delete(key);
+  travelCache.set(key, entry);
+  promise.then((route) => {
+    if (!route) entry.expires = Date.now() + TRAVEL_FAIL_TTL_MS;
+  });
+
+  // Oldest entries out first (Map keeps insertion order)
+  while (travelCache.size > TRAVEL_CACHE_MAX) {
+    travelCache.delete(travelCache.keys().next().value);
+  }
+  return promise;
+};
+
+
+// ==================================================
 // GET TRAVEL TIME FROM SHOP TO CUSTOMER
 // ==================================================
 
@@ -168,6 +202,18 @@ const getCustomerShops = async (req, res) => {
 
 
     // ----------------------------------------------
+    // PHASE 59: clothing shops / restaurants (?type=clothing|
+    // restaurant|all). Without type the answer is unchanged:
+    // grocery shops only.
+    // ----------------------------------------------
+
+    const requestedType = String(req.query.type || '').trim().toLowerCase();
+
+    if (requestedType && requestedType !== 'grocery') {
+      return require('../marketplace/nearbyShops').nearbyShops(req, res, { latitude, longitude, type: requestedType });
+    }
+
+    // ----------------------------------------------
     // GET SHOPS WITHIN 10 KM
     // ----------------------------------------------
 
@@ -210,6 +256,7 @@ const getCustomerShops = async (req, res) => {
 
           WHERE status = 'approved'
             AND is_open = true
+            AND business_type = 'grocery'
           AND latitude IS NOT NULL
           AND longitude IS NOT NULL
 
@@ -236,7 +283,8 @@ const getCustomerShops = async (req, res) => {
           async (shop) => {
 
             const route =
-              await getTravelTime(
+              await cachedTravelTime(
+                shop.id,
                 shop.latitude,
                 shop.longitude,
                 latitude,

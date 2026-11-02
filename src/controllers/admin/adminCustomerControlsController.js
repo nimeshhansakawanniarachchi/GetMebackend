@@ -2,6 +2,7 @@ const pool = require('../../config/db');
 
 const { adminCan } = require('../../middleware/adminAccess');
 const controls = require('../../customers/accountControls');
+const { endAllForCustomer } = require('../../customerActivity/presence');
 
 // =====================================================
 // CUSTOMER ACCOUNT CONTROLS (phase 44) - admin API
@@ -113,6 +114,11 @@ const setStatus = async (req, res) => {
   };
 
   pushToCustomer(req.app.get('io'), id, status);
+
+  // Phase 51: a block ends the customer's sign-ins and open app visits
+  if (status === 'blocked') {
+    await endAllForCustomer(id, 'blocked');
+  }
 
   await controls.notifyStatusChange({
     customerId: id,

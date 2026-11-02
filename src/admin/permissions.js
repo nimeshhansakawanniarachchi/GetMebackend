@@ -22,6 +22,9 @@ const PERMISSIONS = {
   'orders.dispatch': { group: 'Orders', label: 'Release an order from its shopper, offer it to a chosen shopper, re-dispatch' },
   'customers.view': { group: 'Customers', label: 'View customer details' },
   'customers.manage': { group: 'Customers', label: 'Block or restrict customers, set cash-on-delivery limits' },
+  // Phase 51: customer activity history (location is the more sensitive one)
+  'customers.activity': { group: 'Customers', label: 'Customer activity: online status, sign-in and online history, activity timeline' },
+  'customers.location': { group: 'Customers', label: 'Customer location history, recorded routes and last known location (each view is recorded)' },
   'support.cases': { group: 'Customers', label: 'Work the support case queue (reply, assign, close)' },
   'support.credit': { group: 'Customers', label: 'Give customers GetMe credit (large amounts need Super Admin approval)' },
   'incidents.manage': { group: 'Operations', label: 'Handle shopper help requests (incidents)' },
@@ -45,9 +48,17 @@ const PERMISSIONS = {
   'finance.settlements': { group: 'Finance', label: 'Record payouts and cash hand-overs, hold / release earnings' },
   'finance.adjust': { group: 'Finance', label: 'Adjust shopper earnings (large adjustments need Super Admin approval)' },
   'finance.withdrawals': { group: 'Finance', label: 'Process shopper withdrawals and verify bank accounts' },
+  // Phase 55: money paid into GetMe's own LankaQR (HelaPOS has no API)
+  'finance.received_qr': { group: 'Finance', label: "Record and verify payments received on GetMe's HelaPOS LankaQR (a second admin verifies)" },
   'grocery.view': { group: 'Finance', label: 'View supermarket payments, limits and methods' },
   'grocery.manage': { group: 'Finance', label: 'Reconcile supermarket payments, change limits and methods' },
   'grocery.cards': { group: 'Finance', label: 'GetMe company cards and their funds' },
+  // Phase 54: fuel station payments (shopper expense records) + providers
+  'fuel.view': { group: 'Finance', label: 'View fuel station payments, stations, prices and payment providers' },
+  'fuel.manage': { group: 'Finance', label: 'Manage fuel stations, station QR codes and fuel prices; verify or reject fuel payments' },
+  // Phase 50: GetMe's own bank accounts (records; masked numbers)
+  'company_accounts.view': { group: 'Finance', label: 'View GetMe company bank accounts (masked numbers)' },
+  'company_accounts.manage': { group: 'Finance', label: 'Add, edit and deactivate company bank accounts; ask the Super Admin to activate them or change defaults / funding' },
 
   // Developer
   'system.health': { group: 'Technical', label: 'Application health and integration status (no secrets)' },
@@ -60,6 +71,7 @@ const PERMISSIONS = {
   'approvals.decide': { group: 'Super Admin only', label: 'Approve or reject high-risk financial actions', ownerOnly: true },
   'security.settings': { group: 'Super Admin only', label: 'Approval limits and security settings', ownerOnly: true },
   'audit.view': { group: 'Super Admin only', label: 'Audit log and security events', ownerOnly: true },
+  'company_accounts.reveal': { group: 'Super Admin only', label: 'See a full company bank account number (with a reason; recorded)', ownerOnly: true },
 };
 
 const ALL = Object.keys(PERMISSIONS);
@@ -84,6 +96,10 @@ const ROLE_PERMISSIONS = {
     'shops.view', 'shops.manage', 'promos.manage', 'pricing.view', 'pricing.review',
     'liveops.view', 'reports.view', 'exports.orders', 'grocery.view',
     'orders.dispatch', 'customers.manage', 'support.cases', 'incidents.manage',
+    // Phase 51
+    'customers.activity', 'customers.location',
+    // Phase 54
+    'fuel.view', 'fuel.manage',
   ],
   finance: [
     'dashboard.view', 'orders.view', 'customers.view', 'shoppers.view', 'shops.view',
@@ -91,11 +107,21 @@ const ROLE_PERMISSIONS = {
     'finance.view', 'finance.refund', 'finance.store_bills', 'finance.settlements', 'finance.adjust',
     'finance.withdrawals', 'grocery.view', 'grocery.manage', 'grocery.cards',
     'support.credit',
+    // Phase 55
+    'finance.received_qr',
+    // Phase 50
+    'company_accounts.view', 'company_accounts.manage',
+    // Phase 54
+    'fuel.view', 'fuel.manage',
   ],
   support: [
     'dashboard.view', 'orders.view', 'orders.notes', 'orders.chat', 'customers.view',
     'shoppers.view', 'shopper_applications.list', 'shops.view', 'pricing.view', 'liveops.view',
     'support.cases', 'support.credit', 'incidents.manage',
+    // Phase 51: activity, not location (a Super Admin can grant it)
+    'customers.activity',
+    // Phase 54: read fuel payments (support questions)
+    'fuel.view',
   ],
   // Technical work only: no customer data, money or staff
   developer: ['system.health', 'system.logs'],
@@ -105,7 +131,9 @@ const clean = (list) => [...new Set((Array.isArray(list) ? list : []).map(String
 
 // Effective permissions of an admin row ({ role, permission_grants, permission_revokes })
 const effectivePermissions = (admin) => {
-  const role = admin?.role || 'owner';
+  // Security review B-26: an unknown or missing role gets nothing
+  const role = admin?.role;
+  if (!ROLES.includes(role)) return [];
   if (role === 'owner') return [...ALL];
   const base = new Set(ROLE_PERMISSIONS[role] || []);
   clean(admin.permission_grants).forEach((key) => base.add(key));

@@ -10,6 +10,8 @@ const {
 } = require('../pricing/vehicles');
 const { broadcastOrderChange } = require('../realtime');
 const { postChatEvent } = require('../utils/chatEvents');
+// Phase 58: a saved ShopperApp notification when items are added
+const { createShopperNotification } = require('./shopperNotificationController');
 const { publicBaseUrl } = require('../payments/payhere');
 const {
   extraChargeFor,
@@ -448,9 +450,13 @@ const insertOrderLine = (client, orderId, line) =>
       replacement_preference, replacement_product_id,
       replacement_product_name, replacement_product_image,
       replacement_product_price, replacement_note,
-      original_unit_price, offer_id, offer_label
+      original_unit_price, offer_id, offer_label,
+      added_by
     )
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
+            -- Phase 58: added after the order was placed (the shopper sees
+            -- which lines are new)
+            'customer')
     RETURNING id
     `,
     [
@@ -701,6 +707,19 @@ const addItemsToOrder = async (req, res) => {
       notifyAssignedShopper(req, order, 'items_added');
 
       if (order.shopper_id) {
+        try {
+          Promise.resolve(createShopperNotification({
+            io: req.app.get('io'),
+            shopperId: order.shopper_id,
+            type: 'order_items_added',
+            title: 'Customer added items',
+            body: `Order #${orderId}: ${outcome.body.addedCount} new item${outcome.body.addedCount === 1 ? '' : 's'} added to your list.`,
+            orderId,
+          })).catch((error) => console.error('❌ ITEMS ADDED NOTIFICATION:', error.message));
+        } catch (error) {
+          console.error('❌ ITEMS ADDED NOTIFICATION:', error.message);
+        }
+
         await postChatEvent({
           io: req.app.get('io'),
           orderId,

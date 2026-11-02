@@ -9,6 +9,37 @@ const { isSessionCurrent, SESSION_ENDED } = require('../utils/shopperSession');
 
 const router = express.Router();
 
+// =====================================================
+// LOCATION FLOOD + PLAUSIBILITY (security review B-25)
+// At most LOCATION_PER_MINUTE posts per shopper (the app sends far fewer).
+// A jump faster than ~150 km/h from the last fix is logged as an
+// anomaly (not refused yet: a first fix after a long offline spell can
+// look like one; see the security review).
+// =====================================================
+
+const LOCATION_PER_MINUTE = 60;
+const MAX_PLAUSIBLE_MPS = 42;
+const locationBuckets = new Map();
+
+const tooManyLocationPosts = (shopperId) => {
+  const now = Date.now();
+  const bucket = locationBuckets.get(shopperId);
+  if (!bucket || now - bucket.start > 60_000) {
+    locationBuckets.set(shopperId, { start: now, count: 1 });
+    if (locationBuckets.size > 20_000) locationBuckets.clear();
+    return false;
+  }
+  bucket.count += 1;
+  return bucket.count > LOCATION_PER_MINUTE;
+};
+
+const metersBetween = (a, b) => {
+  const rad = (d) => (d * Math.PI) / 180;
+  const h = Math.sin(rad(b.lat - a.lat) / 2) ** 2 +
+    Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(rad(b.lng - a.lng) / 2) ** 2;
+  return 2 * 6371008.8 * Math.asin(Math.min(1, Math.sqrt(h)));
+};
+
 
 // ==================================================
 // SHOPPER LOCATION UPDATE
@@ -173,6 +204,31 @@ router.post('/location', async (req, res) => {
 
       });
 
+    }
+
+
+    // Flood + plausibility (security review B-25)
+    if (tooManyLocationPosts(Number(shopperId))) {
+      return res.status(429).json({
+        success: false,
+        code: 'TOO_MANY_LOCATION_UPDATES',
+        message: 'Too many location updates. Slow down.',
+      });
+    }
+
+    try {
+      const previous = (
+        await db.query('SELECT latitude, longitude, location_updated_at FROM shoppers WHERE id = $1', [shopperId])
+      ).rows[0];
+      if (previous?.location_updated_at && previous.latitude != null) {
+        const seconds = Math.max(1, (Date.now() - new Date(previous.location_updated_at).getTime()) / 1000);
+        const meters = metersBetween({ lat: Number(previous.latitude), lng: Number(previous.longitude) }, { lat, lng });
+        if (seconds < 600 && meters > 1000 && meters / seconds > MAX_PLAUSIBLE_MPS) {
+          console.warn('⚠️ Implausible shopper location jump', { shopperId, km: Math.round(meters / 100) / 10, seconds: Math.round(seconds) });
+        }
+      }
+    } catch {
+      // the check never blocks an update
     }
 
 

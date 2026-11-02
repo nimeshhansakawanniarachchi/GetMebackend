@@ -272,7 +272,7 @@ const buildQuote = async ({
 
   const shopsResult = shopIds.length
     ? await client.query(
-        `SELECT id, shop_name, image_url, latitude, longitude, status, is_open
+        `SELECT id, shop_name, image_url, latitude, longitude, status, is_open, business_type
          FROM shops WHERE id = ANY($1::int[])`,
         [shopIds]
       )
@@ -343,6 +343,11 @@ const buildQuote = async ({
       shopId: product.shop_id,
       name: product.product_name,
       image: product.image_url,
+      // Phase 58: optional note for the shopper ("ripe ones"), saved in
+      // order_items.details like a custom item's details. No price effect.
+      // Only the explicit 'note' field: checkout already sends product
+      // descriptions as 'details', which must NOT become a customer note.
+      details: item?.note ? String(item.note).trim().slice(0, 500) || null : null,
       quantity,
       amount,
       unit: packUnit,
@@ -449,6 +454,12 @@ const buildQuote = async ({
 
       if (shop.status !== 'approved' || shop.is_open === false) {
         issues.push(issue('shop_unavailable', `${shop.shop_name} is not taking orders right now`, { shopId: id }));
+      }
+
+      // Phase 59: clothing / restaurant items are ordered from their
+      // own store page (sizes, menu options), never the grocery checkout
+      if (shop.business_type && shop.business_type !== 'grocery') {
+        issues.push(issue('shop_unavailable', `Order from ${shop.shop_name} on its store page`, { shopId: id }));
       }
 
       return {

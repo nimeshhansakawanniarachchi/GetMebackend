@@ -428,6 +428,14 @@ const setShopperApproval = async (req, res) => {
       approvalStatus,
     });
 
+    // Security review B-11: suspending or rejecting ends the shopper's
+    // sessions (tokens and sockets), not just going online
+    if (approvalStatus === 'suspended' || approvalStatus === 'rejected') {
+      const { revokeSessions, disconnectShopper } = require('../../utils/shopperSession');
+      await revokeSessions(pool, shopperId);
+      setTimeout(() => disconnectShopper(io, shopperId), 500);
+    }
+
     createShopperNotification({ io, shopperId, type: `account_${approvalStatus}`, title, body });
 
     emitToAdmins(io, 'admin:shoppers-updated', { shopperId, reason: 'approval' });

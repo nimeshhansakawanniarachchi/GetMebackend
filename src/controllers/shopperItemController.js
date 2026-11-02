@@ -381,7 +381,7 @@ const uploadReplacementPhoto = async (req, res) => {
 
     const replacementResult = await db.query(
       `
-      SELECT id
+      SELECT id, status, option_number
       FROM replacement_items
       WHERE
         order_id = $1
@@ -395,11 +395,26 @@ const uploadReplacementPhoto = async (req, res) => {
 
     let savedReplacement;
 
+    // Phase 57: the customer asked for another option -> the new photo
+    // is a new option (2, 3, ...) the customer is asked about again.
+    // Already approved / refused -> nothing more to suggest.
+    const latest = replacementResult.rows[0] || null;
+    const anotherOption = latest?.status === 'customer_requested_another';
+
+    if (latest && !anotherOption && !['pending', 'waiting_customer'].includes(latest.status)) {
+      return res.status(409).json({
+        success: false,
+        code: 'REPLACEMENT_DECIDED',
+        message: latest.status === 'customer_accepted'
+          ? 'The customer already approved a replacement for this item.'
+          : 'The customer already chose a refund for this item.',
+      });
+    }
+
     // -------------------------------------------------
     // UPDATE EXISTING RECORD
     // -------------------------------------------------
-
-    if (replacementResult.rows.length > 0) {
+    if (latest && !anotherOption) {
       const updateResult = await db.query(
         `
        UPDATE replacement_items
@@ -452,7 +467,7 @@ RETURNING *
           item.order_id,
           item.id,
           shopperId,
-          1,
+          anotherOption ? Number(latest.option_number || 1) + 1 : 1,
           photoUrl,
           'waiting_customer',
         ]

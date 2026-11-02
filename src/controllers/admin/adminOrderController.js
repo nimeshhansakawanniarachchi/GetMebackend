@@ -476,6 +476,8 @@ const getOrder = async (req, res) => {
       success: true,
       order: {
         id: order.id,
+        // Phase 65: the one-checkout parent order this order belongs to (null = placed on its own)
+        orderGroupId: order.order_group_id != null ? Number(order.order_group_id) : null,
         status: order.status,
         statusLabel: statusLabel(order.status),
         canCancel: !FINISHED_STATUSES.includes(order.status),

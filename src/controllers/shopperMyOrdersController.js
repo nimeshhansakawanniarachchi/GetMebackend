@@ -92,7 +92,7 @@ const getMyOrders = async (req, res) => {
             FROM (
               SELECT DISTINCT
                 s.id,
-                to_jsonb(s) AS shop
+                (to_jsonb(s) - ARRAY['password_hash', 'email', 'mobile', 'onboarding', 'onboarding_notes', 'onboarding_completed_at', 'account_manager_admin_id', 'low_stock_threshold', 'owner_name', 'business_reg_no', 'status_reason', 'submitted_at', 'reviewed_at', 'contact_email', 'max_active_orders']) AS shop
               FROM order_shops os
 
               LEFT JOIN shops s
@@ -105,7 +105,7 @@ const getMyOrders = async (req, res) => {
 
               SELECT
                 s.id,
-                to_jsonb(s) AS shop
+                (to_jsonb(s) - ARRAY['password_hash', 'email', 'mobile', 'onboarding', 'onboarding_notes', 'onboarding_completed_at', 'account_manager_admin_id', 'low_stock_threshold', 'owner_name', 'business_reg_no', 'status_reason', 'submitted_at', 'reviewed_at', 'contact_email', 'max_active_orders']) AS shop
               FROM shops s
 
               WHERE s.id = o.shop_id

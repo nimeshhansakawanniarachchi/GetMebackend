@@ -1,5 +1,6 @@
 const express = require('express');
-const multer = require('multer');
+// Checks each stored file's real type (security review B-02)
+const multer = require('../middleware/verifiedMulter');
 const path = require('path');
 const fs = require('fs');
 

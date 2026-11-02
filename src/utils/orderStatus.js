@@ -12,10 +12,14 @@ const ORDER_STATUS_LABELS = {
   delivered: 'Delivered',
   cancelled: 'Cancelled',
   shopper_search_cancelled: 'Cancelled by customer',
+  // Phase 59: a customer-pickup clothing / restaurant order
+  awaiting_pickup: 'Awaiting pickup',
+  // Phase 60: the store delivers it (its own courier)
+  shop_shipping: 'Store delivery',
 };
 
 const ORDER_STATUS_GROUPS = {
-  active: ['pending_shopper_search', 'waiting_for_shopper', 'shopper_accepted', 'shopping'],
+  active: ['pending_shopper_search', 'waiting_for_shopper', 'shopper_accepted', 'shopping', 'awaiting_pickup', 'shop_shipping'],
   delivery: ['out_for_delivery', 'arrived'],
   delivered: ['delivered'],
   cancelled: ['cancelled', 'shopper_search_cancelled'],

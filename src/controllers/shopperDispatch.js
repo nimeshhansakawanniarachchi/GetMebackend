@@ -16,6 +16,8 @@ const {
 
 // Phase 45: shopper cash limit
 const cashLimit = require('../dispatch/cashLimit');
+// Phase 61: vehicles allowed for restaurant deliveries (Bike only)
+const RESTAURANT_VEHICLES = require('../marketplace/common').allowedVehiclesFor('restaurant') || [];
 
 // =====================================================
 // SHOPPER DISPATCH
@@ -112,6 +114,13 @@ const getEligibleShoppers = async (
               AND x.shopper_id = sh.id
           )
         )
+        -- Phase 61: restaurant deliveries go by Bike only - no
+        -- fallback, no "any vehicle", not even for staff offers
+        AND (
+          o.business_type <> 'restaurant'
+          OR o.fulfilment_method <> 'delivery'
+          OR sh.vehicle_type = ANY($6::text[])
+        )
         -- NULL preference = any vehicle. After
         -- VEHICLE_FALLBACK_SECONDS of searching, vehicles that cost
         -- the same or less too (any vehicle on orders without
@@ -139,7 +148,7 @@ const getEligibleShoppers = async (
           )
         )
       `,
-      [orderId, anyVehicle, FINISHED_STATUSES, VEHICLE_FALLBACK_SECONDS, includeExcluded]
+      [orderId, anyVehicle, FINISHED_STATUSES, VEHICLE_FALLBACK_SECONDS, includeExcluded, RESTAURANT_VEHICLES]
     ),
   ]);
 
@@ -349,6 +358,11 @@ const dispatchOrder = async ({ io = null, orderId }) => {
         shopper_id,
         -- Phase 45: an exclusive staff offer pauses forwarding
         dispatch_exclusive_shopper_id,
+        -- Phase 59: clothing / restaurant orders go to riders only
+        -- once the store has accepted them
+        business_type,
+        merchant_status,
+        fulfilment_method,
         dispatch_paused_until IS NOT NULL AS has_pause,
         COALESCE(dispatch_paused_until > NOW(), false) AS paused
       FROM orders
@@ -363,7 +377,10 @@ const dispatchOrder = async ({ io = null, orderId }) => {
     if (
       !order ||
       order.status !== 'waiting_for_shopper' ||
-      order.shopper_id !== null
+      order.shopper_id !== null ||
+      (order.business_type !== 'grocery' &&
+        (order.fulfilment_method === 'pickup' ||
+          !['accepted', 'preparing', 'ready'].includes(order.merchant_status)))
     ) {
       await client.query('ROLLBACK');
       return null;
@@ -524,6 +541,8 @@ const dispatchWaitingOrders = async ({ io = null } = {}) => {
       FROM orders
       WHERE status = 'waiting_for_shopper'
         AND shopper_id IS NULL
+        AND (business_type = 'grocery'
+             OR (fulfilment_method = 'delivery' AND merchant_status IN ('accepted', 'preparing', 'ready')))
       `
     );
 

@@ -60,7 +60,12 @@ const broadcastOrderChange = (io, orderId, payload = {}) => {
   const data = { ...payload, orderId: Number(orderId) };
 
   emitToAdmins(io, 'admin:order-updated', data);
-  emitToOrderShops(io, orderId, 'shop:order-updated', data);
+  // Shops only need to know that something changed (they refetch):
+  // no delivery details or door photos in shop rooms (B-17)
+  emitToOrderShops(io, orderId, 'shop:order-updated', {
+    event: data.event || null,
+    status: data.status || null,
+  });
 };
 
 // A shop's catalog changed (products, prices, stock, offers, or
@@ -83,10 +88,28 @@ const broadcastCatalogChange = (io, shopId, kind = 'products') => {
   }
 };
 
+// Shopper sockets in order:{id} other than the order's current shopper
+// leave the room (after a release / re-dispatch), so they stop getting
+// its GPS, photos and payment events.
+const pruneOrderRoom = async (io, orderId, keepShopperId = null) => {
+  try {
+    if (!io) return;
+    const sockets = await io.in(`order:${Number(orderId)}`).fetchSockets();
+    sockets.forEach((socket) => {
+      if (socket.data?.userType !== 'shopper') return;
+      if (keepShopperId != null && Number(socket.data.shopperId) === Number(keepShopperId)) return;
+      socket.leave(`order:${Number(orderId)}`);
+    });
+  } catch (error) {
+    console.error('❌ pruneOrderRoom error:', error.message);
+  }
+};
+
 module.exports = {
   emitToAdmins,
   emitToLiveOps,
   emitToOrderShops,
   broadcastOrderChange,
   broadcastCatalogChange,
+  pruneOrderRoom,
 };

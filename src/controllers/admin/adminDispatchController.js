@@ -1,7 +1,7 @@
 const pool = require('../../config/db');
 
 const { FINISHED_STATUSES } = require('../../utils/orderStatus');
-const { broadcastOrderChange } = require('../../realtime');
+const { broadcastOrderChange, pruneOrderRoom } = require('../../realtime');
 const { adminCan, recordAdminAudit } = require('../../middleware/adminAccess');
 const notifications = require('../../admin/notifications');
 const cashLimit = require('../../dispatch/cashLimit');
@@ -272,6 +272,8 @@ const releaseShopper = async (req, res) => {
     });
     io.to(`customer:${before.customer_id}`).emit('order-status-changed', payload);
     io.to(`order:${orderId}`).emit('order-status-changed', payload);
+    // The released shopper no longer receives this order's events
+    pruneOrderRoom(io, orderId);
   }
 
   broadcastOrderChange(io, orderId, { event: 'shopper-released', status: 'waiting_for_shopper' });

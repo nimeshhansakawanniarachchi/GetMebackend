@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 
 const pool = require('../../config/db');
 const { recordAdminAudit } = require('../../middleware/adminAccess');
+const mfa = require('../../admin/mfa');
 const perms = require('../../admin/permissions');
 
 // =====================================================
@@ -26,6 +27,7 @@ const toAdmin = (row) => ({
   roleLabel: perms.ROLE_LABELS[row.role || 'owner'],
   isActive: row.is_active,
   mustChangePassword: Boolean(row.must_change_password),
+  mfaEnabled: Boolean(row.mfa_enabled),
   lastLoginAt: row.last_login_at,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -36,8 +38,14 @@ const toAdmin = (row) => ({
   permissions: perms.effectivePermissions(row),
 });
 
-const signToken = (admin) =>
-  jwt.sign({ adminId: admin.id, role: 'admin', av: Number(admin.auth_version || 0) }, process.env.JWT_SECRET, { expiresIn: '12h' });
+// recent: the admin just proved who they are (password / two-step code),
+// so ra (unix s) lets high-risk routes run for a while (requireRecentAuth)
+const signToken = (admin, recent = false) =>
+  jwt.sign(
+    { adminId: admin.id, role: 'admin', av: Number(admin.auth_version || 0), ...(recent ? { ra: Math.floor(Date.now() / 1000) } : {}) },
+    process.env.JWT_SECRET,
+    { expiresIn: '12h' }
+  );
 
 // 12 characters, no look-alikes, always letters and digits
 const TEMP_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
@@ -113,6 +121,14 @@ const login = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
+    // Two-step sign-in (B-13): the password alone gives no session
+    if (admin.mfa_enabled) {
+      return res.json({ success: true, mfaRequired: true, challengeToken: mfa.signChallenge(admin, 'mfa') });
+    }
+    if ((await securityRow()).mfa_required) {
+      return res.json({ success: true, mfaSetupRequired: true, challengeToken: mfa.signChallenge(admin, 'mfa-setup') });
+    }
+
     await pool.query(
       'UPDATE admins SET last_login_at = NOW() WHERE id = $1',
       [admin.id]
@@ -127,7 +143,7 @@ const login = async (req, res) => {
       ip: req.ip,
     });
 
-    return res.json({ success: true, token: signToken(admin), admin: toAdmin(admin) });
+    return res.json({ success: true, token: sessionToken(admin), admin: toAdmin(admin) });
   } catch (error) {
     console.error('❌ admin login error:', error.message);
 
@@ -202,7 +218,7 @@ const changePassword = async (req, res) => {
 
     disconnectAdminSockets(req, updated.id);
 
-    return res.json({ success: true, message: 'Password changed. Other sessions were signed out.', token: signToken(updated), admin: toAdmin(updated) });
+    return res.json({ success: true, message: 'Password changed. Other sessions were signed out.', token: signToken(updated, true), admin: toAdmin(updated) });
   } catch (error) {
     console.error('❌ admin changePassword error:', error.message);
 
@@ -441,6 +457,7 @@ const resetPassword = async (req, res) => {
 const toSettings = (row) => ({
   refundApprovalLimit: Number(row.refund_approval_limit),
   earningsAdjustApprovalLimit: Number(row.earnings_adjust_approval_limit),
+  mfaRequired: Boolean(row.mfa_required),
   updatedAt: row.updated_at,
 });
 
@@ -461,9 +478,10 @@ const updateSecuritySettings = async (req, res) => {
     const before = (await pool.query('SELECT * FROM admin_security_settings WHERE id = 1')).rows[0];
     const row = (
       await pool.query(
-        `UPDATE admin_security_settings SET refund_approval_limit = $1, earnings_adjust_approval_limit = $2, updated_by = $3, updated_at = NOW()
+        `UPDATE admin_security_settings SET refund_approval_limit = $1, earnings_adjust_approval_limit = $2, updated_by = $3, updated_at = NOW(),
+                mfa_required = COALESCE($4, mfa_required)
          WHERE id = 1 RETURNING *`,
-        [Math.round(refund * 100) / 100, Math.round(adjust * 100) / 100, req.admin.adminId]
+        [Math.round(refund * 100) / 100, Math.round(adjust * 100) / 100, req.admin.adminId, typeof req.body?.mfaRequired === 'boolean' ? req.body.mfaRequired : null]
       )
     ).rows[0];
 
@@ -475,10 +493,266 @@ const updateSecuritySettings = async (req, res) => {
   }
 };
 
+// =====================================================
+// TWO-STEP SIGN-IN (security review B-13, src/admin/mfa.js)
+//
+// POST /auth/login                -> { token } or { mfaRequired, challengeToken }
+//                                    or { mfaSetupRequired, challengeToken }
+// POST /auth/mfa/verify           { challengeToken, code }         -> { token }
+// POST /auth/mfa/setup            { challengeToken }               -> { secret, otpauthUrl }
+// POST /auth/mfa/setup/confirm    { challengeToken, code }         -> { token }
+// POST /account/mfa/setup         (signed in)                      -> { secret, otpauthUrl }
+// POST /account/mfa/confirm       { code }                         -> { admin, token }
+// POST /account/mfa/disable       { code }    (only when not required)
+// POST /auth/reauth               { code } or { password }         -> { token } (fresh)
+// POST /admins/:id/mfa/reset      (admins.manage, fresh)           -> the admin sets it up again
+// A session token carries ra (unix s of the last password / code
+// check); high-risk routes need it within STEP_UP_MINUTES (requireRecentAuth).
+// =====================================================
+
+const securityRow = async () => (await pool.query('SELECT * FROM admin_security_settings WHERE id = 1')).rows[0] || {};
+
+const sessionToken = (admin) => signToken(admin, true);
+
+const lockedUntilText = (at) => new Date(at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+// Wrong codes lock code entry (per account)
+const checkAdminCode = async (admin, secretEnc, code) => {
+  if (admin.mfa_locked_until && new Date(admin.mfa_locked_until) > new Date()) {
+    return { status: 429, body: { success: false, code: 'MFA_LOCKED', message: `Too many wrong codes. Try again after ${lockedUntilText(admin.mfa_locked_until)}.` } };
+  }
+  let secret;
+  try {
+    secret = mfa.decryptSecret(secretEnc);
+  } catch {
+    return { status: 409, body: { success: false, code: 'MFA_UNREADABLE', message: 'Two-step sign-in needs to be set up again. Ask the Super Admin to reset it.' } };
+  }
+  const step = mfa.verifyCode(secret, code, admin.mfa_last_step);
+  if (step === null) {
+    const row = (
+      await pool.query(
+        `UPDATE admins SET mfa_failed_attempts = CASE WHEN mfa_failed_attempts + 1 >= $2 THEN 0 ELSE mfa_failed_attempts + 1 END,
+                mfa_locked_until = CASE WHEN mfa_failed_attempts + 1 >= $2 THEN NOW() + make_interval(mins => $3) ELSE mfa_locked_until END
+          WHERE id = $1 RETURNING mfa_locked_until`,
+        [admin.id, mfa.MAX_FAILURES, mfa.LOCK_MINUTES]
+      )
+    ).rows[0];
+    recordAdminAudit({
+      admin: { adminId: admin.id, fullName: admin.full_name, role: admin.role },
+      action: 'admin.mfa_failed',
+      entityType: 'admin',
+      entityId: admin.id,
+      summary: row?.mfa_locked_until && new Date(row.mfa_locked_until) > new Date() ? 'Wrong two-step code; code entry locked' : 'Wrong two-step code',
+      outcome: 'denied',
+    });
+    return { status: 401, body: { success: false, code: 'MFA_CODE_WRONG', message: 'That code is not right. Check the time on your phone and try the newest code.' } };
+  }
+  await pool.query('UPDATE admins SET mfa_last_step = $2, mfa_failed_attempts = 0, mfa_locked_until = NULL WHERE id = $1', [admin.id, step]);
+  return null;
+};
+
+const challengeAdmin = async (req, purposes) => {
+  const challenge = mfa.readChallenge(req.body?.challengeToken, purposes);
+  if (!challenge) return null;
+  const admin = (await pool.query('SELECT * FROM admins WHERE id = $1', [challenge.mfaAdminId])).rows[0];
+  if (!admin || !admin.is_active || Number(admin.auth_version || 0) !== Number(challenge.av || 0)) return null;
+  return { admin, challenge };
+};
+
+const EXPIRED = { success: false, code: 'MFA_CHALLENGE_EXPIRED', message: 'Sign-in took too long. Enter your email and password again.' };
+
+const auditLogin = (admin, req, summary) =>
+  recordAdminAudit({
+    admin: { adminId: admin.id, fullName: admin.full_name, role: admin.role },
+    action: 'admin.login',
+    entityType: 'admin',
+    entityId: admin.id,
+    summary,
+    ip: req.ip,
+  });
+
+const mfaVerify = async (req, res) => {
+  try {
+    const found = await challengeAdmin(req, ['mfa']);
+    if (!found || !found.admin.mfa_enabled) return res.status(401).json(EXPIRED);
+    const problem = await checkAdminCode(found.admin, found.admin.mfa_secret_enc, req.body?.code);
+    if (problem) return res.status(problem.status).json(problem.body);
+
+    await pool.query('UPDATE admins SET last_login_at = NOW() WHERE id = $1', [found.admin.id]);
+    auditLogin(found.admin, req, found.admin.must_change_password ? 'Signed in (password + two-step code, temporary password)' : 'Signed in (password + two-step code)');
+    return res.json({ success: true, token: sessionToken(found.admin), admin: toAdmin(found.admin) });
+  } catch (error) {
+    console.error('❌ admin mfaVerify error:', error.message);
+    return res.status(500).json({ success: false, message: 'Sign-in failed' });
+  }
+};
+
+const startSetup = async (admin) => {
+  const secret = mfa.newSecret();
+  await pool.query('UPDATE admins SET mfa_pending_secret_enc = $2 WHERE id = $1', [admin.id, mfa.encryptSecret(secret)]);
+  return { success: true, secret, otpauthUrl: mfa.otpauthUrl(secret, admin.email) };
+};
+
+const finishSetup = async (admin, code) => {
+  if (!admin.mfa_pending_secret_enc) {
+    return { status: 400, body: { success: false, code: 'MFA_NOT_STARTED', message: 'Start the set-up first.' } };
+  }
+  const problem = await checkAdminCode(admin, admin.mfa_pending_secret_enc, code);
+  if (problem) return problem;
+  const row = (
+    await pool.query(
+      `UPDATE admins SET mfa_secret_enc = mfa_pending_secret_enc, mfa_pending_secret_enc = NULL, mfa_enabled = TRUE, mfa_enabled_at = NOW(), updated_at = NOW()
+        WHERE id = $1 RETURNING *`,
+      [admin.id]
+    )
+  ).rows[0];
+  recordAdminAudit({
+    admin: { adminId: admin.id, fullName: admin.full_name, role: admin.role },
+    action: 'admin.mfa_enabled',
+    entityType: 'admin',
+    entityId: admin.id,
+    summary: 'Two-step sign-in turned on',
+  });
+  return { row };
+};
+
+const mfaSetupStart = async (req, res) => {
+  try {
+    const found = await challengeAdmin(req, ['mfa-setup']);
+    if (!found) return res.status(401).json(EXPIRED);
+    return res.json(await startSetup(found.admin));
+  } catch (error) {
+    console.error('❌ admin mfaSetupStart error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to start the set-up' });
+  }
+};
+
+const mfaSetupConfirm = async (req, res) => {
+  try {
+    const found = await challengeAdmin(req, ['mfa-setup']);
+    if (!found) return res.status(401).json(EXPIRED);
+    const result = await finishSetup(found.admin, req.body?.code);
+    if (result.status) return res.status(result.status).json(result.body);
+    await pool.query('UPDATE admins SET last_login_at = NOW() WHERE id = $1', [found.admin.id]);
+    auditLogin(found.admin, req, 'Signed in (set up two-step sign-in)');
+    return res.json({ success: true, token: sessionToken(result.row), admin: toAdmin(result.row) });
+  } catch (error) {
+    console.error('❌ admin mfaSetupConfirm error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to finish the set-up' });
+  }
+};
+
+const accountMfaSetup = async (req, res) => {
+  try {
+    const admin = (await pool.query('SELECT * FROM admins WHERE id = $1', [req.admin.adminId])).rows[0];
+    if (admin.mfa_enabled) return res.status(409).json({ success: false, code: 'MFA_ALREADY_ON', message: 'Two-step sign-in is already on.' });
+    res.locals.skipAudit = true;
+    return res.json(await startSetup(admin));
+  } catch (error) {
+    console.error('❌ admin accountMfaSetup error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to start the set-up' });
+  }
+};
+
+const accountMfaConfirm = async (req, res) => {
+  try {
+    const admin = (await pool.query('SELECT * FROM admins WHERE id = $1', [req.admin.adminId])).rows[0];
+    const result = await finishSetup(admin, req.body?.code);
+    if (result.status) return res.status(result.status).json(result.body);
+    res.locals.skipAudit = true;
+    return res.json({ success: true, admin: toAdmin(result.row), token: sessionToken(result.row) });
+  } catch (error) {
+    console.error('❌ admin accountMfaConfirm error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to finish the set-up' });
+  }
+};
+
+const accountMfaDisable = async (req, res) => {
+  try {
+    const settings = await securityRow();
+    if (settings.mfa_required) {
+      return res.status(409).json({ success: false, code: 'MFA_REQUIRED', message: 'Two-step sign-in is required for every staff account.' });
+    }
+    const admin = (await pool.query('SELECT * FROM admins WHERE id = $1', [req.admin.adminId])).rows[0];
+    if (!admin.mfa_enabled) return res.json({ success: true, admin: toAdmin(admin) });
+    const problem = await checkAdminCode(admin, admin.mfa_secret_enc, req.body?.code);
+    if (problem) return res.status(problem.status).json(problem.body);
+    const row = (
+      await pool.query(
+        `UPDATE admins SET mfa_enabled = FALSE, mfa_secret_enc = NULL, mfa_pending_secret_enc = NULL, mfa_enabled_at = NULL, updated_at = NOW()
+          WHERE id = $1 RETURNING *`,
+        [admin.id]
+      )
+    ).rows[0];
+    res.locals.audit = { action: 'admin.mfa_disabled', entityType: 'admin', entityId: admin.id, summary: 'Two-step sign-in turned off' };
+    return res.json({ success: true, admin: toAdmin(row) });
+  } catch (error) {
+    console.error('❌ admin accountMfaDisable error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to turn it off' });
+  }
+};
+
+// Step-up: prove it's you again (code if two-step is on, else password)
+const reauth = async (req, res) => {
+  try {
+    const admin = (await pool.query('SELECT * FROM admins WHERE id = $1', [req.admin.adminId])).rows[0];
+    res.locals.skipAudit = true;
+    if (admin.mfa_enabled) {
+      const problem = await checkAdminCode(admin, admin.mfa_secret_enc, req.body?.code);
+      if (problem) return res.status(problem.status).json(problem.body);
+    } else if (!(await bcrypt.compare(String(req.body?.password || ''), admin.password_hash))) {
+      recordAdminAudit({ admin: req.admin, action: 'admin.reauth_failed', entityType: 'admin', entityId: admin.id, summary: 'Wrong password when confirming a high-risk action', outcome: 'denied', ip: req.ip });
+      return res.status(401).json({ success: false, code: 'PASSWORD_WRONG', message: 'That password is not right.' });
+    }
+    recordAdminAudit({
+      admin: req.admin,
+      action: 'admin.reauth',
+      entityType: 'admin',
+      entityId: admin.id,
+      summary: `Confirmed identity (${admin.mfa_enabled ? 'two-step code' : 'password'}) for high-risk actions`,
+      ip: req.ip,
+    });
+    return res.json({ success: true, token: sessionToken(admin), validMinutes: mfa.STEP_UP_MINUTES, method: admin.mfa_enabled ? 'code' : 'password' });
+  } catch (error) {
+    console.error('❌ admin reauth error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to confirm' });
+  }
+};
+
+// Super Admin: a lost phone - the admin sets two-step sign-in up again
+const resetAdminMfa = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ success: false, message: 'Invalid id' });
+    const row = (
+      await pool.query(
+        `UPDATE admins SET mfa_enabled = FALSE, mfa_secret_enc = NULL, mfa_pending_secret_enc = NULL, mfa_enabled_at = NULL,
+                mfa_failed_attempts = 0, mfa_locked_until = NULL, auth_version = auth_version + 1, updated_at = NOW()
+          WHERE id = $1 RETURNING *`,
+        [id]
+      )
+    ).rows[0];
+    if (!row) return res.status(404).json({ success: false, message: 'Staff account not found' });
+    res.locals.audit = { action: 'admin.mfa_reset', entityType: 'admin', entityId: id, summary: `Two-step sign-in reset for ${row.email}; their sessions were ended` };
+    return res.json({ success: true, admin: toAdmin(row) });
+  } catch (error) {
+    console.error('❌ admin resetAdminMfa error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to reset two-step sign-in' });
+  }
+};
+
 module.exports = {
   login,
   me,
   changePassword,
+  mfaVerify,
+  mfaSetupStart,
+  mfaSetupConfirm,
+  accountMfaSetup,
+  accountMfaConfirm,
+  accountMfaDisable,
+  reauth,
+  resetAdminMfa,
   listAdmins,
   permissionCatalogue,
   createAdmin,

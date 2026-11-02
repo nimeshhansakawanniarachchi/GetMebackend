@@ -68,7 +68,7 @@ const shopAuthMiddleware = async (
 
   try {
     const result = await db.query(
-      'SELECT status FROM shops WHERE id = $1',
+      'SELECT status, auth_version FROM shops WHERE id = $1',
       [decoded.shopId]
     );
 
@@ -97,7 +97,7 @@ const shopAuthMiddleware = async (
     if (decoded.staffId) {
       const staff = (
         await db.query(
-          'SELECT id, full_name, role, is_active FROM shop_staff WHERE id = $1 AND shop_id = $2',
+          'SELECT id, full_name, role, is_active, auth_version FROM shop_staff WHERE id = $1 AND shop_id = $2',
           [decoded.staffId, decoded.shopId]
         )
       ).rows[0];
@@ -109,8 +109,18 @@ const shopAuthMiddleware = async (
         });
       }
 
+      // A token from before this staff member's password changed
+      if (Number(decoded.av || 0) !== Number(staff.auth_version || 0)) {
+        return res.status(401).json({ success: false, code: 'SESSION_ENDED', message: 'Your password was changed. Please sign in again.' });
+      }
+
       req.shop = { ...decoded, staffId: staff.id, role: staff.role, actorName: staff.full_name };
     } else {
+      // A token from before the shop's password changed (B-11)
+      if (Number(decoded.av || 0) !== Number(result.rows[0].auth_version || 0)) {
+        return res.status(401).json({ success: false, code: 'SESSION_ENDED', message: 'Your password was changed. Please sign in again.' });
+      }
+
       req.shop = { ...decoded, staffId: null, role: 'owner', actorName: 'Owner' };
     }
 

@@ -13,7 +13,9 @@ const {
   whiteContrast,
 } = require('../../utils/brandColor');
 
-const SHOP_STATUSES = ['pending', 'approved', 'rejected', 'suspended'];
+// Phase 59: under_review = the business sent its documents for review
+const SHOP_STATUSES = ['pending', 'under_review', 'approved', 'rejected', 'suspended'];
+const BUSINESS_TYPES = ['grocery', 'clothing', 'restaurant', 'liquor'];
 
 
 // =====================================================
@@ -30,6 +32,17 @@ const listShops = async (req, res) => {
     if (SHOP_STATUSES.includes(req.query.status)) {
       params.push(req.query.status);
       where.push(`s.status = $${params.length}`);
+    }
+
+    // Phase 59: business category, and branches of one business
+    if (BUSINESS_TYPES.includes(req.query.type)) {
+      params.push(req.query.type);
+      where.push(`s.business_type = $${params.length}`);
+    }
+
+    if (/^\d+$/.test(String(req.query.parent || ''))) {
+      params.push(Number(req.query.parent));
+      where.push(`(s.parent_shop_id = $${params.length} OR s.id = $${params.length})`);
     }
 
     const search = String(req.query.search || '').trim().toLowerCase();
@@ -70,12 +83,22 @@ const listShops = async (req, res) => {
         ) AS sales,
         ${ONBOARDING_DONE_SQL} AS onboarding_done,
         s.onboarding_completed_at,
+        s.business_type, s.parent_shop_id, s.city, s.submitted_at, s.status_reason,
+        (SELECT COUNT(*)::int FROM shops b WHERE b.parent_shop_id = s.id) AS branch_count,
+        (
+          SELECT COUNT(*)::int FROM business_document_types dt
+          WHERE dt.business_type = s.business_type AND dt.required AND dt.is_active
+            AND NOT EXISTS (
+              SELECT 1 FROM shop_documents d
+              WHERE d.shop_id = s.id AND d.doc_key = dt.doc_key AND d.status <> 'rejected'
+            )
+        ) AS missing_documents,
         am.id AS manager_id, am.full_name AS manager_name
       FROM shops s
       LEFT JOIN admins am ON am.id = s.account_manager_admin_id
       ${whereSql}
       ORDER BY
-        CASE s.status WHEN 'pending' THEN 0 ELSE 1 END,
+        CASE s.status WHEN 'under_review' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END,
         s.created_at DESC
       LIMIT $${listParams.length - 1} OFFSET $${listParams.length}
       `,
@@ -102,6 +125,14 @@ const listShops = async (req, res) => {
         orderCount: row.order_count,
         sales: row.sales,
         createdAt: row.created_at,
+        businessType: row.business_type || 'grocery',
+        parentShopId: row.parent_shop_id != null ? Number(row.parent_shop_id) : null,
+        branchCount: Number(row.branch_count) || 0,
+        city: row.city || null,
+        submittedAt: row.submitted_at || null,
+        statusReason: row.status_reason || null,
+        missingDocuments: Number(row.missing_documents) || 0,
+        documentsComplete: Number(row.missing_documents) === 0,
         accountManager: row.manager_id ? { id: row.manager_id, name: row.manager_name } : null,
         onboarding: {
           done: Number(row.onboarding_done),
@@ -133,13 +164,24 @@ const setShopStatus = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid request' });
     }
 
+    // Phase 59: why a business was rejected / suspended (shown to it);
+    // required for clothing shops and restaurants
+    const reason = String(req.body?.reason || '').trim().slice(0, 500) || null;
+    const current = (await pool.query('SELECT business_type FROM shops WHERE id = $1', [shopId])).rows[0];
+
+    if (current && current.business_type !== 'grocery' && ['rejected', 'suspended'].includes(status) && !reason) {
+      return res.status(400).json({ success: false, code: 'REASON_REQUIRED', message: 'Enter a reason for the business' });
+    }
+
     const result = await pool.query(
       `
-      UPDATE shops SET status = $1, updated_at = NOW()
+      UPDATE shops SET status = $1::varchar, updated_at = NOW(),
+        status_reason = CASE WHEN $1::varchar IN ('rejected', 'suspended') THEN $3::varchar ELSE NULL END,
+        reviewed_at = CASE WHEN $1::varchar IN ('approved', 'rejected') THEN NOW() ELSE reviewed_at END
       WHERE id = $2
-      RETURNING id, status
+      RETURNING id, status, business_type, status_reason
       `,
-      [status, shopId]
+      [status, shopId, reason]
     );
 
     if (result.rows.length === 0) {
@@ -149,11 +191,31 @@ const setShopStatus = async (req, res) => {
     const io = req.app.get('io');
 
     io?.to(`shop:${shopId}`).emit('shop:status-changed', { status });
+    // A suspended / rejected shop's open sockets close (B-14); its API
+    // calls are already refused by shopAuthMiddleware
+    if (status === 'suspended' || status === 'rejected') {
+      setTimeout(() => io?.in(`shop:${shopId}`).disconnectSockets(true), 500);
+    }
     emitToAdmins(io, 'admin:shops-updated', { shopId, reason: 'status' });
     // Approved / suspended changes what customers can see
     broadcastCatalogChange(io, shopId, 'shop');
 
-    return res.json({ success: true, shop: result.rows[0] });
+    // Approving with documents not yet accepted is allowed (an admin
+    // decision) but flagged
+    const warnings = [];
+    if (status === 'approved' && result.rows[0].business_type !== 'grocery') {
+      const pending = (
+        await pool.query(
+          `SELECT dt.label FROM business_document_types dt
+           WHERE dt.business_type = $2 AND dt.required AND dt.is_active
+             AND NOT EXISTS (SELECT 1 FROM shop_documents d WHERE d.shop_id = $1 AND d.doc_key = dt.doc_key AND d.status = 'accepted')`,
+          [shopId, result.rows[0].business_type]
+        )
+      ).rows.map((row) => row.label);
+      if (pending.length) warnings.push(`Approved without these accepted documents: ${pending.join(', ')}`);
+    }
+
+    return res.json({ success: true, shop: result.rows[0], warnings });
   } catch (error) {
     console.error('❌ admin setShopStatus error:', error.message);
 

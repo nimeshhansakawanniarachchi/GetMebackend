@@ -21,6 +21,11 @@ const toShop = (row) => ({
   autoOpen: row.auto_open === true,
   openOverrideUntil: row.open_override_until || null,
   lowStockThreshold: row.low_stock_threshold != null ? Number(row.low_stock_threshold) : 5,
+  // Phase 59: business category (grocery / clothing / restaurant),
+  // branch of another shop, why it was rejected / suspended
+  businessType: row.business_type || 'grocery',
+  parentShopId: row.parent_shop_id != null ? Number(row.parent_shop_id) : null,
+  statusReason: row.status_reason || null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });

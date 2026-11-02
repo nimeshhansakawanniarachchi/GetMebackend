@@ -145,6 +145,10 @@ const AUDITED = {
   'PATCH /grocery-payments/:id': ['grocery_payment.update', 'grocery_payment', (req) =>
     `${req.body?.action || 'Updated'}${req.body?.result ? ` ${req.body.result}` : ''}${req.body?.outcome ? ` ${req.body.outcome}` : ''}${req.body?.statementReference ? ` (statement ${String(req.body.statementReference).slice(0, 60)})` : ''}`],
   'PATCH /grocery-reservations/:id/limit': ['grocery_limit.change', 'grocery_reservation', (req) => `Spending limit ${req.body?.limit === null ? 'back to computed' : `set to Rs ${req.body?.limit}`}: ${String(req.body?.note || '').slice(0, 120)}`],
+  // Phase 49: LankaQR store QR approvals (controller adds before / after)
+  'PATCH /lankaqr/merchants/:id': ['lankaqr_merchant.review', 'lankaqr_merchant', (req) =>
+    `${{ approve: 'Approved', reject: 'Rejected', disable: 'Disabled' }[req.body?.action] || 'Reviewed'} a LankaQR store QR${req.body?.note ? `: ${String(req.body.note).slice(0, 150)}` : ''}`],
+  'POST /lankaqr/merchants': ['lankaqr_merchant.create', 'lankaqr_merchant', (req) => `Added + approved a LankaQR store QR for shop #${req.body?.shopId || ''}`],
   'PATCH /grocery-payment-methods/:key': ['grocery_method.update', 'grocery_payment_method', (req) => `${req.params.key}: ${req.body?.enabled === true ? 'switched on' : req.body?.enabled === false ? 'switched off' : 'instructions edited'}`],
   'PUT /grocery-payment-methods/:key/shops/:shopId': ['grocery_method.shop', 'grocery_payment_method', (req) => `${req.params.key} at shop ${req.params.shopId}: ${req.body?.enabled === null ? 'default' : req.body?.enabled ? 'on' : 'off'}`],
   'PATCH /grocery-payment-settings': ['grocery_settings.update', 'grocery_payment_settings', (req) => `Limit buffer ${req.body?.limitBufferPercent}% / at least Rs ${req.body?.limitBufferMin}`],
@@ -228,6 +232,20 @@ const AUDITED = {
   'POST /orders/:id/offer-shopper': ['order.dispatch_offer', 'order', (req) =>
     `Offered to shopper #${req.body?.shopperId || ''}${req.body?.exclusive ? ' (exclusive)' : ''}: ${String(req.body?.reason || '').slice(0, 200)}`],
   'POST /orders/:id/redispatch': ['order.redispatch', 'order', (req) => `Re-dispatched: ${String(req.body?.reason || '').slice(0, 200)}`],
+  // Phase 50: company bank accounts. Successful changes are audited by
+  // src/companyAccounts (masked before / after); these names label the
+  // refused ones. Never the account number (the sanitiser drops it).
+  'POST /company-accounts': ['company_account.create', 'company_bank_account', (req) => `Add a company bank account (${String(req.body?.bankKey || '').slice(0, 40)}, ${String(req.body?.currency || 'LKR').slice(0, 3)})`],
+  'PATCH /company-accounts/:id': ['company_account.update', 'company_bank_account', () => 'Edit a company bank account'],
+  'POST /company-accounts/:id/deactivate': ['company_account.deactivate', 'company_bank_account', (req) => `Deactivate a company bank account: ${String(req.body?.reason || '').slice(0, 150)}`],
+  'POST /company-accounts/:id/archive': ['company_account.archive', 'company_bank_account', (req) => `Archive a company bank account: ${String(req.body?.reason || '').slice(0, 150)}`],
+  'POST /company-accounts/:id/activate': ['company_account.activate', 'company_bank_account', (req) => `Activate a company bank account: ${String(req.body?.reason || '').slice(0, 150)}`],
+  'PUT /company-accounts/defaults/:purpose': ['company_account.default', 'company_bank_account', (req) => `Default for ${req.params.purpose}: ${req.body?.accountId == null ? 'clear' : `account #${req.body.accountId}`}`],
+  'PUT /company-accounts/funding/:methodKey': ['company_account.funding', 'company_bank_account', (req) => `Funding account for ${req.params.methodKey}: ${req.body?.accountId == null ? 'clear' : `account #${req.body.accountId}`}`],
+  'PATCH /company-accounts/:id/integration': ['company_account.integration', 'company_bank_account', (req) => `Provider link -> ${req.body?.provider || 'none'}`],
+  'POST /company-accounts/:id/authorization': ['company_account.authorization', 'company_bank_account', (req) => `Bank authorisation -> ${req.body?.status || ''}`],
+  'POST /company-accounts/:id/integration-approval': ['company_account.integration_approval', 'company_bank_account', (req) => `Integration ${req.body?.decision || 'decision'}`],
+  'POST /company-accounts/:id/reveal': ['company_account.reveal', 'company_bank_account', (req) => `Reveal a full company account number: ${String(req.body?.reason || '').slice(0, 150)}`],
   'PUT /dispatch-settings': ['dispatch.settings', 'settings', (req) =>
     `Dispatch settings${req.body?.shopperCashLimit !== undefined ? `: shopper cash limit Rs ${req.body.shopperCashLimit}` : ''}${req.body?.exclusiveOfferMinutes !== undefined ? `, exclusive offers ${req.body.exclusiveOfferMinutes} min` : ''}`],
 };
@@ -280,7 +298,29 @@ const auditAdminChanges = (req, res, next) => {
   return next();
 };
 
+// =====================================================
+// STEP-UP (security review B-13): high-risk routes need a password or
+// two-step code check within the last STEP_UP_MINUTES (the session
+// token's ra claim, set at sign-in and by POST /auth/reauth). Otherwise
+// 428 REAUTH_REQUIRED; the panel asks for the code and retries.
+// =====================================================
+
+const requireRecentAuth = (req, res, next) => {
+  const { STEP_UP_MINUTES } = require('../admin/mfa');
+  const at = req.admin?.recentAuthAt;
+  const now = Date.now() / 1000;
+  if (at && at <= now + 60 && now - at <= STEP_UP_MINUTES * 60) {
+    return next();
+  }
+  return res.status(428).json({
+    success: false,
+    code: 'REAUTH_REQUIRED',
+    message: 'Confirm it\'s you to continue (two-step code or password).',
+  });
+};
+
 module.exports = {
+  requireRecentAuth,
   ROLES,
   ROLE_LABELS,
   allowRoles,

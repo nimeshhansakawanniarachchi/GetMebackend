@@ -20,10 +20,10 @@ const {
   orderFeeFor,
   repriceOrder,
   hasFreeDeliveryPromo,
-  applyVehiclePrice,
 } = require('../pricing/vehicles');
 
 const { broadcastOrderChange } = require('../realtime');
+const { bookOrderRow } = require('../orders/booking');
 const { postChatEvent } = require('../utils/chatEvents');
 const {
   extraChargeFor,
@@ -385,10 +385,42 @@ const startShopperSearch = async (req, res) => {
       });
     }
 
-    const preferredVehicle =
+    let preferredVehicle =
       requestedVehicle && requestedVehicle !== 'any'
         ? requestedVehicle
         : null;
+
+    // Phase 61: restaurant deliveries go by Bike only (marketplace
+    // VEHICLE_RULES); the booking is always for an allowed vehicle
+    const bookingType = (
+      await pool.query(
+        'SELECT business_type, fulfilment_method FROM orders WHERE id = $1 AND customer_id = $2',
+        [orderId, customerId]
+      )
+    ).rows[0];
+    const vehicleRule =
+      bookingType && bookingType.fulfilment_method === 'delivery'
+        ? require('../marketplace/common').allowedVehiclesFor(bookingType.business_type)
+        : null;
+
+    if (vehicleRule) {
+      if (preferredVehicle && !vehicleRule.includes(preferredVehicle)) {
+        return res.status(400).json({
+          success: false,
+          code: 'BIKE_ONLY',
+          message: 'Restaurant orders are delivered by Bike only.',
+          allowedVehicles: vehicleRule,
+        });
+      }
+      preferredVehicle = vehicleRule[0];
+    }
+
+    // Phase 65: an order of a one-checkout parent order that is waiting
+    // for this (original) vehicle step books the whole purchase: every
+    // child, one card charge (src/orderGroups/orderGroups.js)
+    if (await require('../orderGroups/orderGroups').bookGroupOnStartSearch(req, res, { orderId, customerId, preferredVehicle })) {
+      return undefined;
+    }
 
     // Status change + delivery fee for the booked vehicle together.
     // Saved card: the first booking charges the whole order (Place
@@ -406,31 +438,10 @@ const startShopperSearch = async (req, res) => {
     try {
       await client.query('BEGIN');
 
-      result = await client.query(
-        `
-        UPDATE orders
-        SET
-          status = 'waiting_for_shopper',
-          preferred_vehicle_type = $3,
-          shopper_search_started_at = CURRENT_TIMESTAMP,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE
-          id = $1
-          AND customer_id = $2
-          -- shopper_search_cancelled: stopped before customers could
-          -- book again; those orders can be booked again too
-          AND status IN ('pending_shopper_search', 'shopper_search_cancelled')
-          AND shopper_id IS NULL
-        RETURNING *
-        `,
-        [orderId, customerId, preferredVehicle]
-      );
-
-      if (result.rows.length > 0 && preferredVehicle) {
-        result = {
-          rows: [await applyVehiclePrice(client, result.rows[0], preferredVehicle)],
-        };
-      }
+      // Status + vehicle price (src/orders/booking.js, shared with the
+      // one-checkout parent order, phase 65)
+      const booked = await bookOrderRow(client, { orderId, customerId, preferredVehicle });
+      result = { rows: booked ? [booked] : [] };
 
       const booking =
         result.rows.length > 0
@@ -553,21 +564,27 @@ const startShopperSearch = async (req, res) => {
       orderId,
       customerId,
       payload: {
-        status: 'waiting_for_shopper',
+        status: order.status,
         order: {
           ...order,
           id: Number(order.id),
           orderId: Number(order.id),
-          status: 'waiting_for_shopper',
+          status: order.status,
         },
       },
     });
 
-    // Not awaited - alerting shoppers must not slow down the customer
-    notifyNearbyShoppersOfNewBatch({
-      io: req.app.get('io'),
-      order,
-    });
+    if (order.business_type && order.business_type !== 'grocery') {
+      // Phase 59: clothing / restaurant order confirmed - the store is
+      // told now; the rider search starts when the store accepts it
+      require('../marketplace/merchantOrders').onMerchantOrderConfirmed({ io: req.app.get('io'), order });
+    } else {
+      // Not awaited - alerting shoppers must not slow down the customer
+      notifyNearbyShoppersOfNewBatch({
+        io: req.app.get('io'),
+        order,
+      });
+    }
 
     return res.status(200).json({
       success: true,
@@ -618,6 +635,8 @@ const stopShopperSearch = async (req, res) => {
         AND customer_id = $2
         AND status = 'waiting_for_shopper'
         AND shopper_id IS NULL
+        -- Phase 59: clothing / restaurant orders are cancelled instead
+        AND business_type = 'grocery'
       RETURNING *
       `,
       [orderId, customerId]
@@ -626,7 +645,7 @@ const stopShopperSearch = async (req, res) => {
     if (result.rows.length === 0) {
       const existing = await pool.query(
         `
-        SELECT id, status, shopper_id
+        SELECT id, status, shopper_id, business_type
         FROM orders
         WHERE id = $1 AND customer_id = $2
         LIMIT 1
@@ -642,6 +661,15 @@ const stopShopperSearch = async (req, res) => {
       }
 
       const order = existing.rows[0];
+
+      if (order.business_type && order.business_type !== 'grocery') {
+        return res.status(409).json({
+          success: false,
+          code: 'MERCHANT_ORDER',
+          message: 'This order is with the store. Cancel it instead (allowed until the store accepts it).',
+          status: order.status,
+        });
+      }
 
       if (order.shopper_id) {
         return res.status(409).json({
@@ -781,11 +809,14 @@ const getCustomerOrders = async (
 
         WHERE
           o.customer_id = $1
+          -- Phase 59: clothing / restaurant orders have their own list
+          -- (GET /merchant-orders); ?include=all returns every order
+          AND (o.business_type = 'grocery' OR $2::text = 'all')
 
         ORDER BY
           o.created_at DESC
         `,
-        [customerId]
+        [customerId, req.query?.include === 'all' ? 'all' : 'grocery']
       );
 
     const formattedOrders =
@@ -2857,7 +2888,18 @@ const getNearbyShoppersForOrder =
           const shopper =
             acceptedShopperResult.rows[0];
 
-          acceptedShopper = {
+          // Security review B-08: phone, live position and online state
+          // only while the shopper is working on this order; after it ends
+          // the customer keeps the name only
+          const tracking = ['shopper_accepted', 'shopping', 'out_for_delivery', 'arrived'].includes(order.status);
+
+          acceptedShopper = !tracking
+            ? {
+                id: Number(shopper.id),
+                name: shopper.full_name || 'Shopper',
+                full_name: shopper.full_name || 'Shopper',
+              }
+            : {
             id:
               Number(shopper.id),
 
@@ -3278,23 +3320,29 @@ const updateReplacementStatus =
         });
       }
 
+      // Phase 57: 'refund' = reject (the customer gets the refund
+      // instead); 'another' = ask the shopper for another option
       const finalStatus =
         decision === 'accepted'
           ? 'accepted'
-          : decision === 'rejected'
+          : decision === 'rejected' || decision === 'refund'
             ? 'rejected'
-            : status === 'accepted'
-              ? 'accepted'
-              : status === 'rejected'
-                ? 'rejected'
-                : null;
+            : decision === 'another' || decision === 'request_another'
+              ? 'another'
+              : status === 'accepted'
+                ? 'accepted'
+                : status === 'rejected'
+                  ? 'rejected'
+                  : null;
+
+      const askedForAnother = finalStatus === 'another';
 
       if (!finalStatus) {
         return res.status(400).json({
           success: false,
 
           message:
-            'Decision must be accepted or rejected',
+            'Decision must be accepted, rejected, refund or another',
         });
       }
 
@@ -3398,7 +3446,9 @@ const updateReplacementStatus =
       const databaseStatus =
         finalStatus === 'accepted'
           ? 'customer_accepted'
-          : 'customer_rejected';
+          : askedForAnother
+            ? 'customer_requested_another'
+            : 'customer_rejected';
 
       const updateReplacementResult =
         await client.query(
@@ -3412,6 +3462,7 @@ const updateReplacementStatus =
           WHERE
             id = $2
             AND order_id = $3
+            AND status = 'waiting_customer'
 
           RETURNING
             id,
@@ -3436,11 +3487,14 @@ const updateReplacementStatus =
       ) {
         await client.query('ROLLBACK');
 
-        return res.status(404).json({
+        // Answered a moment ago (another tap / device)
+        return res.status(409).json({
           success: false,
 
+          code: 'ALREADY_DECIDED',
+
           message:
-            'Replacement item could not be updated',
+            'This replacement has already been processed',
         });
       }
 
@@ -3453,8 +3507,8 @@ const updateReplacementStatus =
           UPDATE order_items
 
           SET
-            shopping_status = 'done',
-            completed_at = CURRENT_TIMESTAMP
+            shopping_status = CASE WHEN $3::boolean THEN shopping_status ELSE 'done' END,
+            completed_at = CASE WHEN $3::boolean THEN completed_at ELSE CURRENT_TIMESTAMP END
 
           WHERE
             id = $1
@@ -3492,6 +3546,7 @@ const updateReplacementStatus =
           [
             updatedReplacement.original_item_id,
             orderId,
+            askedForAnother,
           ]
         );
 
@@ -3519,15 +3574,21 @@ const updateReplacementStatus =
         type:
           finalStatus === 'accepted'
             ? 'replacement_approved'
-            : 'replacement_rejected',
+            : askedForAnother
+              ? 'replacement_another'
+              : 'replacement_rejected',
         title:
           finalStatus === 'accepted'
             ? 'Replacement approved'
-            : 'Replacement rejected',
+            : askedForAnother
+              ? 'Customer wants another option'
+              : 'Replacement rejected',
         body:
           finalStatus === 'accepted'
             ? `Customer approved the replacement for ${updatedOriginalItem.item_name}.`
-            : `Customer rejected the replacement for ${updatedOriginalItem.item_name}. Don't add it.`,
+            : askedForAnother
+              ? `Customer asked for another replacement for ${updatedOriginalItem.item_name}. Take a photo of a different option.`
+              : `Customer rejected the replacement for ${updatedOriginalItem.item_name}. Don't add it.`,
         orderId,
       });
 

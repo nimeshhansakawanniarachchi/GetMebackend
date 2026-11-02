@@ -3,6 +3,9 @@ const { broadcastCatalogChange, emitToAdmins } = require('../realtime');
 const { recordShopActivity } = require('../middleware/shopAccess');
 const { isOpenAt } = require('./shopHours');
 
+// Required lazily: marketplace/common requires shopHours too
+const effectiveHours = (...args) => require('../marketplace/common').effectiveHours(...args);
+
 // =====================================================
 // AUTO OPEN / CLOSE (shops.auto_open + opening_hours)
 // Every minute: approved shops with auto open/close follow their
@@ -17,7 +20,7 @@ const tick = async (io) => {
   const shops = (
     await pool.query(
       `
-      SELECT id, is_open, opening_hours, open_override_until
+      SELECT id, is_open, opening_hours, open_override_until, special_hours
       FROM shops
       WHERE auto_open AND status = 'approved' AND opening_hours IS NOT NULL
       `
@@ -29,7 +32,8 @@ const tick = async (io) => {
   for (const shop of shops) {
     if (shop.open_override_until && new Date(shop.open_override_until) > now) continue;
 
-    const shouldOpen = isOpenAt(shop.opening_hours, now);
+    // Phase 59: a special (holiday) date replaces that day's hours
+    const shouldOpen = isOpenAt(effectiveHours(shop.opening_hours, shop.special_hours, now), now);
     if (shouldOpen === null) continue;
 
     if (shouldOpen === shop.is_open && !shop.open_override_until) continue;

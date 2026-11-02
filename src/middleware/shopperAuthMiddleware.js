@@ -48,8 +48,17 @@ const shopperAuthMiddleware = async (req, res, next) => {
       process.env.JWT_SECRET
     );
 
+    // Security review B-19: only shopper tokens (a customer, shop or
+    // admin token signed with the same secret is not a shopper)
+    if (decoded?.shopperId == null || decoded?.adminId != null || decoded?.shopId != null || decoded?.customerId != null) {
+      return res.status(401).json({
+        success: false,
+        message: 'Shopper authorization token is required',
+      });
+    }
+
     // A token from before a phone change / recovery is no longer valid
-    if (decoded?.shopperId != null && !(await isSessionCurrent(decoded))) {
+    if (!(await isSessionCurrent(decoded))) {
       return res.status(401).json(SESSION_ENDED);
     }
 

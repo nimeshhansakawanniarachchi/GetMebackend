@@ -296,7 +296,8 @@ const payhereNotify = async (req, res) => {
           },
           io(req)
         );
-      } else {
+      } else if (String(body.status_code) !== '0') {
+        // 0 = still pending at PayHere: wait for its next notify (P-11)
         await payments.finishSetup(
           ref,
           String(body.status_code) === '-1' ? 'cancelled' : 'failed',

@@ -54,6 +54,30 @@ const customerCancelDecision = (order, settings) => {
   const stage = stageOf(order);
   const rules = settings?.cancellation || {};
 
+  // Phase 59: clothing / restaurant orders are free to cancel until
+  // the store accepts them; after that the store is preparing it
+  if (order?.business_type && order.business_type !== 'grocery' && stage !== 'finished') {
+    if (
+      order.merchant_status === 'new' &&
+      !order.shopper_id &&
+      ['pending_shopper_search', 'waiting_for_shopper', 'awaiting_pickup', 'shop_shipping'].includes(String(order.status))
+    ) {
+      return { allowed: true, stage: 'not_accepted', code: 'FREE', message: 'The store has not accepted your order yet, so cancelling is free.' };
+    }
+
+    return {
+      allowed: false,
+      stage: stage === 'delivery' ? 'delivery' : 'merchant_accepted',
+      code: stage === 'delivery' ? 'OUT_FOR_DELIVERY' : 'MERCHANT_ACCEPTED',
+      message:
+        stage === 'delivery'
+          ? 'Your order is on its way, so it can no longer be cancelled. Message GetMe support if there is a problem.'
+          : order.business_type === 'restaurant'
+            ? 'The restaurant has already started on your order, so it can no longer be cancelled in the app. Message GetMe support and we will help.'
+            : 'The store has already accepted your order, so it can no longer be cancelled in the app. Message GetMe support and we will help.',
+    };
+  }
+
   if (stage === 'finished') {
     return {
       allowed: false,

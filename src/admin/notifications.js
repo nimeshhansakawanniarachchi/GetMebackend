@@ -154,6 +154,8 @@ const linkFor = (row) => {
     case 'support_case': return id ? `/support?case=${id}` : '/support';
     // Phase 46: shopper help requests open in the Incidents page drawer
     case 'incident': return id ? `/incidents?incident=${id}` : '/incidents';
+    // Phase 62: fashion reels moderation
+    case 'reel': return id ? `/fashion-reels/${id}` : '/fashion-reels';
     default: return null;
   }
 };

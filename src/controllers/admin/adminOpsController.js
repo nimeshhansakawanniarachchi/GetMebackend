@@ -1216,7 +1216,8 @@ const getShop = async (req, res) => {
       await pool.query(
         `
         SELECT id, shop_name, email, mobile, address, area, status, is_open, image_url, brand_color,
-               latitude::float AS latitude, longitude::float AS longitude, created_at, updated_at
+               latitude::float AS latitude, longitude::float AS longitude, created_at, updated_at,
+               business_type, parent_shop_id, reels_suspended_at, reels_suspended_reason
         FROM shops WHERE id = $1
         `,
         [shopId]
@@ -1341,6 +1342,12 @@ const getShop = async (req, res) => {
           : null,
         createdAt: shop.created_at,
         updatedAt: shop.updated_at,
+        // Phase 61: category + branch link for the shop header
+        businessType: shop.business_type || 'grocery',
+        parentShopId: shop.parent_shop_id != null ? Number(shop.parent_shop_id) : null,
+        // Phase 62: fashion reels publishing privilege
+        reelsSuspendedAt: shop.reels_suspended_at || null,
+        reelsSuspendedReason: shop.reels_suspended_reason || null,
         missing,
       },
       catalog: {
